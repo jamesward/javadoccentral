@@ -69,7 +69,12 @@ class MainController @Inject() (ws: WSClient) (implicit ec: ExecutionContext) ex
       downloadAndExtractZip(javadocUrl, javadocDir)
     }
 
-    Ok.sendFile(javadocFile, true)
+    if (javadocFile.exists()) {
+      Ok.sendFile(javadocFile, true)
+    }
+    else {
+      NotFound("The specified file does not exist.")
+    }
   }
 
 
