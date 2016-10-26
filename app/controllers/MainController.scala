@@ -20,7 +20,7 @@ class MainController @Inject() (ws: WSClient) (implicit ec: ExecutionContext) ex
   private def artifactPath(groupId: String, artifactId: String, version: String): String = {
     Seq(
       groupId.replaceAllLiterally(".", "/"),
-      artifactId.replaceAllLiterally(".", "/"),
+      artifactId,
       version
     ).mkString("/")
   }
@@ -39,6 +39,9 @@ class MainController @Inject() (ws: WSClient) (implicit ec: ExecutionContext) ex
           tmpFile.mkdirs()
         }
         else {
+          if (!tmpFile.getParentFile.exists()) {
+            tmpFile.getParentFile.mkdirs()
+          }
           Files.copy(zipArchiveInputStream, tmpFile.toPath)
         }
       }
