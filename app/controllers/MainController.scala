@@ -7,10 +7,11 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
+import play.api.libs.json.JsValue
 import play.api.libs.ws.WSClient
 import play.api.mvc.{Action, Controller}
 
-import scala.concurrent.ExecutionContext
+import scala.concurrent.{ExecutionContext, Future}
 
 @Singleton
 class MainController @Inject() (ws: WSClient) (implicit ec: ExecutionContext) extends Controller {
@@ -50,6 +51,61 @@ class MainController @Inject() (ws: WSClient) (implicit ec: ExecutionContext) ex
     inputStream.close()
   }
 
+  def notFound() = Action(NotFound)
+
+  def needGroupId(maybeGroupId: Option[String]) = Action {
+    maybeGroupId.fold(Ok(views.html.needGroupId())) { groupId =>
+      Redirect(routes.MainController.needArtifactId(groupId, None))
+    }
+  }
+
+  def needArtifactId(groupId: String, maybeArtifactId: Option[String]) = Action.async {
+    maybeArtifactId.fold {
+      ws.url("https://search.maven.org/solrsearch/select").withQueryString(
+        "q" -> s"""g:"$groupId"""",
+        "rows" -> "5000",
+        "wt" -> "json"
+      ).get().map { response =>
+        response.status match {
+          case OK =>
+            val docs = (response.json \ "response" \ "docs").as[Seq[JsValue]]
+            val artifactIds = docs.map(_.\("a").as[String])
+            Ok(views.html.needArtifactId(groupId, artifactIds))
+          case NOT_FOUND =>
+            NotFound(response.body)
+          case _ =>
+            BadRequest(response.body)
+        }
+      }
+    } { artifactId =>
+      Future.successful(Redirect(routes.MainController.needVersion(groupId, artifactId, None)))
+    }
+  }
+
+  def needVersion(groupId: String, artifactId: String, maybeVersion: Option[String]) = Action.async {
+    maybeVersion.fold {
+      ws.url("https://search.maven.org/solrsearch/select").withQueryString(
+        "q" -> s"""g:"$groupId" AND a:"$artifactId"""",
+        "core" -> "gav",
+        "rows" -> "5000",
+        "wt" -> "json"
+      ).get().map { response =>
+        response.status match {
+          case OK =>
+            val docs = (response.json \ "response" \ "docs").as[Seq[JsValue]]
+            val versions = docs.map(_.\("v").as[String])
+            Ok(views.html.needVersion(groupId, artifactId, versions))
+          case NOT_FOUND =>
+            NotFound(response.body)
+          case _ =>
+            BadRequest(response.body)
+        }
+      }
+    } { version =>
+      Future.successful(Redirect(routes.MainController.index(groupId, artifactId, version)))
+    }
+  }
+
   def index(groupId: String, artifactId: String, version: String) = Action.async {
     val url = s"https://repo1.maven.org/maven2/${artifactPath(groupId, artifactId, version)}/"
     ws.url(url).get().map { response =>
@@ -79,6 +135,5 @@ class MainController @Inject() (ws: WSClient) (implicit ec: ExecutionContext) ex
       NotFound("The specified file does not exist.")
     }
   }
-
 
 }

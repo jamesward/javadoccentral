@@ -2,6 +2,10 @@
 # This file defines all application routes (Higher priority routes first)
 # ~~~~
 
+GET     /favicon.ico                           controllers.MainController.notFound()
+GET     /                                      controllers.MainController.needGroupId(groupId: Option[String])
+GET     /:groupId                              controllers.MainController.needArtifactId(groupId: String, artifactId: Option[String])
+GET     /:groupId/:artifactId                  controllers.MainController.needVersion(groupId: String, artifactId: String, version: Option[String])
 GET     /:groupId/:artifactId/:version         controllers.MainController.index(groupId, artifactId, version)
 GET     /:groupId/:artifactId/:version/        controllers.MainController.index(groupId, artifactId, version)
 GET     /:groupId/:artifactId/:version/*file   controllers.MainController.file(groupId, artifactId, version, file)
