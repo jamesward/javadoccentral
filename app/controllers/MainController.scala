@@ -12,6 +12,7 @@ import play.api.libs.ws.WSClient
 import play.api.mvc.{Action, Controller}
 
 import scala.concurrent.{ExecutionContext, Future}
+import scala.util.{Success, Try}
 
 @Singleton
 class MainController @Inject() (ws: WSClient) (implicit ec: ExecutionContext) extends Controller {
@@ -118,21 +119,31 @@ class MainController @Inject() (ws: WSClient) (implicit ec: ExecutionContext) ex
     }
   }
 
-  def file(groupId: String, artifactId: String, version: String, file: String) = Action {
+  // todo: fix race condition
+  def file(groupId: String, artifactId: String, version: String, file: String) = Action.async {
     val path = artifactPath(groupId, artifactId, version)
     val javadocUrl = s"https://repo1.maven.org/maven2/$path/$artifactId-$version-javadoc.jar"
     val javadocDir = new File(tmpDir, path)
     val javadocFile = new File(javadocDir, file)
 
-    if (!javadocDir.exists()) {
-      downloadAndExtractZip(javadocUrl, javadocDir)
-    }
-
-    if (javadocFile.exists()) {
-      Ok.sendFile(javadocFile, true)
+    val extracted = if (!javadocDir.exists()) {
+      Try(downloadAndExtractZip(javadocUrl, javadocDir))
     }
     else {
-      NotFound("The specified file does not exist.")
+      Success(Unit)
+    }
+
+    Future.fromTry {
+      extracted.map { _ =>
+        if (javadocFile.exists()) {
+          Ok.sendFile(javadocFile, true)
+        }
+        else {
+          NotFound("The specified file does not exist.")
+        }
+      } recover {
+        case e: Exception => InternalServerError("Could not get the JavaDoc at: " + e.getMessage)
+      }
     }
   }
 
