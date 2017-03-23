@@ -19,6 +19,10 @@ class MainController @Inject() (ws: WSClient) (implicit ec: ExecutionContext) ex
 
   private lazy val tmpDir: File = Files.createTempDirectory("jars").toFile
 
+  object CaseInsensitiveOrdering extends Ordering[String] {
+    def compare(a:String, b:String): Int = a.toLowerCase compare b.toLowerCase
+  }
+
   private def artifactPath(groupId: String, artifactId: String, version: String): String = {
     Seq(
       groupId.replaceAllLiterally(".", "/"),
@@ -70,7 +74,7 @@ class MainController @Inject() (ws: WSClient) (implicit ec: ExecutionContext) ex
         response.status match {
           case OK =>
             val docs = (response.json \ "response" \ "docs").as[Seq[JsValue]]
-            val artifactIds = docs.map(_.\("a").as[String])
+            val artifactIds = docs.map(_.\("a").as[String]).sorted(CaseInsensitiveOrdering)
             Ok(views.html.needArtifactId(groupId, artifactIds))
           case NOT_FOUND =>
             NotFound(response.body)
@@ -83,14 +87,16 @@ class MainController @Inject() (ws: WSClient) (implicit ec: ExecutionContext) ex
     }
   }
 
+  private def versionSearchRequest(groupId: String, artifactId: String) = ws.url("https://search.maven.org/solrsearch/select").withQueryString(
+    "q" -> s"""g:"$groupId" AND a:"$artifactId"""",
+    "core" -> "gav",
+    "rows" -> "5000",
+    "wt" -> "json"
+  )
+
   def needVersion(groupId: String, artifactId: String, maybeVersion: Option[String]) = Action.async {
     maybeVersion.fold {
-      ws.url("https://search.maven.org/solrsearch/select").withQueryString(
-        "q" -> s"""g:"$groupId" AND a:"$artifactId"""",
-        "core" -> "gav",
-        "rows" -> "5000",
-        "wt" -> "json"
-      ).get().map { response =>
+      versionSearchRequest(groupId, artifactId).get().map { response =>
         response.status match {
           case OK =>
             val docs = (response.json \ "response" \ "docs").as[Seq[JsValue]]
@@ -108,13 +114,23 @@ class MainController @Inject() (ws: WSClient) (implicit ec: ExecutionContext) ex
   }
 
   def index(groupId: String, artifactId: String, version: String) = Action.async {
-    val url = s"https://repo1.maven.org/maven2/${artifactPath(groupId, artifactId, version)}/"
-    ws.url(url).get().map { response =>
-      response.status match {
-        case OK =>
-          Redirect(routes.MainController.file(groupId, artifactId, version, "index.html"))
-        case _ =>
-          NotFound("The specified Maven Central module does not exist.")
+    if (version == "latest") {
+      versionSearchRequest(groupId, artifactId).get().map { response =>
+        val docs = (response.json \ "response" \ "docs").as[Seq[JsValue]]
+        val maybeLatest = docs.sortBy(_.\("timestamp").as[Long])(Ordering[Long].reverse).headOption
+        val maybeLatestVersion = maybeLatest.map(_.\("v").as[String])
+        Redirect(routes.MainController.needVersion(groupId, artifactId, maybeLatestVersion))
+      }
+    }
+    else {
+      val url = s"https://repo1.maven.org/maven2/${artifactPath(groupId, artifactId, version)}/"
+      ws.url(url).get().map { response =>
+        response.status match {
+          case OK =>
+            Redirect(routes.MainController.file(groupId, artifactId, version, "index.html"))
+          case _ =>
+            NotFound("The specified Maven Central module does not exist.")
+        }
       }
     }
   }
