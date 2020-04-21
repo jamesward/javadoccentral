@@ -1,7 +1,7 @@
 steps:
   - name: 'adoptopenjdk:14-jdk-hotspot'
     entrypoint: '/workspace/sbt'
-    args: ['docker:stage', '-DdockerImageUrl=gcr.io/$PROJECT_ID/$REPO_NAME:$COMMIT_SHA']
+    args: ['-DdockerImageUrl=gcr.io/$PROJECT_ID/$REPO_NAME:$COMMIT_SHA', 'docker:stage']
 
   - name: 'gcr.io/cloud-builders/docker'
     args: ['build', '-t', 'gcr.io/$PROJECT_ID/$REPO_NAME:$COMMIT_SHA', '/workspace/target/docker/stage']
