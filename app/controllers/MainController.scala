@@ -3,19 +3,19 @@ package controllers
 import java.io.File
 import java.net.URL
 import java.nio.file.Files
+
 import javax.inject.Inject
 import javax.inject.Singleton
-
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
 import play.api.libs.json.JsValue
 import play.api.libs.ws.WSClient
-import play.api.mvc.{Action, Controller}
+import play.api.mvc.InjectedController
 
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Success, Try}
 
 @Singleton
-class MainController @Inject() (ws: WSClient) (implicit ec: ExecutionContext) extends Controller {
+class MainController @Inject() (ws: WSClient) (implicit ec: ExecutionContext) extends InjectedController {
 
   private lazy val tmpDir: File = Files.createTempDirectory("jars").toFile
 
@@ -36,7 +36,7 @@ class MainController @Inject() (ws: WSClient) (implicit ec: ExecutionContext) ex
     val inputStream = url.openConnection().getInputStream
     val zipArchiveInputStream = new ZipArchiveInputStream(inputStream)
 
-    Stream
+    LazyList
       .continually(zipArchiveInputStream.getNextEntry)
       .takeWhile(_ != null)
       .foreach { ze =>
@@ -66,7 +66,7 @@ class MainController @Inject() (ws: WSClient) (implicit ec: ExecutionContext) ex
 
   def needArtifactId(groupId: String, maybeArtifactId: Option[String]) = Action.async {
     maybeArtifactId.fold {
-      ws.url("https://search.maven.org/solrsearch/select").withQueryString(
+      ws.url("https://search.maven.org/solrsearch/select").withQueryStringParameters(
         "q" -> s"""g:"$groupId"""",
         "rows" -> "5000",
         "wt" -> "json"
@@ -87,12 +87,13 @@ class MainController @Inject() (ws: WSClient) (implicit ec: ExecutionContext) ex
     }
   }
 
-  private def versionSearchRequest(groupId: String, artifactId: String) = ws.url("https://search.maven.org/solrsearch/select").withQueryString(
-    "q" -> s"""g:"$groupId" AND a:"$artifactId"""",
-    "core" -> "gav",
-    "rows" -> "5000",
-    "wt" -> "json"
-  )
+  private def versionSearchRequest(groupId: String, artifactId: String) =
+    ws.url("https://search.maven.org/solrsearch/select").withQueryStringParameters(
+      "q" -> s"""g:"$groupId" AND a:"$artifactId"""",
+      "core" -> "gav",
+      "rows" -> "5000",
+      "wt" -> "json"
+    )
 
   def needVersion(groupId: String, artifactId: String, maybeVersion: Option[String]) = Action.async {
     maybeVersion.fold {
@@ -146,7 +147,7 @@ class MainController @Inject() (ws: WSClient) (implicit ec: ExecutionContext) ex
       Try(downloadAndExtractZip(javadocUrl, javadocDir))
     }
     else {
-      Success(Unit)
+      Success(())
     }
 
     Future.fromTry {
