@@ -12,6 +12,36 @@ libraryDependencies ++= Seq(
   "org.apache.commons" % "commons-compress" % "1.11"
 )
 
+scalacOptions ++= Seq(
+  "-unchecked",
+  "-deprecation",
+  "-explaintypes",
+  "-feature",
+  "-Xcheckinit",
+  "-Xfatal-warnings",
+  "-Xlint:adapted-args",
+  "-Xlint:constant",
+  "-Xlint:delayedinit-select",
+  "-Xlint:doc-detached",
+  "-Xlint:inaccessible",
+  "-Xlint:infer-any",
+  "-Xlint:nullary-override",
+  "-Xlint:nullary-unit",
+  "-Xlint:option-implicit",
+  "-Xlint:package-object-classes",
+  "-Xlint:poly-implicit-overload",
+  "-Xlint:private-shadow",
+  "-Xlint:stars-align",
+  "-Xlint:type-parameter-shadow",
+  "-Ywarn-dead-code",
+  "-Ywarn-extra-implicit",
+  "-Ywarn-numeric-widen",
+  "-Ywarn-unused:implicits",
+  "-Ywarn-unused:locals",
+  "-Ywarn-unused:params",
+  "-Ywarn-unused:patvars",
+  "-Ywarn-unused:privates",
+)
 
 publishArtifact in (Compile, packageDoc) := false
 
@@ -24,7 +54,7 @@ dockerBaseImage := "adoptopenjdk:14-jre-hotspot"
 daemonUserUid in Docker := None
 daemonUser in Docker := "root"
 dockerPermissionStrategy := DockerPermissionStrategy.None
-dockerEntrypoint := Seq("java", "-jar",s"/opt/docker/lib/${(artifactPath in packageJavaLauncherJar).value.getName}")
+dockerEntrypoint := Seq("java", "-jar", s"/opt/docker/lib/${(artifactPath in packageJavaLauncherJar).value.getName}", "-Dhttp.port=$PORT")
 dockerCmd :=  Seq.empty
 
 val maybeDockerSettings = sys.props.get("dockerImageUrl").flatMap { imageUrl =>
