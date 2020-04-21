@@ -54,7 +54,7 @@ dockerBaseImage := "adoptopenjdk:14-jre-hotspot"
 daemonUserUid in Docker := None
 daemonUser in Docker := "root"
 dockerPermissionStrategy := DockerPermissionStrategy.None
-dockerEntrypoint := Seq("java", "-jar", "-Dhttp.port=$PORT", s"/opt/docker/lib/${(artifactPath in packageJavaLauncherJar).value.getName}")
+dockerEntrypoint := Seq("java", "-jar", "-Dhttp.port=\$PORT", s"/opt/docker/lib/${(artifactPath in packageJavaLauncherJar).value.getName}")
 dockerCmd :=  Seq.empty
 
 val maybeDockerSettings = sys.props.get("dockerImageUrl").flatMap { imageUrl =>
