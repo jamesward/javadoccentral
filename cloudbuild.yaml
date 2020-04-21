@@ -10,7 +10,7 @@ steps:
     args: ['push', 'gcr.io/$PROJECT_ID/$REPO_NAME:$COMMIT_SHA']
 
   - name: 'gcr.io/cloud-builders/gcloud'
-    args: ['run', 'deploy', '--image=gcr.io/$PROJECT_ID/$REPO_NAME:$COMMIT_SHA', '--platform=managed', '--project=$PROJECT_ID', '--region=us-central1', '--allow-unauthenticated', '--memory=256Mi', '$REPO_NAME']
+    args: ['run', 'deploy', '--image=gcr.io/$PROJECT_ID/$REPO_NAME:$COMMIT_SHA', '--platform=managed', '--project=$PROJECT_ID', '--region=us-central1', '--allow-unauthenticated', '--memory=512Mi', '--cpu=2.', '$REPO_NAME']
 
   - name: 'gcr.io/cloud-builders/gcloud'
     args: ['run', 'services', 'update-traffic', '--platform=managed', '--project=$PROJECT_ID', '--region=us-central1', '--to-latest', '$REPO_NAME']
