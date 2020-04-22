@@ -7,7 +7,7 @@ RUN gu install native-image
 
 RUN ./sbt graalvm-native-image:packageBin
 
-FROM alpine
+FROM gcr.io/distroless/static
 
 COPY --from=builder /app/target/graalvm-native-image/javadoccentral /javadoccentral
 
