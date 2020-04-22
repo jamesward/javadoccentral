@@ -116,7 +116,7 @@ object App extends IOApp {
         client <- BlazeClientBuilder[IO](global).resource
         tmpDir = Files.createTempDirectory("jars").toFile // todo: to resource
         httpAppWithClient = httpApp(client, tmpDir, blocker)
-        server <- BlazeServerBuilder[IO].bindHttp(port, "0.0.0.0").withHttpApp(httpAppWithClient).resource
+        server <- BlazeServerBuilder[IO].bindHttp(port, "0.0.0.0").withHttpApp(httpAppWithClient).withNio2(true).resource
       } yield server
     }.use(_ => IO.never).as(ExitCode.Success)
   }

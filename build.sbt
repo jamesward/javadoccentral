@@ -86,6 +86,6 @@ graalVMNativeImageOptions ++= Seq(
 // todo: https://github.com/sbt/sbt-native-packager/issues/1330
 graalVMNativeImageOptions += s"-H:ReflectionConfigurationFiles=../../src/graal/reflect.json"
 
-fork := true
+// fork := true
 
-javaOptions += s"-agentlib:native-image-agent=config-output-dir=${(target in GraalVMNativeImage).value}"
+// javaOptions += s"-agentlib:native-image-agent=config-output-dir=${(target in GraalVMNativeImage).value}"
