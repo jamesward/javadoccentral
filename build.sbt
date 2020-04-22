@@ -71,7 +71,7 @@ graalVMNativeImageOptions ++= Seq(
   "--verbose",
   "--no-server",
   "--no-fallback",
-  "--static",
+  //"--static",
   "--enable-http",
   "--enable-https",
   "--enable-all-security-services",
