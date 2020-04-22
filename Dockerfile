@@ -7,7 +7,7 @@ RUN gu install native-image
 
 RUN ./sbt graalvm-native-image:packageBin
 
-FROM gcr.io/distroless/base
+FROM ubuntu
 
 COPY --from=builder /app/target/graalvm-native-image/javadoccentral /javadoccentral
 
