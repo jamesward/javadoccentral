@@ -74,6 +74,7 @@ graalVMNativeImageOptions ++= Seq(
   "--static",
   "--enable-http",
   "--enable-https",
+  "--enable-all-security-services",
   "--report-unsupported-elements-at-runtime",
   "--allow-incomplete-classpath",
   "-H:+ReportExceptionStackTraces",
