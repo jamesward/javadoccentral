@@ -71,7 +71,7 @@ graalVMNativeImageOptions ++= Seq(
   "--verbose",
   "--no-server",
   "--no-fallback",
-  //"--static",
+  "--static",
   "--enable-http",
   "--enable-https",
   "--enable-all-security-services",
@@ -81,6 +81,10 @@ graalVMNativeImageOptions ++= Seq(
   "-H:+ReportUnsupportedElementsAtRuntime",
   "-H:+TraceClassInitialization",
   "-H:+PrintClassInitialization",
+  "-H:+StackTrace",
+  "-H:+JNI",
+  "-H:-SpawnIsolates",
+  "-H:-UseServiceLoaderFeature",
   "--initialize-at-build-time=scala.runtime.Statics$VM",
 )
 
