@@ -1,12 +1,12 @@
 @(groupId: String, artifactIds: Seq[String])
 <!DOCTYPE html>
-<html>
+<html lang="en">
     <head>
         <title>JavaDoc Central</title>
     </head>
     <body>
         <h2>JavaDoc Central</h2>
-        <form action="@routes.MainController.needArtifactId(groupId, None)" method="get">
+        <form action="/@groupId" method="get">
             <label>
                 GroupId: <input name="groupId" value="@groupId" disabled>
             </label>

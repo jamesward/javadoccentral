@@ -1,16 +1,34 @@
-import com.typesafe.sbt.packager.docker.DockerPermissionStrategy
-
-enablePlugins(PlayScala, LauncherJarPlugin, DockerPlugin)
+enablePlugins(SbtTwirl, GraalVMNativeImagePlugin)
 
 name := "javadoccentral"
 
 scalaVersion := "2.13.1"
 
+resolvers += Resolver.mavenLocal
+
+val Http4sVersion = "0.21.3"
+val CirceVersion = "0.13.0"
+val Specs2Version = "4.9.3"
+val LogbackVersion = "1.2.3"
+val Slf4jVersion = "1.7.30"
+val CommonsCompress = "1.20"
+
 libraryDependencies ++= Seq(
-  guice,
-  ws,
-  "org.apache.commons" % "commons-compress" % "1.11"
+  "org.http4s"         %% "http4s-blaze-server" % Http4sVersion,
+  "org.http4s"         %% "http4s-blaze-client" % Http4sVersion,
+  "org.http4s"         %% "http4s-circe"        % Http4sVersion,
+  "org.http4s"         %% "http4s-dsl"          % Http4sVersion,
+  "org.http4s"         %% "http4s-twirl"        % Http4sVersion,
+  "io.circe"           %% "circe-generic"       % CirceVersion,
+  "io.circe"           %% "circe-optics"        % CirceVersion,
+  "org.slf4j"          %  "slf4j-simple"        % Slf4jVersion,
+  "org.apache.commons" %  "commons-compress"    % CommonsCompress,
+
+  "org.specs2"      %% "specs2-core"         % Specs2Version % "test",
 )
+
+addCompilerPlugin("org.typelevel" %% "kind-projector"     % "0.10.3")
+addCompilerPlugin("com.olegpy"    %% "better-monadic-for" % "0.3.1")
 
 scalacOptions ++= Seq(
   "-unchecked",
@@ -49,29 +67,25 @@ publishArtifact in packageDoc := false
 
 sources in (Compile, doc) := Seq.empty
 
-dockerUpdateLatest := true
-dockerBaseImage := "adoptopenjdk:14-jre-hotspot"
-daemonUserUid in Docker := None
-daemonUser in Docker := "root"
-dockerPermissionStrategy := DockerPermissionStrategy.None
-dockerEntrypoint := Seq("java", "-jar", s"/opt/docker/lib/${(artifactPath in packageJavaLauncherJar).value.getName}")
-dockerCmd := Seq.empty
+graalVMNativeImageOptions ++= Seq(
+  "--verbose",
+  "--no-server",
+  "--no-fallback",
+  "--static",
+  "--enable-http",
+  "--enable-https",
+  "--report-unsupported-elements-at-runtime",
+  "--allow-incomplete-classpath",
+  "-H:+ReportExceptionStackTraces",
+  "-H:+ReportUnsupportedElementsAtRuntime",
+  "-H:+TraceClassInitialization",
+  "-H:+PrintClassInitialization",
+  "--initialize-at-build-time=scala.runtime.Statics$VM",
+)
 
-val maybeDockerSettings = sys.props.get("dockerImageUrl").flatMap { imageUrl =>
-  val parts = imageUrl.split("/")
-  if (parts.size == 3) {
-    val nameParts = parts(2).split(':')
-    if (nameParts.length == 2)
-      Some((parts(0), parts(1), nameParts(0), Some(nameParts(1))))
-    else
-      Some((parts(0), parts(1), parts(2), None))
-  }
-  else {
-    None
-  }
-}
+// todo: https://github.com/sbt/sbt-native-packager/issues/1330
+graalVMNativeImageOptions += s"-H:ReflectionConfigurationFiles=../../src/graal/reflect.json"
 
-dockerRepository := maybeDockerSettings.map(_._1)
-dockerUsername := maybeDockerSettings.map(_._2)
-packageName in Docker := maybeDockerSettings.map(_._3).getOrElse(name.value)
-version in Docker := maybeDockerSettings.flatMap(_._4).getOrElse(version.value)
+fork := true
+
+javaOptions += s"-agentlib:native-image-agent=config-output-dir=${(target in GraalVMNativeImage).value}"

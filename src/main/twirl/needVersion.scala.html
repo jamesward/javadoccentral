@@ -1,12 +1,12 @@
 @(groupId: String, artifactId: String, versions: Seq[String])
 <!DOCTYPE html>
-<html>
+<html lang="en">
     <head>
         <title>JavaDoc Central</title>
     </head>
     <body>
         <h2>JavaDoc Central</h2>
-        <form action="@routes.MainController.needVersion(groupId, artifactId, None)" method="get">
+        <form action="/@groupId/@artifactId" method="get">
             <label>
                 GroupId: <input name="groupId" value="@groupId" disabled>
             </label>
