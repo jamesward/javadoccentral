@@ -9,6 +9,8 @@ RUN ./sbt graalvm-native-image:packageBin
 
 FROM scratch
 
+RUN mkdir /var/tmp
+
 COPY --from=builder /app/target/graalvm-native-image/javadoccentral /javadoccentral
 
 ENTRYPOINT ["/javadoccentral"]
