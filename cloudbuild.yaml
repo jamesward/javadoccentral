@@ -12,4 +12,4 @@ steps:
     args: ['run', 'services', 'update-traffic', '--platform=managed', '--project=$PROJECT_ID', '--region=us-central1', '--to-latest', '$REPO_NAME']
 
 options:
-  machineType: 'N1_HIGHCPU_8'
+  machineType: 'N1_HIGHCPU_32'
