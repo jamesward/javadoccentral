@@ -21,7 +21,6 @@ object App extends IOApp {
     }
   }
 
-
   def needArtifactId(groupId: String, maybeArtifactId: Option[String])(implicit client: Client[IO]): IO[Response[IO]] = {
     maybeArtifactId.fold {
       // todo: not found & bad request for other errors
@@ -73,9 +72,7 @@ object App extends IOApp {
 
     // todo: fix race condition
     val extracted = if (!javadocDir.exists()) {
-      MavenCentral.downloadAndExtractZip(javadocUri, javadocDir).flatMap { _ =>
-        IO.unit
-      }
+      MavenCentral.downloadAndExtractZip(javadocUri, javadocDir)
     }
     else {
       IO.unit
