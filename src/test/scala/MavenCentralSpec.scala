@@ -1,9 +1,10 @@
 import java.nio.file.Files
 
 import MavenCentral._
-import cats.effect.{ContextShift, IO, Timer}
+import cats.effect.{Blocker, ContextShift, IO, Timer}
 import org.http4s.Uri
-import org.http4s.client.blaze.BlazeClientBuilder
+import org.http4s.client.Client
+import org.http4s.client.okhttp.OkHttpBuilder
 import org.specs2.mutable.Specification
 
 import scala.concurrent.ExecutionContext.global
@@ -12,46 +13,56 @@ class MavenCentralSpec extends Specification {
 
   implicit val cs: ContextShift[IO] = IO.contextShift(global)
   implicit val timer: Timer[IO] = IO.timer(global)
+  def runWithClient[OUT](f: Client[IO] => IO[OUT]): OUT = {
+    {
+      for {
+        blocker <- Blocker[IO]
+        clientBuilder <- OkHttpBuilder.withDefaultClient[IO](blocker)
+        client <- clientBuilder.resource
+      } yield client
+    }.use(f(_)).unsafeRunSync()
+  }
 
   // todo: test sorting
   "searchArtifacts" >> {
-    BlazeClientBuilder[IO](global).resource.use { client =>
-      searchArtifacts("com.jamesward")(client)
-    }.unsafeRunSync() must not be empty
+    runWithClient {
+      searchArtifacts("com.jamesward")(_)
+    } must not be empty
   }
 
   // todo: test sorting
   "searchVersions" >> {
-    BlazeClientBuilder[IO](global).resource.use { client =>
-      searchVersions("com.jamesward", "travis-central-test")(client)
-    }.unsafeRunSync() must not be empty
+    runWithClient {
+      searchVersions("com.jamesward", "travis-central-test")(_)
+    } must not be empty
   }
 
   "latest" >> {
-    BlazeClientBuilder[IO](global).resource.use { client =>
-      latest("com.jamesward", "travis-central-test")(client)
-    }.unsafeRunSync() must beSome ("0.0.15")
+    runWithClient {
+      latest("com.jamesward", "travis-central-test")(_)
+    } must beSome ("0.0.15")
   }
 
   "artifactExists" >> {
     "works for existing artifacts" >> {
-      BlazeClientBuilder[IO](global).resource.use { client =>
-        artifactExists("com.jamesward", "travis-central-test", "0.0.15")(client)
-      }.unsafeRunSync() must beTrue
+      runWithClient {
+        artifactExists("com.jamesward", "travis-central-test", "0.0.15")(_)
+      } must beTrue
     }
     "be false for non-existant artifacts" >> {
-      BlazeClientBuilder[IO](global).resource.use { client =>
-        artifactExists("com.jamesward", "travis-central-test", "0.0.0")(client)
-      }.unsafeRunSync() must beFalse
+      runWithClient {
+        artifactExists("com.jamesward", "travis-central-test", "0.0.0")(_)
+      } must beFalse
     }
   }
 
   "downloadAndExtractZip" >> {
     val uri = Uri.unsafeFromString("https://repo1.maven.org/maven2/com/jamesward/travis-central-test/0.0.15/travis-central-test-0.0.15.jar")
     val tmpFile = Files.createTempDirectory("test").toFile
-    BlazeClientBuilder[IO](global).resource.use { implicit client =>
-      downloadAndExtractZip(uri, tmpFile)
-    }.unsafeRunSync()
+    runWithClient {
+      downloadAndExtractZip(uri, tmpFile)(_, cs)
+    }
+
     tmpFile.list().toList must contain ("META-INF")
   }
 

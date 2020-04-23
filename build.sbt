@@ -2,7 +2,7 @@ enablePlugins(SbtTwirl, GraalVMNativeImagePlugin)
 
 name := "javadoccentral"
 
-scalaVersion := "2.13.1"
+scalaVersion := "2.13.2"
 
 resolvers += Resolver.mavenLocal
 
@@ -14,17 +14,17 @@ val Slf4jVersion = "1.7.30"
 val CommonsCompress = "1.20"
 
 libraryDependencies ++= Seq(
-  "org.http4s"         %% "http4s-blaze-server" % Http4sVersion,
-  "org.http4s"         %% "http4s-blaze-client" % Http4sVersion,
-  "org.http4s"         %% "http4s-circe"        % Http4sVersion,
-  "org.http4s"         %% "http4s-dsl"          % Http4sVersion,
-  "org.http4s"         %% "http4s-twirl"        % Http4sVersion,
-  "io.circe"           %% "circe-generic"       % CirceVersion,
-  "io.circe"           %% "circe-optics"        % CirceVersion,
-  "org.slf4j"          %  "slf4j-simple"        % Slf4jVersion,
-  "org.apache.commons" %  "commons-compress"    % CommonsCompress,
+  "org.http4s"         %% "http4s-blaze-server"  % Http4sVersion,
+  "org.http4s"         %% "http4s-okhttp-client" % Http4sVersion,
+  "org.http4s"         %% "http4s-circe"         % Http4sVersion,
+  "org.http4s"         %% "http4s-dsl"           % Http4sVersion,
+  "org.http4s"         %% "http4s-twirl"         % Http4sVersion,
+  "io.circe"           %% "circe-generic"        % CirceVersion,
+  "io.circe"           %% "circe-optics"         % CirceVersion,
+  "org.slf4j"          %  "slf4j-simple"         % Slf4jVersion,
+  "org.apache.commons" %  "commons-compress"     % CommonsCompress,
 
-  "org.specs2"      %% "specs2-core"         % Specs2Version % "test",
+  "org.specs2"         %% "specs2-core"          % Specs2Version % "test",
 )
 
 addCompilerPlugin("org.typelevel" %% "kind-projector"     % "0.10.3")
@@ -94,5 +94,7 @@ graalVMNativeImageOptions += s"-H:ResourceConfigurationFiles=../../src/graal/res
 
 fork := true
 
-javaOptions += s"-agentlib:native-image-agent=config-output-dir=src/graal"
+javaOptions in run += s"-agentlib:native-image-agent=config-output-dir=src/graal"
 //javaOptions += s"-agentlib:native-image-agent=trace-output=${(target in GraalVMNativeImage).value}/trace-output.json"
+
+// todo: before graalvm-native-image:packageBin run integration tests with the above config-output to generate the configs, bonus if in docker

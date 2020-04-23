@@ -1,5 +1,4 @@
 import java.io.File
-import java.net.URL
 import java.nio.file.Files
 
 import cats.effect._
@@ -7,16 +6,10 @@ import cats.implicits._
 import io.circe.Json
 import io.circe.optics.JsonPath.root
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
-import org.http4s.{Request, Uri}
-import org.http4s.implicits._
 import org.http4s.circe._
 import org.http4s.client.Client
-import org.http4s._
-import org.http4s.client.blaze._
-import org.http4s.client.oauth1
 import org.http4s.implicits._
-import cats.effect._
-import cats.implicits._
+import org.http4s.{Request, Uri}
 
 object MavenCentral {
 
@@ -27,7 +20,7 @@ object MavenCentral {
   def artifactPath(groupId: String, artifactId: String, version: String): String = {
     Seq(
       "maven2",
-      groupId.replaceAllLiterally(".", "/"),
+      groupId.replace('.', '/'),
       artifactId,
       version
     ).mkString("/")

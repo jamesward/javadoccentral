@@ -4,8 +4,7 @@ import java.nio.file.Files
 import cats.effect.{Blocker, ExitCode, IO, IOApp}
 import cats.implicits._
 import org.http4s.client.Client
-import org.http4s.client.blaze.BlazeClientBuilder
-import org.http4s.client.middleware.Logger
+import org.http4s.client.okhttp.OkHttpBuilder
 import org.http4s.dsl.impl.Root
 import org.http4s.dsl.io._
 import org.http4s.headers.Location
@@ -13,8 +12,6 @@ import org.http4s.implicits._
 import org.http4s.server.blaze.BlazeServerBuilder
 import org.http4s.twirl._
 import org.http4s.{HttpRoutes, Request, Response, StaticFile, Uri}
-
-import scala.concurrent.ExecutionContext._
 
 object App extends IOApp {
 
@@ -111,9 +108,6 @@ object App extends IOApp {
     case req @ GET -> groupId /: artifactId /: version /: filepath => file(groupId, artifactId, version, filepath, req)
   }.orNotFound
 
-  //val finalHttpApp = Logger.httpApp(true, true)(httpApp)
-
-
   def run(args: List[String]) = {
     val port = sys.env.getOrElse("PORT", "8080").toInt
 
@@ -122,9 +116,11 @@ object App extends IOApp {
     {
       for {
         blocker <- Blocker[IO]
-        client <- BlazeClientBuilder[IO](global).resource
-        //loggerClient = Logger(true, true)(client)
+        clientBuilder <- OkHttpBuilder.withDefaultClient[IO](blocker)
+        client <- clientBuilder.resource
+        //loggerClient = org.http4s.client.middleware.Logger(true, true)(client)
         httpAppWithClient = httpApp(client, tmpDir, blocker)
+        //loggerHttpApp = org.http4s.server.middleware.Logger.httpApp(true, true)(httpAppWithClient)
         server <- BlazeServerBuilder[IO].bindHttp(port, "0.0.0.0").withHttpApp(httpAppWithClient).resource
       } yield server
     }.use(_ => IO.never).as(ExitCode.Success)
