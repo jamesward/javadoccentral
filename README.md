@@ -7,7 +7,7 @@ Usage Guide:
 
 Main page: [javadoccentral-weurlhfjnq-uc.a.run.app](https://javadoccentral-weurlhfjnq-uc.a.run.app/)
 
-URL Format: `https://javadoccentral.herokuapp.com/GROUP_ID/ARTIFACT_ID/VERSION`
+URL Format: `https://javadoccentral-weurlhfjnq-uc.a.run.app/GROUP_ID/ARTIFACT_ID/VERSION`
 
 You can specify the `GROUP_ID`, `ARTIFACT_ID`, and `VERSION`, like:  
 `https://javadoccentral-weurlhfjnq-uc.a.run.app/org.webjars/webjars-locator/0.32`

@@ -71,12 +71,9 @@ object App extends IOApp {
     val javadocDir = new File(tmpDir, s"$groupId/$artifactId/$version")
     val javadocFile = new File(javadocDir, filepath.toString)
 
-    println("maybe dowloading")
     // todo: fix race condition
     val extracted = if (!javadocDir.exists()) {
-      println("dowloading")
       MavenCentral.downloadAndExtractZip(javadocUri, javadocDir).flatMap { _ =>
-        println("downloaded")
         IO.unit
       }
     }
@@ -86,7 +83,6 @@ object App extends IOApp {
 
     extracted.flatMap { _ =>
       if (javadocFile.exists()) {
-        println("serving")
         StaticFile.fromFile(javadocFile, blocker, Some(request)).getOrElseF(NotFound())
       }
       else {
