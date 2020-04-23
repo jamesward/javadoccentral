@@ -49,7 +49,9 @@ class MavenCentralSpec extends Specification {
   "downloadAndExtractZip" >> {
     val uri = Uri.unsafeFromString("https://repo1.maven.org/maven2/com/jamesward/travis-central-test/0.0.15/travis-central-test-0.0.15.jar")
     val tmpFile = Files.createTempDirectory("test").toFile
-    downloadAndExtractZip(uri, tmpFile).unsafeRunSync()
+    BlazeClientBuilder[IO](global).resource.use { implicit client =>
+      downloadAndExtractZip(uri, tmpFile)
+    }.unsafeRunSync()
     tmpFile.list().toList must contain ("META-INF")
   }
 

@@ -7,10 +7,16 @@ import cats.implicits._
 import io.circe.Json
 import io.circe.optics.JsonPath.root
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
-import org.http4s.Uri
+import org.http4s.{Request, Uri}
 import org.http4s.implicits._
 import org.http4s.circe._
 import org.http4s.client.Client
+import org.http4s._
+import org.http4s.client.blaze._
+import org.http4s.client.oauth1
+import org.http4s.implicits._
+import cats.effect._
+import cats.implicits._
 
 object MavenCentral {
 
@@ -83,14 +89,10 @@ object MavenCentral {
   }
 
   // todo: this is terrible
-  def downloadAndExtractZip(source: Uri, destination: File): IO[Unit] = {
-    Resource.fromAutoCloseable {
-      IO {
-        val url = new URL(source.toString())
-        val inputStream = url.openConnection().getInputStream
-        new ZipArchiveInputStream(inputStream)
-      }
-    }.use { zipArchiveInputStream =>
+  def downloadAndExtractZip(source: Uri, destination: File)(implicit client: Client[IO], contextShift: ContextShift[IO]): IO[Unit] = {
+    val s = client.stream(Request(uri = source)).flatMap(_.body)
+
+    fs2.io.toInputStreamResource(s).map(new ZipArchiveInputStream(_)).use { zipArchiveInputStream =>
       IO {
         LazyList
           .continually(zipArchiveInputStream.getNextEntry)

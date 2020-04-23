@@ -5,6 +5,7 @@ import cats.effect.{Blocker, ExitCode, IO, IOApp}
 import cats.implicits._
 import org.http4s.client.Client
 import org.http4s.client.blaze.BlazeClientBuilder
+import org.http4s.client.middleware.Logger
 import org.http4s.dsl.impl.Root
 import org.http4s.dsl.io._
 import org.http4s.headers.Location
@@ -68,14 +69,19 @@ object App extends IOApp {
     }
   }
 
-  def file(groupId: String, artifactId: String, version: String, filepath: Path, request: Request[IO])(implicit tmpDir: File, blocker: Blocker) = {
+  def file(groupId: String, artifactId: String, version: String, filepath: Path, request: Request[IO])(implicit client: Client[IO], tmpDir: File, blocker: Blocker) = {
     val javadocUri = MavenCentral.javadocUri(groupId, artifactId, version)
     val javadocDir = new File(tmpDir, s"$groupId/$artifactId/$version")
     val javadocFile = new File(javadocDir, filepath.toString)
 
+    println("maybe dowloading")
     // todo: fix race condition
     val extracted = if (!javadocDir.exists()) {
-      MavenCentral.downloadAndExtractZip(javadocUri, javadocDir)
+      println("dowloading")
+      MavenCentral.downloadAndExtractZip(javadocUri, javadocDir).flatMap { _ =>
+        println("downloaded")
+        IO.unit
+      }
     }
     else {
       IO.unit
@@ -83,6 +89,7 @@ object App extends IOApp {
 
     extracted.flatMap { _ =>
       if (javadocFile.exists()) {
+        println("serving")
         StaticFile.fromFile(javadocFile, blocker, Some(request)).getOrElseF(NotFound())
       }
       else {
@@ -110,13 +117,15 @@ object App extends IOApp {
   def run(args: List[String]) = {
     val port = sys.env.getOrElse("PORT", "8080").toInt
 
+    val tmpDir = Files.createTempDirectory("jars").toFile // todo: to resource
+
     {
       for {
         blocker <- Blocker[IO]
         client <- BlazeClientBuilder[IO](global).resource
-        tmpDir = Files.createTempDirectory("jars").toFile // todo: to resource
+        //loggerClient = Logger(true, true)(client)
         httpAppWithClient = httpApp(client, tmpDir, blocker)
-        server <- BlazeServerBuilder[IO].bindHttp(port, "0.0.0.0").withHttpApp(httpAppWithClient).withNio2(true).resource
+        server <- BlazeServerBuilder[IO].bindHttp(port, "0.0.0.0").withHttpApp(httpAppWithClient).resource
       } yield server
     }.use(_ => IO.never).as(ExitCode.Success)
   }

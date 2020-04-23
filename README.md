@@ -20,3 +20,30 @@ Or just the `GROUP_ID`, like:
 
 You can also specify `latest` for the version, like:  
 `https://javadoccentral.herokuapp.com/org.webjars/webjars-locator/latest`
+
+## Dev Info
+
+Run with restart:
+```
+./sbt ~reStart
+```
+
+Run and output GraalVM configs, with `JAVA_HOME` set the GraalVM:
+```
+./sbt run
+```
+
+With `JAVA_HOME` set the GraalVM and `native-image` on the `PATH`:
+```
+./sbt graalvm-native-image:packageBin
+```
+
+Build the container:
+```
+docker build -t javadoccentral .
+```
+
+Run the container:
+```
+docker run -p8080:8080 javadoccentral
+```

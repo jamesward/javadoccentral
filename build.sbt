@@ -89,8 +89,10 @@ graalVMNativeImageOptions ++= Seq(
 )
 
 // todo: https://github.com/sbt/sbt-native-packager/issues/1330
-graalVMNativeImageOptions += s"-H:ReflectionConfigurationFiles=../../src/graal/reflect.json"
+graalVMNativeImageOptions += s"-H:ReflectionConfigurationFiles=../../src/graal/reflect-config.json"
+graalVMNativeImageOptions += s"-H:ResourceConfigurationFiles=../../src/graal/resource-config.json"
 
-// fork := true
+fork := true
 
-// javaOptions += s"-agentlib:native-image-agent=config-output-dir=${(target in GraalVMNativeImage).value}"
+javaOptions += s"-agentlib:native-image-agent=config-output-dir=src/graal"
+//javaOptions += s"-agentlib:native-image-agent=trace-output=${(target in GraalVMNativeImage).value}/trace-output.json"
