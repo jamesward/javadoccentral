@@ -7,20 +7,19 @@ RUN gu install native-image
 
 RUN ./sbt graalvm-native-image:packageBin
 
-FROM frolvlad/alpine-glibc
-#FROM gcr.io/distroless/static
-#FROM gcr.io/distroless/base
-#FROM scratch
+FROM scratch
 
 WORKDIR /var/tmp
 
-#COPY --from=builder /etc/hosts /etc/hosts
+WORKDIR /lib
+COPY --from=builder /usr/lib64/ld-linux-x86-64.so.2 /lib
+COPY --from=builder /usr/lib64/libc.so.6 /lib
+COPY --from=builder /usr/lib64/libnss_dns.so.2 /lib
+COPY --from=builder /usr/lib64/libnss_files.so.2 /lib
+COPY --from=builder /usr/lib64/libresolv.so.2 /lib
 
-#COPY --from=builder /opt/graalvm-ce-java11-20.0.0/lib/security/cacerts /cacerts
-
-#COPY --from=builder /opt/graalvm-ce-java11-20.0.0/lib/libsunec.so /libsunec.so
+ENV LD_LIBRARY_PATH="/lib"
 
 COPY --from=builder /app/target/graalvm-native-image/javadoccentral /javadoccentral
 
 ENTRYPOINT ["/javadoccentral"]
-#, "-Djavax.net.ssl.trustStore=/cacerts", "-Djavax.net.ssl.trustAnchors=/cacerts"]
