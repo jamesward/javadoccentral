@@ -85,6 +85,7 @@ graalVMNativeImageOptions ++= Seq(
   "-H:+JNI",
   "-H:-SpawnIsolates",
   "-H:-UseServiceLoaderFeature",
+  "-H:UseMuslC=../../bundle/",
   "--initialize-at-build-time=scala.runtime.Statics$VM",
 )
 
