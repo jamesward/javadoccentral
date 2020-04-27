@@ -5,21 +5,21 @@ Artifacts in Maven Central typically provide a JavaDoc Jar that contains the ver
 
 Usage Guide:
 
-Main page: [javadoccentral-weurlhfjnq-uc.a.run.app](https://javadoccentral-weurlhfjnq-uc.a.run.app/)
+Main page: [javadocs.dev](https://javadocs.dev/)
 
-URL Format: `https://javadoccentral-weurlhfjnq-uc.a.run.app/GROUP_ID/ARTIFACT_ID/VERSION`
+URL Format: `https://javadocs.dev/GROUP_ID/ARTIFACT_ID/VERSION`
 
 You can specify the `GROUP_ID`, `ARTIFACT_ID`, and `VERSION`, like:  
-`https://javadoccentral-weurlhfjnq-uc.a.run.app/org.webjars/webjars-locator/0.32`
+`https://javadocs.dev/org.webjars/webjars-locator/0.32`
 
 Or the `GROUP_ID` and `ARTIFACT_ID`, like:  
-`https://javadoccentral-weurlhfjnq-uc.a.run.app/org.webjars/webjars-locator`
+`https://javadocs.dev/org.webjars/webjars-locator`
 
 Or just the `GROUP_ID`, like:  
-`https://javadoccentral-weurlhfjnq-uc.a.run.app/org.webjars`
+`https://javadocs.dev/org.webjars`
 
 You can also specify `latest` for the version, like:  
-`https://javadoccentral-weurlhfjnq-uc.a.run.app/org.webjars/webjars-locator/latest`
+`https://javadocs.dev/org.webjars/webjars-locator/latest`
 
 ## Dev Info
 
