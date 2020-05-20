@@ -28,7 +28,7 @@ Run with restart:
 ./sbt ~reStart
 ```
 
-Run and output GraalVM configs, with `JAVA_HOME` set the GraalVM:
+Run and output GraalVM configs, with `JAVA_HOME` set to GraalVM:
 ```
 ./sbt run
 ```

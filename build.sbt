@@ -6,7 +6,7 @@ scalaVersion := "2.13.2"
 
 resolvers += Resolver.mavenLocal
 
-val Http4sVersion = "0.21.3"
+val Http4sVersion = "0.21.4"
 val CirceVersion = "0.13.0"
 val Specs2Version = "4.9.3"
 val LogbackVersion = "1.2.3"
@@ -15,7 +15,7 @@ val CommonsCompress = "1.20"
 
 libraryDependencies ++= Seq(
   "org.http4s"         %% "http4s-blaze-server"  % Http4sVersion,
-  "org.http4s"         %% "http4s-okhttp-client" % Http4sVersion,
+  "org.http4s"         %% "http4s-blaze-client"  % Http4sVersion,
   "org.http4s"         %% "http4s-circe"         % Http4sVersion,
   "org.http4s"         %% "http4s-dsl"           % Http4sVersion,
   "org.http4s"         %% "http4s-twirl"         % Http4sVersion,
@@ -72,19 +72,14 @@ graalVMNativeImageOptions ++= Seq(
   "--no-server",
   "--no-fallback",
   "--static",
+  "--install-exit-handlers",
   "--enable-http",
   "--enable-https",
   "--enable-all-security-services",
-  "--report-unsupported-elements-at-runtime",
-  "--allow-incomplete-classpath",
   "-H:+ReportExceptionStackTraces",
-  "-H:+ReportUnsupportedElementsAtRuntime",
   "-H:+TraceClassInitialization",
   "-H:+PrintClassInitialization",
   "-H:+StackTrace",
-  "-H:+JNI",
-  "-H:-SpawnIsolates",
-  "-H:-UseServiceLoaderFeature",
   "-H:UseMuslC=../../bundle/",
   "--initialize-at-build-time=scala.runtime.Statics$VM",
 )
