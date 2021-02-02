@@ -2,11 +2,15 @@ enablePlugins(SbtTwirl, GraalVMNativeImagePlugin)
 
 name := "javadoccentral"
 
-scalaVersion := "2.13.2"
+javacOptions ++= Seq("-source", "11", "-target", "11")
+
+scalacOptions += "-target:jvm-11"
+
+scalaVersion := "2.13.4"
 
 resolvers += Resolver.mavenLocal
 
-val Http4sVersion = "0.21.4"
+val Http4sVersion = "0.21.17"
 val CirceVersion = "0.13.0"
 val Specs2Version = "4.9.3"
 val LogbackVersion = "1.2.3"
@@ -23,6 +27,8 @@ libraryDependencies ++= Seq(
   "io.circe"           %% "circe-optics"         % CirceVersion,
   "org.slf4j"          %  "slf4j-simple"         % Slf4jVersion,
   "org.apache.commons" %  "commons-compress"     % CommonsCompress,
+
+  "org.scalameta"      %% "svm-subs"             % "20.2.0",
 
   "org.specs2"         %% "specs2-core"          % Specs2Version % "test",
 )
@@ -43,7 +49,6 @@ scalacOptions ++= Seq(
   "-Xlint:doc-detached",
   "-Xlint:inaccessible",
   "-Xlint:infer-any",
-  "-Xlint:nullary-override",
   "-Xlint:nullary-unit",
   "-Xlint:option-implicit",
   "-Xlint:package-object-classes",
@@ -63,8 +68,6 @@ scalacOptions ++= Seq(
 
 publishArtifact in (Compile, packageDoc) := false
 
-publishArtifact in packageDoc := false
-
 sources in (Compile, doc) := Seq.empty
 
 graalVMNativeImageOptions ++= Seq(
@@ -76,12 +79,9 @@ graalVMNativeImageOptions ++= Seq(
   "--enable-http",
   "--enable-https",
   "--enable-all-security-services",
+  "--libc=musl",
+  "-H:+RemoveSaturatedTypeFlows",
   "-H:+ReportExceptionStackTraces",
-  "-H:+TraceClassInitialization",
-  "-H:+PrintClassInitialization",
-  "-H:+StackTrace",
-  "-H:UseMuslC=../../bundle/",
-  "--initialize-at-build-time=scala.runtime.Statics$VM",
 )
 
 // todo: https://github.com/sbt/sbt-native-packager/issues/1330
