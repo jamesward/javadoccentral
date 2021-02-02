@@ -11,11 +11,12 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/$REPO_NAME:latest']
 
-  - name: 'gcr.io/cloud-builders/gcloud'
-    args: ['run', 'deploy', '--image=gcr.io/$PROJECT_ID/$REPO_NAME:$COMMIT_SHA', '--platform=managed', '--project=$PROJECT_ID', '--region=us-central1', '--allow-unauthenticated', '--memory=512Mi', '--cpu=2.', '--update-env-vars=JAVA_TOOL_OPTIONS="-XX:+UseContainerSupport"', '$REPO_NAME']
-
-  - name: 'gcr.io/cloud-builders/gcloud'
-    args: ['run', 'services', 'update-traffic', '--platform=managed', '--project=$PROJECT_ID', '--region=us-central1', '--to-latest', '$REPO_NAME']
+  - name: ghcr.io/jamesward/easycloudrun
+    entrypoint: multiregion
+    env:
+      - 'PROJECT_ID=$PROJECT_ID'
+      - 'IMAGE_NAME=$REPO_NAME'
+      - 'DOMAINS=test.javadocs.dev'
 
 options:
   machineType: 'N1_HIGHCPU_32'
