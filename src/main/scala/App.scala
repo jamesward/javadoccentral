@@ -1,18 +1,21 @@
+import cats.data.NonEmptyList
+
 import java.io.File
 import java.nio.file.Files
-
 import cats.effect.{Blocker, ExitCode, IO, IOApp}
+import org.http4s.CacheDirective.{`max-age`, public}
 import org.http4s.client.Client
 import org.http4s.client.blaze.BlazeClientBuilder
 import org.http4s.dsl.impl.Root
 import org.http4s.dsl.io._
-import org.http4s.headers.Location
+import org.http4s.headers.{Location, `Cache-Control`}
 import org.http4s.implicits._
 import org.http4s.server.blaze.BlazeServerBuilder
 import org.http4s.twirl._
 import org.http4s.{HttpRoutes, Request, Response, StaticFile, Uri}
 
 import scala.concurrent.ExecutionContext
+import scala.concurrent.duration._
 
 object App extends IOApp {
 
@@ -90,7 +93,9 @@ object App extends IOApp {
 
       extracted.flatMap { _ =>
         if (javadocFile.exists()) {
-          StaticFile.fromFile(javadocFile, blocker, Some(request)).getOrElseF(NotFound())
+          StaticFile.fromFile(javadocFile, blocker, Some(request))
+            .map(_.putHeaders(`Cache-Control`(NonEmptyList.of(public, `max-age`(365.days)))))
+            .getOrElseF(NotFound())
         }
         else {
           NotFound("The specified file does not exist.")
