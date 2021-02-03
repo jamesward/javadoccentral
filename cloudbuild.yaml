@@ -16,7 +16,7 @@ steps:
     env:
       - 'PROJECT_ID=$PROJECT_ID'
       - 'IMAGE_NAME=$REPO_NAME'
-      - 'DOMAINS=test.javadocs.dev'
+      - 'DOMAINS=javadocs.dev'
 
 options:
   machineType: 'N1_HIGHCPU_32'
