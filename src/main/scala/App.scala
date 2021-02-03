@@ -11,6 +11,7 @@ import org.http4s.dsl.io._
 import org.http4s.headers.{Location, `Cache-Control`}
 import org.http4s.implicits._
 import org.http4s.server.blaze.BlazeServerBuilder
+import org.http4s.server.middleware.GZip
 import org.http4s.twirl._
 import org.http4s.{HttpRoutes, Request, Response, StaticFile, Uri}
 
@@ -130,7 +131,7 @@ object App extends IOApp {
         blocker <- Blocker[IO]
         client <- BlazeClientBuilder[IO](ExecutionContext.global).resource
         //loggerClient = org.http4s.client.middleware.Logger(true, true)(client)
-        httpAppWithClient = httpApp(client, tmpDir, blocker)
+        httpAppWithClient = GZip(httpApp(client, tmpDir, blocker))
         //loggerHttpApp = org.http4s.server.middleware.Logger.httpApp(true, true)(httpAppWithClient)
         server <- BlazeServerBuilder[IO](ExecutionContext.global).bindHttp(port, "0.0.0.0").withHttpApp(httpAppWithClient).resource
       } yield server
