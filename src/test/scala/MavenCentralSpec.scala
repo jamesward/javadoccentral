@@ -1,26 +1,21 @@
 import java.nio.file.Files
-
 import MavenCentral._
 import cats.effect.{Blocker, ContextShift, IO, Timer}
 import org.http4s.Uri
 import org.http4s.client.Client
-import org.http4s.client.okhttp.OkHttpBuilder
+import org.http4s.client.blaze.BlazeClientBuilder
 import org.specs2.mutable.Specification
 
+import scala.concurrent.ExecutionContext
 import scala.concurrent.ExecutionContext.global
 
 class MavenCentralSpec extends Specification {
 
   implicit val cs: ContextShift[IO] = IO.contextShift(global)
   implicit val timer: Timer[IO] = IO.timer(global)
+
   def runWithClient[OUT](f: Client[IO] => IO[OUT]): OUT = {
-    {
-      for {
-        blocker <- Blocker[IO]
-        clientBuilder <- OkHttpBuilder.withDefaultClient[IO](blocker)
-        client <- clientBuilder.resource
-      } yield client
-    }.use(f(_)).unsafeRunSync()
+    BlazeClientBuilder[IO](ExecutionContext.global).resource.use(f(_)).unsafeRunSync()
   }
 
   // todo: test sorting

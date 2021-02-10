@@ -30,7 +30,7 @@ libraryDependencies ++= Seq(
 
   "org.scalameta"      %% "svm-subs"             % "20.2.0",
 
-  "org.specs2"         %% "specs2-core"          % Specs2Version % "test",
+  "org.specs2"         %% "specs2-core"          % Specs2Version % Test,
 )
 
 addCompilerPlugin("org.typelevel" %% "kind-projector"     % "0.10.3")
