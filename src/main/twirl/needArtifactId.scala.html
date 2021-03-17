@@ -1,24 +1,17 @@
 @(groupId: String, artifactIds: Seq[String])
-<!DOCTYPE html>
-<html lang="en">
-    <head>
-        <title>JavaDoc Central</title>
-    </head>
-    <body>
-        <h2>JavaDoc Central</h2>
-        <form action="/@groupId" method="get">
-            <label>
-                GroupId: <input name="groupId" value="@groupId" disabled>
-            </label>
-            <label>
-                ArtifactId:
-                    <select name="artifactId">
-                        @artifactIds.map { artifactId =>
-                            <option>@artifactId</option>
-                        }
-                    </select>
-            </label>
-            <input value="Go!" type="submit">
-        </form>
-    </body>
-</html>
+@base {
+    <form action="/@groupId" method="get">
+        <label>
+            <a href="/">GroupId</a>: <input name="groupId" value="@groupId" disabled>
+        </label>
+        <label>
+            ArtifactId:
+                <select name="artifactId">
+                    @artifactIds.map { artifactId =>
+                        <option>@artifactId</option>
+                    }
+                </select>
+        </label>
+        <input value="Go!" type="submit">
+    </form>
+}

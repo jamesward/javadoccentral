@@ -29,13 +29,15 @@ Run with restart:
 ./sbt ~reStart
 ```
 
-Run and output GraalVM configs, with `JAVA_HOME` set to GraalVM:
+Run and output GraalVM configs, with `JAVA_HOME` set to GraalVM java11:
 ```
+export PATH=$JAVA_HOME/bin:$JAVA_HOME/lib/svm/bin:$PATH
 ./sbt run
 ```
 
-With `JAVA_HOME` set the GraalVM and `native-image` on the `PATH`:
+With `JAVA_HOME` set the GraalVM java11:
 ```
+export PATH=$JAVA_HOME/bin:$JAVA_HOME/lib/svm/bin:$PATH
 ./sbt graalvm-native-image:packageBin
 ```
 

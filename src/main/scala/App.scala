@@ -30,7 +30,12 @@ object App extends IOApp {
     maybeArtifactId.filter(_.nonEmpty).fold {
       // todo: not found & bad request for other errors
       MavenCentral.searchArtifacts(groupId).flatMap { artifactIds =>
-        Ok(html.needArtifactId(groupId, artifactIds))
+        if (artifactIds.isEmpty) {
+          NotFound(html.needGroupId(Some(groupId)))
+        }
+        else {
+          Ok(html.needArtifactId(groupId, artifactIds))
+        }
       }
     } { artifactId =>
       PermanentRedirect(Location(Uri.unsafeFromString(s"/$groupId/$artifactId")))

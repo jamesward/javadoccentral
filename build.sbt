@@ -2,15 +2,14 @@ enablePlugins(SbtTwirl, GraalVMNativeImagePlugin)
 
 name := "javadoccentral"
 
+// must use jdk 11 for static / muslc
 javacOptions ++= Seq("-source", "11", "-target", "11")
 
 scalacOptions += "-target:jvm-11"
 
-scalaVersion := "2.13.4"
+scalaVersion := "2.13.5"
 
-resolvers += Resolver.mavenLocal
-
-val Http4sVersion = "0.21.17"
+val Http4sVersion = "0.21.20"
 val CirceVersion = "0.13.0"
 val Specs2Version = "4.9.3"
 val LogbackVersion = "1.2.3"
