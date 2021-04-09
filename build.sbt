@@ -65,9 +65,9 @@ scalacOptions ++= Seq(
   "-Ywarn-unused:privates",
 )
 
-publishArtifact in (Compile, packageDoc) := false
+Compile / packageDoc / publishArtifact := false
 
-sources in (Compile, doc) := Seq.empty
+Compile / doc / sources := Seq.empty
 
 graalVMNativeImageOptions ++= Seq(
   "--verbose",
@@ -89,7 +89,7 @@ graalVMNativeImageOptions += s"-H:ResourceConfigurationFiles=../../src/graal/res
 
 fork := true
 
-javaOptions in run += s"-agentlib:native-image-agent=config-output-dir=src/graal"
+run / javaOptions += s"-agentlib:native-image-agent=config-output-dir=src/graal"
 //javaOptions += s"-agentlib:native-image-agent=trace-output=${(target in GraalVMNativeImage).value}/trace-output.json"
 
 // todo: before graalvm-native-image:packageBin run integration tests with the above config-output to generate the configs, bonus if in docker
