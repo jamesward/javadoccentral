@@ -23,6 +23,7 @@ steps:
       - 'COMMIT_SHA=$COMMIT_SHA'
       - 'IMAGE_NAME=$REPO_NAME'
       - 'IMAGE_VERSION=$COMMIT_SHA'
+      - 'DEPLOY_OPTS=--memory=512Mi'
       - 'DOMAINS=javadocs.dev'
 
 options:
