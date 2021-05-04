@@ -104,7 +104,7 @@ object App extends IOApp {
             .getOrElseF(NotFound())
         }
         else {
-          NotFound("The specified file does not exist.")
+          NotFound("The specified file does not exist / the JavaDoc has not been published for that artifact.")
         }
       }
     }

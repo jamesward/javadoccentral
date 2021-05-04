@@ -68,6 +68,7 @@ object MavenCentral {
     searchVersions(groupId, artifactId).map(_.headOption)
   }
 
+  // todo: regionalize to maven central mirrors for lower latency
   val artifactUri = uri"https://repo1.maven.org/"
 
   // todo: javadoc exists
@@ -83,7 +84,7 @@ object MavenCentral {
 
   // todo: this is terrible
   def downloadAndExtractZip(source: Uri, destination: File)(implicit client: Client[IO], contextShift: ContextShift[IO]): IO[Unit] = {
-    val s = client.stream(Request(uri = source)).flatMap(_.body)
+    val s = client.stream(Request(uri = source)).filter(_.status.isSuccess).flatMap(_.body)
 
     fs2.io.toInputStreamResource(s).map(new ZipArchiveInputStream(_)).use { zipArchiveInputStream =>
       IO {
@@ -104,6 +105,7 @@ object MavenCentral {
           }
       }
     }
+
   }
 
 }

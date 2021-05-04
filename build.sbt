@@ -9,7 +9,7 @@ scalacOptions += "-target:jvm-11"
 
 scalaVersion := "2.13.5"
 
-val Http4sVersion = "0.21.20"
+val Http4sVersion = "0.21.22"
 val CirceVersion = "0.13.0"
 val Specs2Version = "4.9.3"
 val LogbackVersion = "1.2.3"
