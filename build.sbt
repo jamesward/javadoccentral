@@ -7,10 +7,10 @@ javacOptions ++= Seq("-source", "11", "-target", "11")
 
 scalacOptions += "-target:jvm-11"
 
-scalaVersion := "2.13.5"
+scalaVersion := "2.13.6"
 
-val Http4sVersion = "0.21.22"
-val CirceVersion = "0.13.0"
+val Http4sVersion = "0.21.24"
+val CirceVersion = "0.14.1"
 val Specs2Version = "4.9.3"
 val LogbackVersion = "1.2.3"
 val Slf4jVersion = "1.7.30"
@@ -32,7 +32,7 @@ libraryDependencies ++= Seq(
   "org.specs2"         %% "specs2-core"          % Specs2Version % Test,
 )
 
-addCompilerPlugin("org.typelevel" %% "kind-projector"     % "0.10.3")
+addCompilerPlugin("org.typelevel" % "kind-projector" % "0.13.0" cross CrossVersion.full)
 addCompilerPlugin("com.olegpy"    %% "better-monadic-for" % "0.3.1")
 
 scalacOptions ++= Seq(
