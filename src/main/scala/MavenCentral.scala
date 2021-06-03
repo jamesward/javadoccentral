@@ -26,9 +26,9 @@ object MavenCentral {
     ).mkString("/")
   }
 
-  val searchUri = uri"https://search.maven.org/solrsearch/select"
+  private val searchUri = uri"https://search.maven.org/solrsearch/select"
 
-  val _docs = root.response.docs.each
+  private val _docs = root.response.docs.each
 
   def searchArtifacts(groupId: String)(implicit client: Client[IO]): IO[Seq[String]] = {
     val uri = searchUri.withQueryParams(Map(

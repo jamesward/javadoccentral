@@ -6,6 +6,7 @@ import cats.effect.{Blocker, ExitCode, IO, IOApp}
 import org.http4s.CacheDirective.{`max-age`, public}
 import org.http4s.client.Client
 import org.http4s.client.blaze.BlazeClientBuilder
+import org.http4s.client.middleware.Logger
 import org.http4s.dsl.impl.Root
 import org.http4s.dsl.io._
 import org.http4s.headers.{Location, `Cache-Control`}
@@ -135,8 +136,8 @@ object App extends IOApp {
       for {
         blocker <- Blocker[IO]
         client <- BlazeClientBuilder[IO](ExecutionContext.global).resource
-        //loggerClient = org.http4s.client.middleware.Logger(true, true)(client)
-        httpAppWithClient = GZip(httpApp(client, tmpDir, blocker))
+        loggerClient = Logger(logHeaders = true, logBody = false)(client)
+        httpAppWithClient = GZip(httpApp(loggerClient, tmpDir, blocker))
         //loggerHttpApp = org.http4s.server.middleware.Logger.httpApp(true, true)(httpAppWithClient)
         server <- BlazeServerBuilder[IO](ExecutionContext.global).bindHttp(port, "0.0.0.0").withHttpApp(httpAppWithClient).resource
       } yield server
