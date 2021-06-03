@@ -62,6 +62,10 @@ object App extends IOApp {
           Uri.unsafeFromString(s"/$groupId/$artifactId/$latestVersion")
         }
         TemporaryRedirect(Location(uri))
+      } handleErrorWith { t =>
+        println(t)
+        // todo: endless redirects are bad
+        TemporaryRedirect(Location(Uri.unsafeFromString(s"/$groupId/$artifactId/latest")))
       }
     }
     else {
