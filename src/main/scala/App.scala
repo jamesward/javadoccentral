@@ -2,19 +2,19 @@ import cats.data.NonEmptyList
 
 import java.io.File
 import java.nio.file.Files
-import cats.effect.{Blocker, ExitCode, IO, IOApp}
+import cats.effect.{ExitCode, IO, IOApp}
 import org.http4s.CacheDirective.{`max-age`, public}
 import org.http4s.client.Client
-import org.http4s.client.blaze.BlazeClientBuilder
 import org.http4s.client.middleware.Logger
-import org.http4s.dsl.impl.Root
-import org.http4s.dsl.io._
 import org.http4s.headers.{Location, `Cache-Control`}
-import org.http4s.implicits._
-import org.http4s.server.blaze.BlazeServerBuilder
 import org.http4s.server.middleware.GZip
 import org.http4s.twirl._
 import org.http4s.{HttpRoutes, Request, Response, StaticFile, Uri}
+import org.http4s.blaze.client._
+import org.http4s.client._
+import org.http4s.dsl.io._
+import org.http4s.implicits._
+import org.http4s.blaze.server._
 
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
@@ -80,7 +80,7 @@ object App extends IOApp {
     }
   }
 
-  def file(groupId: String, artifactId: String, version: String, filepath: Path, request: Request[IO])(implicit client: Client[IO], tmpDir: File, blocker: Blocker) = {
+  def file(groupId: String, artifactId: String, version: String, filepath: Path, request: Request[IO])(implicit client: Client[IO], tmpDir: File) = {
     if (version == "latest") {
       MavenCentral.latest(groupId, artifactId).flatMap { maybeLatestVersion =>
         val uri = maybeLatestVersion.fold(Uri.unsafeFromString(s"/$groupId/$artifactId")) { latestVersion =>
@@ -104,7 +104,7 @@ object App extends IOApp {
 
       extracted.flatMap { _ =>
         if (javadocFile.exists()) {
-          StaticFile.fromFile(javadocFile, blocker, Some(request))
+          StaticFile.fromFile(javadocFile, Some(request))
             .map(_.putHeaders(`Cache-Control`(NonEmptyList.of(public, `max-age`(365.days)))))
             .getOrElseF(NotFound())
         }
@@ -119,7 +119,7 @@ object App extends IOApp {
   object OptionalArtifactIdQueryParamMatcher extends OptionalQueryParamDecoderMatcher[String]("artifactId")
   object OptionalVersionQueryParamMatcher extends OptionalQueryParamDecoderMatcher[String]("version")
 
-  def httpApp(implicit client: Client[IO], tmpDir: File, blocker: Blocker) = HttpRoutes.of[IO] {
+  def httpApp(implicit client: Client[IO], tmpDir: File) = HttpRoutes.of[IO] {
     case GET -> Root / "favicon.ico" => NotFound()
     case GET -> Root :? OptionalGroupIdQueryParamMatcher(maybeGroupId) => needGroupId(maybeGroupId)
     case GET -> Root / groupId :? OptionalArtifactIdQueryParamMatcher(maybeArtifactId) => needArtifactId(groupId, maybeArtifactId)
@@ -138,10 +138,9 @@ object App extends IOApp {
 
     {
       for {
-        blocker <- Blocker[IO]
         client <- BlazeClientBuilder[IO](ExecutionContext.global).resource
         loggerClient = Logger(logHeaders = true, logBody = false)(client)
-        httpAppWithClient = GZip(httpApp(loggerClient, tmpDir, blocker))
+        httpAppWithClient = GZip(httpApp(loggerClient, tmpDir))
         //loggerHttpApp = org.http4s.server.middleware.Logger.httpApp(true, true)(httpAppWithClient)
         server <- BlazeServerBuilder[IO](ExecutionContext.global).bindHttp(port, "0.0.0.0").withHttpApp(httpAppWithClient).resource
       } yield server

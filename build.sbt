@@ -9,12 +9,11 @@ scalacOptions += "-target:jvm-11"
 
 scalaVersion := "2.13.6"
 
-val Http4sVersion = "0.21.24"
+val Http4sVersion = "0.23.0"
 val CirceVersion = "0.14.1"
 val Specs2Version = "4.9.3"
-val LogbackVersion = "1.2.3"
-val Slf4jVersion = "1.7.30"
-val CommonsCompress = "1.20"
+val Slf4jVersion = "1.7.32"
+val CommonsCompress = "1.21"
 
 libraryDependencies ++= Seq(
   "org.http4s"         %% "http4s-blaze-server"  % Http4sVersion,
@@ -27,9 +26,8 @@ libraryDependencies ++= Seq(
   "org.slf4j"          %  "slf4j-simple"         % Slf4jVersion,
   "org.apache.commons" %  "commons-compress"     % CommonsCompress,
 
-  "org.scalameta"      %% "svm-subs"             % "20.2.0",
-
-  "org.specs2"         %% "specs2-core"          % Specs2Version % Test,
+  "org.specs2"         %% "specs2-core"                % Specs2Version % Test,
+  "org.typelevel"      %% "cats-effect-testing-specs2" % "1.2.0"       % Test,
 )
 
 addCompilerPlugin("org.typelevel" % "kind-projector" % "0.13.0" cross CrossVersion.full)
@@ -71,15 +69,12 @@ Compile / doc / sources := Seq.empty
 
 graalVMNativeImageOptions ++= Seq(
   "--verbose",
-  "--no-server",
   "--no-fallback",
   "--static",
   "--install-exit-handlers",
   "--enable-http",
   "--enable-https",
-  "--enable-all-security-services",
   "--libc=musl",
-  "-H:+RemoveSaturatedTypeFlows",
   "-H:+ReportExceptionStackTraces",
 )
 

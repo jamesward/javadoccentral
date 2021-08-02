@@ -1,6 +1,5 @@
 import java.io.File
 import java.nio.file.Files
-
 import cats.effect._
 import cats.implicits._
 import io.circe.Json
@@ -17,13 +16,9 @@ object MavenCentral {
     def compare(a:String, b:String): Int = a.toLowerCase compare b.toLowerCase
   }
 
-  def artifactPath(groupId: String, artifactId: String, version: String): String = {
-    Seq(
-      "maven2",
-      groupId.replace('.', '/'),
-      artifactId,
-      version
-    ).mkString("/")
+  def artifactPath(groupId: String, artifactId: String, version: String): Uri.Path = {
+    val segments = Vector("maven2") :++ groupId.split('.') :+ artifactId :+ version
+    Uri.Path(segments.map(Uri.Path.Segment.encoded), true)
   }
 
   private val searchUri = uri"https://search.maven.org/solrsearch/select"
@@ -83,7 +78,7 @@ object MavenCentral {
   }
 
   // todo: this is terrible
-  def downloadAndExtractZip(source: Uri, destination: File)(implicit client: Client[IO], contextShift: ContextShift[IO]): IO[Unit] = {
+  def downloadAndExtractZip(source: Uri, destination: File)(implicit client: Client[IO]): IO[Unit] = {
     val s = client.stream(Request(uri = source)).filter(_.status.isSuccess).flatMap(_.body)
 
     fs2.io.toInputStreamResource(s).map(new ZipArchiveInputStream(_)).use { zipArchiveInputStream =>

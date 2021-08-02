@@ -1,64 +1,57 @@
-import java.nio.file.Files
 import MavenCentral._
-import cats.effect.{Blocker, ContextShift, IO, Timer}
+import cats.effect.{IO, Resource}
+import cats.effect.testing.specs2.CatsResource
 import org.http4s.Uri
+import org.http4s.blaze.client.BlazeClientBuilder
 import org.http4s.client.Client
-import org.http4s.client.blaze.BlazeClientBuilder
-import org.specs2.mutable.Specification
+import org.specs2.mutable.SpecificationLike
 
+import java.nio.file.Files
 import scala.concurrent.ExecutionContext
-import scala.concurrent.ExecutionContext.global
 
-class MavenCentralSpec extends Specification {
+class MavenCentralSpec extends CatsResource[IO, Client[IO]] with SpecificationLike {
 
-  implicit val cs: ContextShift[IO] = IO.contextShift(global)
-  implicit val timer: Timer[IO] = IO.timer(global)
-
-  def runWithClient[OUT](f: Client[IO] => IO[OUT]): OUT = {
-    BlazeClientBuilder[IO](ExecutionContext.global).resource.use(f(_)).unsafeRunSync()
-  }
+  val resource: Resource[IO, Client[IO]] = BlazeClientBuilder[IO](ExecutionContext.global).resource
 
   // todo: test sorting
-  "searchArtifacts" >> {
-    runWithClient {
-      searchArtifacts("com.jamesward")(_)
-    } must not be empty
-  }
-
-  // todo: test sorting
-  "searchVersions" >> {
-    runWithClient {
-      searchVersions("com.jamesward", "travis-central-test")(_)
-    } must not be empty
-  }
-
-  "latest" >> {
-    runWithClient {
-      latest("com.jamesward", "travis-central-test")(_)
-    } must beSome ("0.0.15")
-  }
-
-  "artifactExists" >> {
-    "works for existing artifacts" >> {
-      runWithClient {
-        artifactExists("com.jamesward", "travis-central-test", "0.0.15")(_)
-      } must beTrue
-    }
-    "be false for non-existant artifacts" >> {
-      runWithClient {
-        artifactExists("com.jamesward", "travis-central-test", "0.0.0")(_)
-      } must beFalse
+  "searchArtifacts" in withResource { implicit client =>
+    searchArtifacts("com.jamesward").map {
+      _ must not be empty
     }
   }
 
-  "downloadAndExtractZip" >> {
+  // todo: test sorting
+  "searchVersions" in withResource { implicit client =>
+    searchVersions("com.jamesward", "travis-central-test").map {
+      _ must not be empty
+    }
+  }
+
+  "latest" in withResource { implicit client =>
+    latest("com.jamesward", "travis-central-test").map {
+      _ must beSome("0.0.15")
+    }
+  }
+
+  "artifactExists" should {
+    "works for existing artifacts" in withResource { implicit client =>
+      artifactExists("com.jamesward", "travis-central-test", "0.0.15").map {
+        _ must beTrue
+      }
+    }
+    "be false for non-existant artifacts" in withResource { implicit client =>
+      artifactExists("com.jamesward", "travis-central-test", "0.0.0").map {
+        _ must beFalse
+      }
+    }
+  }
+
+  "downloadAndExtractZip" in withResource { implicit client =>
     val uri = Uri.unsafeFromString("https://repo1.maven.org/maven2/com/jamesward/travis-central-test/0.0.15/travis-central-test-0.0.15.jar")
     val tmpFile = Files.createTempDirectory("test").toFile
-    runWithClient {
-      downloadAndExtractZip(uri, tmpFile)(_, cs)
+    downloadAndExtractZip(uri, tmpFile).map { _ =>
+      tmpFile.list().toList must contain ("META-INF")
     }
-
-    tmpFile.list().toList must contain ("META-INF")
   }
 
 }
