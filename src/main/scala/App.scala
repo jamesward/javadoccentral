@@ -11,12 +11,10 @@ import org.http4s.server.middleware.GZip
 import org.http4s.twirl._
 import org.http4s.{HttpRoutes, Request, Response, StaticFile, Uri}
 import org.http4s.blaze.client._
-import org.http4s.client._
 import org.http4s.dsl.io._
 import org.http4s.implicits._
 import org.http4s.blaze.server._
 
-import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 
 object App extends IOApp {
@@ -104,7 +102,7 @@ object App extends IOApp {
 
       extracted.flatMap { _ =>
         if (javadocFile.exists()) {
-          StaticFile.fromFile(javadocFile, Some(request))
+          StaticFile.fromPath(fs2.io.file.Path.fromNioPath(javadocFile.toPath), Some(request))
             .map(_.putHeaders(`Cache-Control`(NonEmptyList.of(public, `max-age`(365.days)))))
             .getOrElseF(NotFound())
         }
@@ -138,11 +136,11 @@ object App extends IOApp {
 
     {
       for {
-        client <- BlazeClientBuilder[IO](ExecutionContext.global).resource
+        client <- BlazeClientBuilder[IO].resource
         loggerClient = Logger(logHeaders = true, logBody = false)(client)
         httpAppWithClient = GZip(httpApp(loggerClient, tmpDir))
         //loggerHttpApp = org.http4s.server.middleware.Logger.httpApp(true, true)(httpAppWithClient)
-        server <- BlazeServerBuilder[IO](ExecutionContext.global).bindHttp(port, "0.0.0.0").withHttpApp(httpAppWithClient).resource
+        server <- BlazeServerBuilder[IO].bindHttp(port, "0.0.0.0").withHttpApp(httpAppWithClient).resource
       } yield server
     }.use(_ => IO.never).as(ExitCode.Success)
   }

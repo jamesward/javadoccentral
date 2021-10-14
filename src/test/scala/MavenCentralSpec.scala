@@ -7,11 +7,10 @@ import org.http4s.client.Client
 import org.specs2.mutable.SpecificationLike
 
 import java.nio.file.Files
-import scala.concurrent.ExecutionContext
 
 class MavenCentralSpec extends CatsResource[IO, Client[IO]] with SpecificationLike {
 
-  val resource: Resource[IO, Client[IO]] = BlazeClientBuilder[IO](ExecutionContext.global).resource
+  val resource: Resource[IO, Client[IO]] = BlazeClientBuilder[IO].resource
 
   // todo: test sorting
   "searchArtifacts" in withResource { implicit client =>

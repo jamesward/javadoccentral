@@ -9,7 +9,7 @@ scalacOptions += "-target:jvm-11"
 
 scalaVersion := "2.13.6"
 
-val Http4sVersion = "0.23.0"
+val Http4sVersion = "0.23.6"
 val CirceVersion = "0.14.1"
 val Specs2Version = "4.9.3"
 val Slf4jVersion = "1.7.32"
@@ -84,7 +84,7 @@ graalVMNativeImageOptions += s"-H:ResourceConfigurationFiles=../../src/graal/res
 
 fork := true
 
-run / javaOptions += s"-agentlib:native-image-agent=config-output-dir=src/graal"
+//run / javaOptions += s"-agentlib:native-image-agent=config-output-dir=src/graal"
 //javaOptions += s"-agentlib:native-image-agent=trace-output=${(target in GraalVMNativeImage).value}/trace-output.json"
 
 // todo: before graalvm-native-image:packageBin run integration tests with the above config-output to generate the configs, bonus if in docker
