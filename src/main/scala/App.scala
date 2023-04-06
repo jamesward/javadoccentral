@@ -1,3 +1,11 @@
+import zio.*
+
+object App extends ZIOAppDefault:
+
+  def run =
+    ???
+
+/*
 import cats.data.NonEmptyList
 
 import java.io.File
@@ -146,3 +154,4 @@ object App extends IOApp {
   }
 
 }
+*/

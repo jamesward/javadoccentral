@@ -1,3 +1,29 @@
+import zio.{Chunk, Runtime, ZIO}
+import zio.http.{Client, Path, Request, URL}
+import zio.test.*
+import zio.test.Assertion.*
+import MavenCentral.*
+import zio.direct.*
+
+object MavenCentralSpec extends ZIOSpecDefault:
+
+  given CanEqual[Path, Path] = CanEqual.derived
+
+  def spec = suite("MavenCentral")(
+    test("artifactPath") {
+      assertTrue(artifactPath(GroupId("org.webjars")) == Path.decode("org/webjars"))
+      assertTrue(artifactPath(GroupId("org.webjars"), Some(ArtifactAndVersion(ArtifactId("jquery")))) == Path.decode("org/webjars/jquery"))
+      assertTrue(artifactPath(GroupId("org.webjars"), Some(ArtifactAndVersion(ArtifactId("jquery"), Some(Version("3.6.4"))))) == Path.decode("org/webjars/jquery/3.6.4"))
+    },
+    test("searchArtifacts") {
+      defer {
+        val artifacts = searchArtifacts(GroupId("org.webjars")).run
+        assertTrue(artifacts.size > 1000)
+      }
+    }.provide(Client.default),
+  )
+
+/*
 import MavenCentral._
 import cats.effect.{IO, Resource}
 import cats.effect.testing.specs2.CatsResource
@@ -54,3 +80,6 @@ class MavenCentralSpec extends CatsResource[IO, Client[IO]] with SpecificationLi
   }
 
 }
+
+ */
+

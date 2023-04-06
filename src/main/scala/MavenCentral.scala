@@ -1,3 +1,70 @@
+import zio.ZIO
+import zio.http.{Client, Path}
+import zio.direct.*
+import zio.direct.stream.{ defer => deferStream, each }
+import zio.stream.ZPipeline
+
+import scala.util.matching.Regex
+
+case class MavenCentralError()
+
+object MavenCentral:
+
+  // todo: regionalize to maven central mirrors for lower latency
+  val artifactUri = "https://repo1.maven.org/maven2/"
+
+  opaque type GroupId = String
+  object GroupId:
+    def apply(s: String): GroupId = s
+
+  opaque type ArtifactId = String
+  object ArtifactId:
+    def apply(s: String): ArtifactId = s
+
+  opaque type Version = String
+  object Version:
+    def apply(s: String): Version = s
+
+  case class ArtifactAndVersion(artifactId: ArtifactId, maybeVersion: Option[Version] = None)
+
+  def artifactPath(groupId: GroupId, artifactAndVersion: Option[ArtifactAndVersion] = None): Path = {
+    val withGroup = groupId.split('.').foldLeft(Path.empty)(_ / _)
+    val withArtifact = artifactAndVersion.fold(withGroup)(withGroup / _.artifactId)
+    val withVersion = artifactAndVersion.flatMap(_.maybeVersion).fold(withArtifact)(withArtifact / _)
+
+    withVersion
+  }
+
+  private val filenameExtractor: Regex = """.*<a href="([^"]+)".*""".r
+
+  def searchArtifacts(groupId: GroupId): ZIO[Client, Throwable, Set[ArtifactId]] = {
+    val url = artifactUri + artifactPath(groupId).addTrailingSlash
+    defer {
+      val resp = Client.request(url, addZioUserAgentHeader = true).run
+      deferStream {
+        resp.body.asStream.via(ZPipeline.utf8Decode >>> ZPipeline.splitLines).each
+      }.runFold(Set.empty[ArtifactId]) { (lines, line) =>
+        line match {
+          case filenameExtractor(line) if line.endsWith("/") && !line.startsWith("..") =>
+            lines + ArtifactId(line.stripSuffix("/"))
+          case _ =>
+            lines
+        }
+      }.run
+    }
+  }
+
+
+  def searchVersions(groupId: GroupId, artifactId: String): ZIO[Any, MavenCentralError, Set[Version]] = ???
+  def latest(groupId: GroupId, artifactId: ArtifactId): ZIO[Any, MavenCentralError, Option[Version]] = ???
+
+
+
+
+/*
+import java.io.File
+import java.nio.file.Files
+>>>>>>> Stashed changes
 import cats.effect._
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
 import org.http4s.client.Client
@@ -15,17 +82,6 @@ object MavenCentral {
   object CaseInsensitiveOrdering extends Ordering[String] {
     def compare(a:String, b:String): Int = a.toLowerCase compare b.toLowerCase
   }
-
-  // todo: version can't be Some if artifactId is None
-  def artifactPath(groupId: String, artifactId: Option[String] = None, version: Option[String] = None): Uri.Path = {
-    val withGroup = Vector("maven2") :++ groupId.split('.')
-    val withArtifact = artifactId.fold(withGroup)(withGroup :+ _)
-    val withVersion = version.fold(withArtifact)(withArtifact :+ _)
-    Uri.Path(withVersion.map(Uri.Path.Segment.encoded), absolute = true)
-  }
-
-  // todo: regionalize to maven central mirrors for lower latency
-  val artifactUri = uri"https://repo1.maven.org/"
 
   private val filenameExtractor: Regex = """.*<a href="([^"]+)".*""".r
 
@@ -98,3 +154,5 @@ object MavenCentral {
   }
 
 }
+
+*/

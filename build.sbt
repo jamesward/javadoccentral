@@ -1,13 +1,34 @@
-enablePlugins(SbtTwirl, GraalVMNativeImagePlugin)
+enablePlugins(GraalVMNativeImagePlugin)
 
 name := "javadoccentral"
 
-// must use jdk 11 for static / muslc
-javacOptions ++= Seq("-source", "11", "-target", "11")
+scalacOptions ++= Seq(
+  "-Yexplicit-nulls",
+  "-language:strictEquality",
+  "-Xfatal-warnings",
+)
 
-scalacOptions += "-target:jvm-11"
+scalaVersion := "3.2.2"
 
-scalaVersion := "2.13.6"
+val zioVersion = "2.0.10"
+
+libraryDependencies ++= Seq(
+  "dev.zio" %% "zio"                % zioVersion,
+  "dev.zio" %% "zio-concurrent"     % zioVersion,
+  "dev.zio" %% "zio-logging"        % "2.1.11",
+  "dev.zio" %% "zio-direct"         % "1.0.0-RC7",
+  "dev.zio" %% "zio-direct-streams" % "1.0.0-RC7",
+  "dev.zio" %% "zio-http"           % "0.0.5",
+
+  "dev.zio" %% "zio-test"           % zioVersion % Test,
+  "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,
+  "dev.zio" %% "zio-test-magnolia"  % zioVersion % Test,
+
+  "dev.zio" %% "zio-http-testkit"   % "0.0.5"    % Test,
+)
+
+testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework")
+/*
 
 val Http4sVersion = "0.23.6"
 val CirceVersion = "0.14.1"
@@ -88,3 +109,5 @@ fork := true
 //javaOptions += s"-agentlib:native-image-agent=trace-output=${(target in GraalVMNativeImage).value}/trace-output.json"
 
 // todo: before graalvm-native-image:packageBin run integration tests with the above config-output to generate the configs, bonus if in docker
+
+ */
