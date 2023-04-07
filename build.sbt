@@ -19,6 +19,7 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-direct"         % "1.0.0-RC7",
   "dev.zio" %% "zio-direct-streams" % "1.0.0-RC7",
   "dev.zio" %% "zio-http"           % "0.0.5",
+  "com.lihaoyi" %% "scalatags"      % "0.12.0",
 
   "dev.zio" %% "zio-test"           % zioVersion % Test,
   "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,
