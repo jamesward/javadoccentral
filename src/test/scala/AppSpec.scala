@@ -38,10 +38,10 @@ object AppSpec extends ZIOSpecDefault:
           artifactIdResp.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward/travis-central-test")),
 
           versionResp.status.isRedirection,
-          versionResp.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward/travis-central-test/0.0.15/index.html")),
+          versionResp.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward/travis-central-test/0.0.15")),
 
           latest.status.isRedirection,
-          latest.headers.get(Header.Location).exists(_.url.path == Path.decode("/org.webjars/jquery/3.6.4/index.html")),
+          latest.headers.get(Header.Location).exists(_.url.path == Path.decode("/org.webjars/jquery/3.6.4")),
 
           groupIdRedir.status.isRedirection,
           groupIdRedir.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward")),

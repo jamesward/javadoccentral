@@ -58,6 +58,7 @@ object MavenCentralSpec extends ZIOSpecDefault:
         assertTrue(
           isArtifact(GroupId("com.jamesward"), ArtifactId("travis-central-test")).run,
           !isArtifact(GroupId("org.springframework"), ArtifactId("data")).run,
+          !isArtifact(GroupId("org.springframework"), ArtifactId("cloud")).run,
         )
       }
     },

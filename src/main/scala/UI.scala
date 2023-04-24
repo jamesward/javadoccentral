@@ -9,6 +9,7 @@ object UI {
       label("GroupId (i.e. ", a(href := "/org.springframework", "org.springframework"), "): ",
         input(nameAttr := "groupId", requiredAttr := "required")
       ),
+      " ",
       input(valueAttr := "Go!", typeAttr := "submit"),
     )
   }
@@ -26,7 +27,7 @@ object UI {
           requiredAttr := "required",
         )
       ),
-
+      " ",
       input(valueAttr := "Go!", typeAttr := "submit"),
     )
   }
@@ -38,9 +39,10 @@ object UI {
           href := "/",
           "GroupId"
         ),
-        ": ",
+        ":",
         input(nameAttr := "groupId", valueAttr := groupId.toString, disabledAttr := "disabled")
       ),
+      " ",
       label(
         "ArtifactId:",
         select(
@@ -50,6 +52,7 @@ object UI {
           }
         )
       ),
+      " ",
       input(valueAttr := "Go!", typeAttr := "submit"),
     )
   }
@@ -58,23 +61,33 @@ object UI {
     form(actionAttr := s"/$groupId/$artifactId", methodAttr := "get",
       label(
         a(hrefAttr := "/", "GroupId"),
-        ": ",
+        ":",
         input(nameAttr := "groupId", valueAttr := groupId.toString, disabledAttr := "disabled")
       ),
+      " ",
       label(
         a(hrefAttr := s"/$groupId", "ArtifactId"),
-        ": ",
+        ":",
         input(nameAttr := "artifactId", valueAttr := artifactId.toString, disabledAttr := "disabled")
       ),
+      " ",
       label(
-        "Version: ",
+        "Version:",
         select(nameAttr := "version",
           versions.map { version =>
             option(version.toString)
           }
         )
       ),
+      " ",
       input(valueAttr := "Go!", typeAttr := "submit")
+    )
+  }
+
+  def noJavadoc(groupId: GroupId, artifactId: ArtifactId, versions: Seq[Version], version: Version): Html = {
+    div(
+      p(s"Version $version of that artifact does not have a JavaDoc jar."),
+      needVersion(groupId, artifactId, versions),
     )
   }
 

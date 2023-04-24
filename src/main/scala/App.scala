@@ -1,10 +1,12 @@
-import MavenCentral.{ArtifactId, GroupId, Version}
+import MavenCentral.{ArtifactId, GroupId, JavadocNotFoundError, Version}
 import zio.*
 import zio.direct.*
 import zio.http.*
 import zio.http.html.*
 import zio.http.Path.Segment
 import zio.http.Status.TemporaryRedirect
+import zio.http.netty.NettyConfig
+import zio.http.netty.client.NettyClientDriver
 import zio.stream.ZStream
 
 import java.io.File
@@ -48,50 +50,50 @@ object App extends ZIOAppDefault:
   }
 
   def withVersion(groupId: GroupId, artifactId: ArtifactId, version: Version): Handler[Client, Nothing, Request, Response] = {
-    Handler.fromZIO {
+    Handler.fromZIO[Client, Throwable, Path | Seq[Version]] {
       defer {
         if version == Version.latest then
           val maybeLatest = MavenCentral.latest(groupId, artifactId).run
-          Some {
-            maybeLatest.fold {
-              groupId / artifactId
-            } { version =>
-              groupId / artifactId / version / "index.html"
-            }
+          maybeLatest.fold {
+            groupId / artifactId
+          } { latestVersion =>
+            groupId / artifactId / latestVersion
           }
         else
-          val exists = MavenCentral.artifactExists(groupId, artifactId, version).run
-          Option.when(exists) {
+          try
+            MavenCentral.javadocUri(groupId, artifactId, version).run
             groupId / artifactId / version / "index.html"
-          }
+          catch
+            case _ => MavenCentral.searchVersions(groupId, artifactId).run
       }
-    }.flatMap { maybePath =>
-      maybePath.fold {
-        Handler.notFound
-      } { path =>
-        // todo: nicer api?
+    }.flatMap {
+      case path: Path =>
         Handler.response(Response.redirect(URL(path))) // todo: perm when not latest
-      }
+      case versions: Seq[Version] =>
+        Handler.template("javadocs.dev")(UI.noJavadoc(groupId, artifactId, versions, version))
     }.catchAll { _ =>
       Handler.status(Status.InternalServerError)
     }
   }
 
-  def withFile(groupId: GroupId, artifactId: ArtifactId, version: Version, file: Path): Http[Client & Scope, Throwable, Request, Response] = {
+  def withFile(groupId: GroupId, artifactId: ArtifactId, version: Version, file: Path): Http[Client & Scope, Nothing, Request, Response] = {
     Http.fromFileZIO {
       defer {
-        val javadocUri = MavenCentral.javadocUri(groupId, artifactId, version).run
         val javadocDir = File(tmpDir, s"$groupId/$artifactId/$version")
         val javadocFile = File(javadocDir, file.toString)
 
         // todo: fix race condition
         if !javadocDir.exists() then
+          val javadocUri = MavenCentral.javadocUri(groupId, artifactId, version).run
           MavenCentral.downloadAndExtractZip(javadocUri, javadocDir).run
-        else
-          ()
 
         javadocFile
       }
+    }.catchAllZIO {
+      case JavadocNotFoundError(groupId, artifactId, version) =>
+        ZIO.succeed(Response.redirect(URL(groupId / artifactId / version)))
+      case _ =>
+        ZIO.succeed(Response.status(Status.InternalServerError))
     }
   }
 
@@ -122,7 +124,7 @@ object App extends ZIOAppDefault:
         }
       }.orElse {
         request.url.queryParams.get("version").map { chunks =>
-          request.url.withPath(request.path / chunks.head / "index.html").withQueryParams()
+          request.url.withPath(request.path / chunks.head).withQueryParams()
         }
       }.getOrElse(request.url)
 
@@ -132,9 +134,15 @@ object App extends ZIOAppDefault:
   val serveFile = Http.collectHttp[Request] {
     case Method.GET -> "" /: GroupId(groupId) /: ArtifactId(artifactId) /: Version(version) /: file =>
       withFile(groupId, artifactId, version, file)
-  }.withDefaultErrorResponse
+  }
 
   val appWithMiddleware = (app @@ redirectQueryParams) ++ serveFile
 
   def run =
-    Server.serve(appWithMiddleware).provide(Server.default, Client.default, Scope.default).exitCode
+    val clientLayer = (
+      DnsResolver.default ++
+        (ZLayer.succeed(NettyConfig.default) >>> NettyClientDriver.live) ++
+        ZLayer.succeed(Client.Config.default.withFixedConnectionPool(10))
+      ) >>> Client.customized
+
+    Server.serve(appWithMiddleware).provide(Server.default, clientLayer, Scope.default).exitCode

@@ -28,6 +28,7 @@ object MavenCentral:
   case class UnknownError(s: String) extends MavenCentralError
   case class GroupIdNotFoundError(groupId: GroupId) extends MavenCentralError
   case class GroupIdOrArtifactIdNotFoundError(groupId: GroupId, artifactId: ArtifactId) extends MavenCentralError
+  case class JavadocNotFoundError(groupId: GroupId, artifactId: ArtifactId, version: Version) extends MavenCentralError
 
   extension (path: Path)
     @targetName("slash")
@@ -118,7 +119,15 @@ object MavenCentral:
 
   def isArtifact(groupId: GroupId, artifactId: ArtifactId): ZIO[Client, Throwable, Boolean] = {
     val url = artifactUri + artifactPath(groupId, Some(ArtifactAndVersion(artifactId))) / "maven-metadata.xml"
-    Client.request(url, Method.HEAD).map(_.status.isSuccess)
+    defer {
+      val response = Client.request(url).run
+      if response.status.isSuccess then
+        val body = response.body.asString.run
+        // checks that the maven-metadata.xml contains the groupId
+        body.contains(s"<groupId>${groupId}</groupId>")
+      else
+        false
+    }
   }
 
   def artifactExists(groupId: GroupId, artifactId: ArtifactId, version: Version): ZIO[Client, Throwable, Boolean] = {
@@ -132,6 +141,8 @@ object MavenCentral:
       val response = Client.request(url, Method.HEAD).run
       if response.status.isSuccess then
         Url(url)
+      else if response.status == Status.NotFound then
+        throw JavadocNotFoundError(groupId, artifactId, version)
       else
         throw UnknownError(response.status.text)
     }
