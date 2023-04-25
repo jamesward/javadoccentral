@@ -1,90 +1,75 @@
-enablePlugins(SbtTwirl, GraalVMNativeImagePlugin)
+enablePlugins(GraalVMNativeImagePlugin)
 
 name := "javadoccentral"
 
-// must use jdk 11 for static / muslc
-javacOptions ++= Seq("-source", "11", "-target", "11")
+scalacOptions ++= Seq(
+  "-Yexplicit-nulls",
+  "-language:strictEquality",
+  "-Xfatal-warnings",
+)
 
-scalacOptions += "-target:jvm-11"
+scalaVersion := "3.3.0-RC2" // https://github.com/lampepfl/dotty/issues/13985
 
-scalaVersion := "2.13.6"
-
-val Http4sVersion = "0.23.6"
-val CirceVersion = "0.14.1"
-val Specs2Version = "4.9.3"
-val Slf4jVersion = "1.7.32"
-val CommonsCompress = "1.21"
+val zioVersion = "2.0.13"
 
 libraryDependencies ++= Seq(
-  "org.http4s"         %% "http4s-blaze-server"  % Http4sVersion,
-  "org.http4s"         %% "http4s-blaze-client"  % Http4sVersion,
-  "org.http4s"         %% "http4s-circe"         % Http4sVersion,
-  "org.http4s"         %% "http4s-dsl"           % Http4sVersion,
-  "org.http4s"         %% "http4s-twirl"         % Http4sVersion,
-  "io.circe"           %% "circe-generic"        % CirceVersion,
-  "io.circe"           %% "circe-optics"         % CirceVersion,
-  "org.slf4j"          %  "slf4j-simple"         % Slf4jVersion,
-  "org.apache.commons" %  "commons-compress"     % CommonsCompress,
+  "dev.zio" %% "zio"                % zioVersion,
+  "dev.zio" %% "zio-concurrent"     % zioVersion,
+  "dev.zio" %% "zio-logging"        % "2.1.11",
+  "dev.zio" %% "zio-direct"         % "1.0.0-RC7",
+  "dev.zio" %% "zio-direct-streams" % "1.0.0-RC7",
+  "dev.zio" %% "zio-http"           % "3.0.0-RC1",
+  "org.apache.commons" %  "commons-compress" % "1.21",
 
-  "org.specs2"         %% "specs2-core"                % Specs2Version % Test,
-  "org.typelevel"      %% "cats-effect-testing-specs2" % "1.2.0"       % Test,
+  "dev.zio" %% "zio-test"           % zioVersion % Test,
+  "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,
+  "dev.zio" %% "zio-test-magnolia"  % zioVersion % Test,
+
+  "dev.zio" %% "zio-http-testkit"   % "3.0.0-RC1"    % Test,
 )
 
-addCompilerPlugin("org.typelevel" % "kind-projector" % "0.13.0" cross CrossVersion.full)
-addCompilerPlugin("com.olegpy"    %% "better-monadic-for" % "0.3.1")
-
-scalacOptions ++= Seq(
-  "-unchecked",
-  "-deprecation",
-  "-explaintypes",
-  "-feature",
-  "-Xcheckinit",
-  "-Xfatal-warnings",
-  "-Xlint:adapted-args",
-  "-Xlint:constant",
-  "-Xlint:delayedinit-select",
-  "-Xlint:doc-detached",
-  "-Xlint:inaccessible",
-  "-Xlint:infer-any",
-  "-Xlint:nullary-unit",
-  "-Xlint:option-implicit",
-  "-Xlint:package-object-classes",
-  "-Xlint:poly-implicit-overload",
-  "-Xlint:private-shadow",
-  "-Xlint:stars-align",
-  "-Xlint:type-parameter-shadow",
-  "-Ywarn-dead-code",
-  "-Ywarn-extra-implicit",
-  "-Ywarn-numeric-widen",
-  "-Ywarn-unused:implicits",
-  "-Ywarn-unused:locals",
-  "-Ywarn-unused:params",
-  "-Ywarn-unused:patvars",
-  "-Ywarn-unused:privates",
-)
+testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework")
 
 Compile / packageDoc / publishArtifact := false
 
 Compile / doc / sources := Seq.empty
 
+fork := true
+
 graalVMNativeImageOptions ++= Seq(
-  "--verbose",
   "--no-fallback",
-  "--static",
   "--install-exit-handlers",
-  "--enable-http",
-  "--enable-https",
-  "--libc=musl",
+
+  "--initialize-at-run-time=io.netty.channel.DefaultFileRegion",
+  "--initialize-at-run-time=io.netty.channel.epoll.Native",
+  "--initialize-at-run-time=io.netty.channel.epoll.Epoll",
+  "--initialize-at-run-time=io.netty.channel.epoll.EpollEventLoop",
+  "--initialize-at-run-time=io.netty.channel.epoll.EpollEventArray",
+  "--initialize-at-run-time=io.netty.channel.kqueue.KQueue",
+  "--initialize-at-run-time=io.netty.channel.kqueue.KQueueEventLoop",
+  "--initialize-at-run-time=io.netty.channel.kqueue.KQueueEventArray",
+  "--initialize-at-run-time=io.netty.channel.kqueue.Native",
+  "--initialize-at-run-time=io.netty.channel.unix.Limits",
+  "--initialize-at-run-time=io.netty.channel.unix.Errors",
+  "--initialize-at-run-time=io.netty.channel.unix.IovArray",
+  "--initialize-at-run-time=io.netty.handler.codec.compression.ZstdOptions",
+  "--initialize-at-run-time=io.netty.handler.ssl.BouncyCastleAlpnSslUtils",
+
   "-H:+ReportExceptionStackTraces",
 )
 
-// todo: https://github.com/sbt/sbt-native-packager/issues/1330
-graalVMNativeImageOptions += s"-H:ReflectionConfigurationFiles=../../src/graal/reflect-config.json"
-graalVMNativeImageOptions += s"-H:ResourceConfigurationFiles=../../src/graal/resource-config.json"
+if (sys.env.get("STATIC").contains("true")) {
+  graalVMNativeImageOptions ++= Seq(
+    "--static",
+    "--libc=musl",
+  )
+} else {
+  graalVMNativeImageOptions ++= Seq(
+    "-H:+StaticExecutableWithDynamicLibC",
+//    "--initialize-at-run-time=io.netty.incubator.channel.uring.IOUringEventLoopGroup",
+//    "--initialize-at-run-time=io.netty.incubator.channel.uring.Native",
+  )
+}
 
-fork := true
-
-//run / javaOptions += s"-agentlib:native-image-agent=config-output-dir=src/graal"
+//run / javaOptions += s"-agentlib:native-image-agent=config-output-dir=src/main/resources/META-INF/native-image"
 //javaOptions += s"-agentlib:native-image-agent=trace-output=${(target in GraalVMNativeImage).value}/trace-output.json"
-
-// todo: before graalvm-native-image:packageBin run integration tests with the above config-output to generate the configs, bonus if in docker

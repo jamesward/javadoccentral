@@ -1,56 +1,89 @@
-import MavenCentral._
-import cats.effect.{IO, Resource}
-import cats.effect.testing.specs2.CatsResource
-import org.http4s.Uri
-import org.http4s.blaze.client.BlazeClientBuilder
-import org.http4s.client.Client
-import org.specs2.mutable.SpecificationLike
+import zio.{Chunk, Runtime, Scope, ZIO}
+import zio.http.{Client, Path, Request, URL}
+import zio.test.*
+import zio.test.Assertion.*
+import MavenCentral.{*, given}
+import zio.direct.*
 
+import java.net.URI
 import java.nio.file.Files
 
-class MavenCentralSpec extends CatsResource[IO, Client[IO]] with SpecificationLike {
+object MavenCentralSpec extends ZIOSpecDefault:
 
-  val resource: Resource[IO, Client[IO]] = BlazeClientBuilder[IO].resource
+  given CanEqual[String, String] = CanEqual.derived
 
-  // todo: test sorting
-  "searchArtifacts" in withResource { implicit client =>
-    searchArtifacts("com.jamesward").map {
-      _ must not be empty
-    }
-  }
+  def spec = suite("MavenCentral")(
+    test("artifactPath") {
+      assertTrue(
+        artifactPath(GroupId("org.webjars")) == Path.decode("org/webjars"),
+        artifactPath(GroupId("org.webjars"), Some(ArtifactAndVersion(ArtifactId("jquery")))) == Path.decode("org/webjars/jquery"),
+        artifactPath(GroupId("org.webjars"), Some(ArtifactAndVersion(ArtifactId("jquery"), Some(Version("3.6.4"))))) == Path.decode("org/webjars/jquery/3.6.4")
+      )
+    },
 
-  // todo: test sorting
-  "searchVersions" in withResource { implicit client =>
-    searchVersions("com.jamesward", "travis-central-test").map {
-      _ must not be empty
-    }
-  }
+    test("searchArtifacts") {
+      defer {
+        val webjarArtifacts = searchArtifacts(GroupId("org.webjars")).run
+        val springdataArtifacts = searchArtifacts(GroupId("org.springframework.data")).run
+        val err = searchArtifacts(GroupId("zxcv12313asdf")).exit.run
 
-  "latest" in withResource { implicit client =>
-    latest("com.jamesward", "travis-central-test").map {
-      _ must beSome("0.0.15")
-    }
-  }
-
-  "artifactExists" should {
-    "works for existing artifacts" in withResource { implicit client =>
-      artifactExists("com.jamesward", "travis-central-test", "0.0.15").map {
-        _ must beTrue
+        assertTrue(webjarArtifacts.size > 1000) &&
+        assert(webjarArtifacts)(isSorted(CaseInsensitiveOrdering)) &&
+        assertTrue(springdataArtifacts.size > 10) &&
+        assert(err)(failsWithA[GroupIdNotFoundError])
       }
-    }
-    "be false for non-existant artifacts" in withResource { implicit client =>
-      artifactExists("com.jamesward", "travis-central-test", "0.0.0").map {
-        _ must beFalse
+    },
+
+    test("searchVersions") {
+      defer {
+        val versions = searchVersions(GroupId("org.webjars"), ArtifactId("jquery")).run
+        val err = searchVersions(GroupId("com.jamesward"), ArtifactId("zxcvasdf")).exit.run
+
+        assertTrue(
+          versions.contains("3.6.4"),
+          versions.indexOf(Version("1.10.1")) < versions.indexOf(Version("1.0.0"))
+        ) &&
+        assert(err)(failsWithA[GroupIdOrArtifactIdNotFoundError])
       }
-    }
-  }
+    },
 
-  "downloadAndExtractZip" in withResource { implicit client =>
-    val uri = Uri.unsafeFromString("https://repo1.maven.org/maven2/com/jamesward/travis-central-test/0.0.15/travis-central-test-0.0.15.jar")
-    val tmpFile = Files.createTempDirectory("test").toFile
-    downloadAndExtractZip(uri, tmpFile).map { _ =>
-      tmpFile.list().toList must contain ("META-INF")
-    }
-  }
+    test("latest") {
+      defer {
+        assertTrue(latest(GroupId("com.jamesward"), ArtifactId("travis-central-test")).run.get == Version("0.0.15"))
+      }
+    },
 
-}
+    test("isArtifact") {
+      defer {
+        assertTrue(
+          isArtifact(GroupId("com.jamesward"), ArtifactId("travis-central-test")).run,
+          !isArtifact(GroupId("org.springframework"), ArtifactId("data")).run,
+          !isArtifact(GroupId("org.springframework"), ArtifactId("cloud")).run,
+        )
+      }
+    },
+
+    test("artifactExists") {
+      defer {
+        assertTrue(
+          artifactExists(GroupId("com.jamesward"), ArtifactId("travis-central-test"), Version("0.0.15")).run,
+          !artifactExists(GroupId("com.jamesward"), ArtifactId("travis-central-test"), Version("0.0.0")).run,
+        )
+      }
+    },
+
+    test("javadocUri") {
+      defer {
+        val doesNotExist = javadocUri(GroupId("com.jamesward"), ArtifactId("travis-central-test"), Version("0.0.15")).exit.run
+        val doesExist = javadocUri(GroupId("org.webjars"), ArtifactId("webjars-locator-core"), Version("0.52")).run
+        assert(doesNotExist)(failsWithA[MavenCentralError]) &&
+        assertTrue(doesExist == Url("https://repo1.maven.org/maven2/org/webjars/webjars-locator-core/0.52/webjars-locator-core-0.52-javadoc.jar"))
+      }
+    },
+
+    test("downloadAndExtractZip") {
+      val url = Url("https://repo1.maven.org/maven2/com/jamesward/travis-central-test/0.0.15/travis-central-test-0.0.15.jar")
+      val tmpFile = Files.createTempDirectory("test").nn.toFile.nn
+      downloadAndExtractZip(url, tmpFile).as(assertTrue(tmpFile.list().nn.contains("META-INF")))
+    }.provide(Client.default ++ Scope.default),
+  ).provide(Client.default)

@@ -1,148 +1,163 @@
-import cats.data.NonEmptyList
+import MavenCentral.{ArtifactId, GroupId, JavadocNotFoundError, Version}
+import zio.*
+import zio.concurrent.ConcurrentMap
+import zio.direct.*
+import zio.http.*
+import zio.http.html.*
+import zio.http.Path.Segment
+import zio.http.Status.TemporaryRedirect
+import zio.http.netty.NettyConfig
+import zio.http.netty.client.NettyClientDriver
+import zio.stream.ZStream
 
 import java.io.File
 import java.nio.file.Files
-import cats.effect.{ExitCode, IO, IOApp}
-import org.http4s.CacheDirective.{`max-age`, public}
-import org.http4s.client.Client
-import org.http4s.client.middleware.Logger
-import org.http4s.headers.{Location, `Cache-Control`}
-import org.http4s.server.middleware.GZip
-import org.http4s.twirl._
-import org.http4s.{HttpRoutes, Request, Response, StaticFile, Uri}
-import org.http4s.blaze.client._
-import org.http4s.dsl.io._
-import org.http4s.implicits._
-import org.http4s.blaze.server._
 
-import scala.concurrent.duration._
+object App extends ZIOAppDefault:
+  // todo: maybe via env?
+  val tmpDir = Files.createTempDirectory("jars").nn.toFile
 
-object App extends IOApp {
+  given CanEqual[Path, Path] = CanEqual.derived
+  given CanEqual[Method, Method] = CanEqual.derived
 
-  def needGroupId(maybeGroupId: Option[String]): IO[Response[IO]] = {
-    maybeGroupId.fold(Ok(html.needGroupId())) { groupId =>
-      PermanentRedirect(Location(Uri.unsafeFromString(s"/$groupId")))
+  def withGroupId(groupId: GroupId): Handler[Client, Nothing, Request, Response] = {
+    Handler.fromZIO {
+      MavenCentral.searchArtifacts(groupId)
+    }.flatMap { artifacts =>
+      Handler.template("javadocs.dev")(UI.needArtifactId(groupId, artifacts))
+    }.catchAll { _ =>
+      Handler.status(Status.InternalServerError)
     }
   }
 
-  def needArtifactId(groupId: String, maybeArtifactId: Option[String])(implicit client: Client[IO]): IO[Response[IO]] = {
-    maybeArtifactId.filter(_.nonEmpty).fold {
-      // todo: not found & bad request for other errors
-      MavenCentral.searchArtifacts(groupId).flatMap { artifactIds =>
-        if (artifactIds.isEmpty) {
-          NotFound(html.needGroupId(Some(groupId)))
-        }
-        else {
-          Ok(html.needArtifactId(groupId, artifactIds))
+  def withArtifactId(groupId: GroupId, artifactId: ArtifactId): Handler[Client, Nothing, Request, Response] = {
+    Handler.fromZIO {
+      defer {
+        val isArtifact = MavenCentral.isArtifact(groupId, artifactId).run
+        Option.when(isArtifact) {
+          MavenCentral.searchVersions(groupId, artifactId).run
         }
       }
-    } { artifactId =>
-      PermanentRedirect(Location(Uri.unsafeFromString(s"/$groupId/$artifactId")))
+    }.flatMap { maybeVersions =>
+      maybeVersions.fold {
+        // todo: better api?
+        Handler.response(Response.redirect(URL(Path.root / (groupId.toString + "." + artifactId.toString))))
+      } { versions =>
+        Handler.template("javadocs.dev")(UI.needVersion(groupId, artifactId, versions))
+      }
+    }.catchAll { _ =>
+      Handler.status(Status.InternalServerError)
     }
   }
 
-  def needVersion(groupId: String, artifactId: String, maybeVersion: Option[String])(implicit client: Client[IO]) = {
-    maybeVersion.filter(_.nonEmpty).fold {
-      // todo: not found & bad request for other errors
-      MavenCentral.searchVersions(groupId, artifactId)(client).flatMap { versions =>
-        // todo: version sorting
-        Ok(html.needVersion(groupId, artifactId, versions))
+  def withVersion(groupId: GroupId, artifactId: ArtifactId, version: Version): Handler[Client, Nothing, Request, Response] = {
+    Handler.fromZIO[Client, Throwable, Path | Seq[Version]] {
+      defer {
+        if version == Version.latest then
+          val maybeLatest = MavenCentral.latest(groupId, artifactId).run
+          maybeLatest.fold {
+            groupId / artifactId
+          } { latestVersion =>
+            groupId / artifactId / latestVersion
+          }
+        else
+          try
+            MavenCentral.javadocUri(groupId, artifactId, version).run
+            groupId / artifactId / version / "index.html"
+          catch
+            case _ => MavenCentral.searchVersions(groupId, artifactId).run
       }
-    } { version =>
-      PermanentRedirect(Location(Uri.unsafeFromString(s"/$groupId/$artifactId/$version")))
+    }.flatMap {
+      case path: Path =>
+        Handler.response(Response.redirect(URL(path))) // todo: perm when not latest
+      case versions: Seq[Version] =>
+        Handler.template("javadocs.dev")(UI.noJavadoc(groupId, artifactId, versions, version))
+    }.catchAll { _ =>
+      Handler.status(Status.InternalServerError)
     }
   }
 
-  def index(groupId: String, artifactId: String, version: String)(implicit client: Client[IO]) = {
-    if (version == "latest") {
-      MavenCentral.latest(groupId, artifactId).flatMap { maybeLatestVersion =>
-        val uri = maybeLatestVersion.fold(Uri.unsafeFromString(s"/$groupId/$artifactId")) { latestVersion =>
-          Uri.unsafeFromString(s"/$groupId/$artifactId/$latestVersion")
-        }
-        TemporaryRedirect(Location(uri))
-      } handleErrorWith { t =>
-        println(t)
-        // todo: endless redirects are bad
-        TemporaryRedirect(Location(Uri.unsafeFromString(s"/$groupId/$artifactId/latest")))
-      }
-    }
-    else {
-      MavenCentral.artifactExists(groupId, artifactId, version).flatMap { exists =>
-        if (exists) {
-          PermanentRedirect(Location(Uri.unsafeFromString(s"/$groupId/$artifactId/$version/index.html")))
-        }
-        else {
-          NotFound("The specified Maven Central module does not exist.")
-        }
-      }
-    }
-  }
+  def withFile(groupId: GroupId, artifactId: ArtifactId, version: Version, file: Path, blocker: ConcurrentMap[(GroupId, ArtifactId, Version), Promise[Nothing, Unit]]): Http[Client & Scope, Nothing, Request, Response] = {
+    Http.fromFileZIO {
+      defer {
+        val javadocDir = File(tmpDir, s"$groupId/$artifactId/$version")
+        val javadocFile = File(javadocDir, file.toString)
 
-  def file(groupId: String, artifactId: String, version: String, filepath: Path, request: Request[IO])(implicit client: Client[IO], tmpDir: File) = {
-    if (version == "latest") {
-      MavenCentral.latest(groupId, artifactId).flatMap { maybeLatestVersion =>
-        val uri = maybeLatestVersion.fold(Uri.unsafeFromString(s"/$groupId/$artifactId")) { latestVersion =>
-          Uri.unsafeFromString(s"/$groupId/$artifactId/$latestVersion$filepath")
-        }
-        TemporaryRedirect(Location(uri))
-      }
-    }
-    else {
-      val javadocUri = MavenCentral.javadocUri(groupId, artifactId, version)
-      val javadocDir = new File(tmpDir, s"$groupId/$artifactId/$version")
-      val javadocFile = new File(javadocDir, filepath.toString)
+        // could be less racey
+        if !javadocDir.exists() then
+          val maybeBlock = blocker.get((groupId, artifactId, version)).run
+          // note: fold doesn't work with defer here
+          maybeBlock match
+            case Some(promise) =>
+              promise.await.run
+            case _ =>
+              val promise = Promise.make[Nothing, Unit].run
+              blocker.put((groupId, artifactId, version), promise).run
+              val javadocUri = MavenCentral.javadocUri(groupId, artifactId, version).run
+              MavenCentral.downloadAndExtractZip(javadocUri, javadocDir).run
+              promise.succeed(()).run
 
-      // todo: fix race condition
-      val extracted = if (!javadocDir.exists()) {
-        MavenCentral.downloadAndExtractZip(javadocUri, javadocDir)
+        javadocFile
       }
-      else {
-        IO.unit
-      }
-
-      extracted.flatMap { _ =>
-        if (javadocFile.exists()) {
-          StaticFile.fromPath(fs2.io.file.Path.fromNioPath(javadocFile.toPath), Some(request))
-            .map(_.putHeaders(`Cache-Control`(NonEmptyList.of(public, `max-age`(365.days)))))
-            .getOrElseF(NotFound())
-        }
-        else {
-          NotFound("The specified file does not exist / the JavaDoc has not been published for that artifact.")
-        }
-      }
+    }.catchAllZIO {
+      case JavadocNotFoundError(groupId, artifactId, version) =>
+        ZIO.succeed(Response.redirect(URL(groupId / artifactId / version)))
+      case _ =>
+        ZIO.succeed(Response.status(Status.InternalServerError))
     }
   }
 
-  object OptionalGroupIdQueryParamMatcher extends OptionalQueryParamDecoderMatcher[String]("groupId")
-  object OptionalArtifactIdQueryParamMatcher extends OptionalQueryParamDecoderMatcher[String]("artifactId")
-  object OptionalVersionQueryParamMatcher extends OptionalQueryParamDecoderMatcher[String]("version")
-
-  def httpApp(implicit client: Client[IO], tmpDir: File) = HttpRoutes.of[IO] {
-    case GET -> Root / "favicon.ico" => NotFound()
-    case GET -> Root :? OptionalGroupIdQueryParamMatcher(maybeGroupId) => needGroupId(maybeGroupId)
-    case GET -> Root / groupId :? OptionalArtifactIdQueryParamMatcher(maybeArtifactId) => needArtifactId(groupId, maybeArtifactId)
-    case GET -> Root / groupId / "" :? OptionalArtifactIdQueryParamMatcher(maybeArtifactId) => needArtifactId(groupId, maybeArtifactId)
-    case GET -> Root / groupId / artifactId :? OptionalVersionQueryParamMatcher(maybeVersion) => needVersion(groupId, artifactId, maybeVersion)
-    case GET -> Root / groupId / artifactId / "" :? OptionalVersionQueryParamMatcher(maybeVersion) => needVersion(groupId, artifactId, maybeVersion)
-    case GET -> Root / groupId / artifactId / version => index(groupId, artifactId, version)
-    case GET -> Root / groupId / artifactId / version / "" => index(groupId, artifactId, version)
-    case req @ GET -> groupId /: artifactId /: version /: filepath => file(groupId, artifactId, version, filepath, req)
-  }.orNotFound
-
-  def run(args: List[String]) = {
-    val port = sys.env.getOrElse("PORT", "8080").toInt
-
-    val tmpDir = Files.createTempDirectory("jars").toFile // todo: to resource
-
-    {
-      for {
-        client <- BlazeClientBuilder[IO].resource
-        loggerClient = Logger(logHeaders = true, logBody = false)(client)
-        httpAppWithClient = GZip(httpApp(loggerClient, tmpDir))
-        //loggerHttpApp = org.http4s.server.middleware.Logger.httpApp(true, true)(httpAppWithClient)
-        server <- BlazeServerBuilder[IO].bindHttp(port, "0.0.0.0").withHttpApp(httpAppWithClient).resource
-      } yield server
-    }.use(_ => IO.never).as(ExitCode.Success)
+  val app = Http.collectHandler[Request] {
+    case Method.GET -> Path.empty => Handler.template("javadocs.dev")(UI.index)
+    case Method.GET -> Path.root => Handler.template("javadocs.dev")(UI.index)
+    case Method.GET -> Path.root / "favicon.ico" => Handler.notFound
+    case Method.GET -> Path.root / GroupId(groupId) => withGroupId(groupId)
+    case Method.GET -> Path.root / GroupId(groupId) / ArtifactId(artifactId) => withArtifactId(groupId, artifactId)
+    case Method.GET -> Path.root / GroupId(groupId) / ArtifactId(artifactId) / Version(version) => withVersion(groupId, artifactId, version)
   }
 
-}
+  val redirectQueryParams = HttpAppMiddleware.ifRequestThenElseFunction(_.url.queryParams.nonEmpty)(
+    // remove trailing slash on groupId & artifactId
+    ifFalse = request =>
+      if request.path != Path.empty && request.path != Path.root && request.path.trailingSlash then
+        HttpAppMiddleware.redirect(URL(request.path.dropTrailingSlash), true)
+      else
+        RequestHandlerMiddleware.identity,
+
+    // redirected query strings form submissions to path style
+    ifTrue = request =>
+      val url = request.url.queryParams.get("groupId").map { chunks =>
+        request.url.withPath(Path.root / chunks.head).withQueryParams()
+      }.orElse {
+        request.url.queryParams.get("artifactId").map { chunks =>
+          request.url.withPath(request.path / chunks.head).withQueryParams()
+        }
+      }.orElse {
+        request.url.queryParams.get("version").map { chunks =>
+          request.url.withPath(request.path / chunks.head).withQueryParams()
+        }
+      }.getOrElse(request.url)
+
+      HttpAppMiddleware.redirect(url, true)
+  )
+
+  def serveFile(blocker: ConcurrentMap[(GroupId, ArtifactId, Version), Promise[Nothing, Unit]]) = Http.collectHttp[Request] {
+    case Method.GET -> "" /: GroupId(groupId) /: ArtifactId(artifactId) /: Version(version) /: file =>
+      withFile(groupId, artifactId, version, file, blocker)
+  }
+
+  def appWithMiddleware(blocker: ConcurrentMap[(GroupId, ArtifactId, Version), Promise[Nothing, Unit]]) =
+    (app @@ redirectQueryParams) ++ serveFile(blocker)
+
+  def run =
+    val clientLayer = (
+      DnsResolver.default ++
+        (ZLayer.succeed(NettyConfig.default) >>> NettyClientDriver.live) ++
+        ZLayer.succeed(Client.Config.default.withFixedConnectionPool(10))
+      ) >>> Client.customized
+
+    for
+      blocker <- ConcurrentMap.empty[(GroupId, ArtifactId, Version), Promise[Nothing, Unit]]
+      _ <- Server.serve(appWithMiddleware(blocker)).provide(Server.default, clientLayer, Scope.default)
+    yield
+      ()
