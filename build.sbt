@@ -56,7 +56,7 @@ graalVMNativeImageOptions ++= Seq(
   "--initialize-at-run-time=io.netty.handler.ssl.BouncyCastleAlpnSslUtils",
   "--initialize-at-run-time=io.netty.incubator.channel.uring.IOUringEventLoopGroup",
 
-"-H:+ReportExceptionStackTraces",
+  "-H:+ReportExceptionStackTraces",
 )
 
 if (sys.env.get("STATIC").contains("true")) {
