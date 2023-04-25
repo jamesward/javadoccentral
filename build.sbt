@@ -8,7 +8,7 @@ scalacOptions ++= Seq(
   "-Xfatal-warnings",
 )
 
-scalaVersion := "3.2.2"
+scalaVersion := "3.3.0-RC2" // https://github.com/lampepfl/dotty/issues/13985
 
 val zioVersion = "2.0.13"
 
@@ -34,30 +34,42 @@ Compile / packageDoc / publishArtifact := false
 
 Compile / doc / sources := Seq.empty
 
+fork := true
+
 graalVMNativeImageOptions ++= Seq(
-  "--verbose",
   "--no-fallback",
-  "--static",
   "--install-exit-handlers",
-  "--enable-http",
-  "--enable-https",
-  "--libc=musl",
+
+  "--initialize-at-run-time=io.netty.channel.DefaultFileRegion",
+  "--initialize-at-run-time=io.netty.channel.epoll.Native",
+  "--initialize-at-run-time=io.netty.channel.epoll.Epoll",
+  "--initialize-at-run-time=io.netty.channel.epoll.EpollEventLoop",
+  "--initialize-at-run-time=io.netty.channel.epoll.EpollEventArray",
+  "--initialize-at-run-time=io.netty.channel.kqueue.KQueue",
+  "--initialize-at-run-time=io.netty.channel.kqueue.KQueueEventLoop",
+  "--initialize-at-run-time=io.netty.channel.kqueue.KQueueEventArray",
+  "--initialize-at-run-time=io.netty.channel.kqueue.Native",
+  "--initialize-at-run-time=io.netty.channel.unix.Limits",
+  "--initialize-at-run-time=io.netty.channel.unix.Errors",
+  "--initialize-at-run-time=io.netty.channel.unix.IovArray",
+  "--initialize-at-run-time=io.netty.handler.codec.compression.ZstdOptions",
+  "--initialize-at-run-time=io.netty.handler.ssl.BouncyCastleAlpnSslUtils",
+
   "-H:+ReportExceptionStackTraces",
 )
 
-/*
-// todo: https://github.com/sbt/sbt-native-packager/issues/1330
-graalVMNativeImageOptions += s"-H:ReflectionConfigurationFiles=../../src/graal/reflect-config.json"
-graalVMNativeImageOptions += s"-H:ResourceConfigurationFiles=../../src/graal/resource-config.json"
-*/
+if (sys.env.get("STATIC").contains("true")) {
+  graalVMNativeImageOptions ++= Seq(
+    "--static",
+    "--libc=musl",
+  )
+} else {
+  graalVMNativeImageOptions ++= Seq(
+    "-H:+StaticExecutableWithDynamicLibC",
+//    "--initialize-at-run-time=io.netty.incubator.channel.uring.IOUringEventLoopGroup",
+//    "--initialize-at-run-time=io.netty.incubator.channel.uring.Native",
+  )
+}
 
-fork := true
-
-reStart / javaOptions += "-Djava.net.preferIPv4Stack=true"
-run / javaOptions += "-Djava.net.preferIPv4Stack=true"
-Test / javaOptions += "-Djava.net.preferIPv4Stack=true"
-
-//run / javaOptions += s"-agentlib:native-image-agent=config-output-dir=src/graal"
+//run / javaOptions += s"-agentlib:native-image-agent=config-output-dir=src/main/resources/META-INF/native-image"
 //javaOptions += s"-agentlib:native-image-agent=trace-output=${(target in GraalVMNativeImage).value}/trace-output.json"
-
-// todo: before graalvm-native-image:packageBin run integration tests with the above config-output to generate the configs, bonus if in docker

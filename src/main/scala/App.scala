@@ -1,5 +1,6 @@
 import MavenCentral.{ArtifactId, GroupId, JavadocNotFoundError, Version}
 import zio.*
+import zio.concurrent.ConcurrentMap
 import zio.direct.*
 import zio.http.*
 import zio.http.html.*
@@ -76,16 +77,25 @@ object App extends ZIOAppDefault:
     }
   }
 
-  def withFile(groupId: GroupId, artifactId: ArtifactId, version: Version, file: Path): Http[Client & Scope, Nothing, Request, Response] = {
+  def withFile(groupId: GroupId, artifactId: ArtifactId, version: Version, file: Path, blocker: ConcurrentMap[(GroupId, ArtifactId, Version), Promise[Nothing, Unit]]): Http[Client & Scope, Nothing, Request, Response] = {
     Http.fromFileZIO {
       defer {
         val javadocDir = File(tmpDir, s"$groupId/$artifactId/$version")
         val javadocFile = File(javadocDir, file.toString)
 
-        // todo: fix race condition
+        // could be less racey
         if !javadocDir.exists() then
-          val javadocUri = MavenCentral.javadocUri(groupId, artifactId, version).run
-          MavenCentral.downloadAndExtractZip(javadocUri, javadocDir).run
+          val maybeBlock = blocker.get((groupId, artifactId, version)).run
+          // note: fold doesn't work with defer here
+          maybeBlock match
+            case Some(promise) =>
+              promise.await.run
+            case _ =>
+              val promise = Promise.make[Nothing, Unit].run
+              blocker.put((groupId, artifactId, version), promise).run
+              val javadocUri = MavenCentral.javadocUri(groupId, artifactId, version).run
+              MavenCentral.downloadAndExtractZip(javadocUri, javadocDir).run
+              promise.succeed(()).run
 
         javadocFile
       }
@@ -131,12 +141,13 @@ object App extends ZIOAppDefault:
       HttpAppMiddleware.redirect(url, true)
   )
 
-  val serveFile = Http.collectHttp[Request] {
+  def serveFile(blocker: ConcurrentMap[(GroupId, ArtifactId, Version), Promise[Nothing, Unit]]) = Http.collectHttp[Request] {
     case Method.GET -> "" /: GroupId(groupId) /: ArtifactId(artifactId) /: Version(version) /: file =>
-      withFile(groupId, artifactId, version, file)
+      withFile(groupId, artifactId, version, file, blocker)
   }
 
-  val appWithMiddleware = (app @@ redirectQueryParams) ++ serveFile
+  def appWithMiddleware(blocker: ConcurrentMap[(GroupId, ArtifactId, Version), Promise[Nothing, Unit]]) =
+    (app @@ redirectQueryParams) ++ serveFile(blocker)
 
   def run =
     val clientLayer = (
@@ -145,4 +156,8 @@ object App extends ZIOAppDefault:
         ZLayer.succeed(Client.Config.default.withFixedConnectionPool(10))
       ) >>> Client.customized
 
-    Server.serve(appWithMiddleware).provide(Server.default, clientLayer, Scope.default).exitCode
+    for
+      blocker <- ConcurrentMap.empty[(GroupId, ArtifactId, Version), Promise[Nothing, Unit]]
+      _ <- Server.serve(appWithMiddleware(blocker)).provide(Server.default, clientLayer, Scope.default)
+    yield
+      ()
