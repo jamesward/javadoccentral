@@ -1,10 +1,11 @@
 import App.given
 import MavenCentral.*
+import zio.concurrent.ConcurrentMap
 import zio.direct.*
 import zio.http.{Client, Header, Path, QueryParams, Request, Status, URL}
 import zio.test.*
 import zio.test.Assertion.*
-import zio.{Chunk, Runtime, Scope, ZIO}
+import zio.{Chunk, Promise, Runtime, Scope, ZIO}
 
 import java.net.URI
 import java.nio.file.Files
@@ -16,20 +17,22 @@ object AppSpec extends ZIOSpecDefault:
   def spec = suite("App")(
     test("routing") {
       defer {
-        val groupIdResp = App.appWithMiddleware.runZIO(Request.get(URL(Path.root, queryParams = QueryParams("groupId" -> "com.jamesward")))).run
-        val artifactIdResp = App.appWithMiddleware.runZIO(Request.get(URL(Path.root / "com.jamesward", queryParams = QueryParams("artifactId" -> "travis-central-test")))).run
-        val versionResp = App.appWithMiddleware.runZIO(Request.get(URL(Path.root / "com.jamesward" / "travis-central-test", queryParams = QueryParams("version" -> "0.0.15")))).run
-        val latest = App.appWithMiddleware.runZIO(Request.get(URL(Path.root / "org.webjars" / "jquery" / "latest"))).run
-        val groupIdRedir = App.appWithMiddleware.runZIO(Request.get(URL((Path.root / "com.jamesward").addTrailingSlash))).run
-        val artifactIdRedir = App.appWithMiddleware.runZIO(Request.get(URL((Path.root / "com.jamesward" / "travis-central-test").addTrailingSlash))).run
+        val blocker = ConcurrentMap.empty[(GroupId, ArtifactId, Version), Promise[Nothing, Unit]].run
 
-        val indexPath = App.appWithMiddleware.runZIO(Request.get(URL(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "index.html"))).run
-        val filePath = App.appWithMiddleware.runZIO(Request.get(URL(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "org" / "webjars" / "package-summary.html"))).run
-        val notFoundFilePath = App.appWithMiddleware.runZIO(Request.get(URL(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "asdf"))).exit.run
+        val groupIdResp = App.appWithMiddleware(blocker).runZIO(Request.get(URL(Path.root, queryParams = QueryParams("groupId" -> "com.jamesward")))).run
+        val artifactIdResp = App.appWithMiddleware(blocker).runZIO(Request.get(URL(Path.root / "com.jamesward", queryParams = QueryParams("artifactId" -> "travis-central-test")))).run
+        val versionResp = App.appWithMiddleware(blocker).runZIO(Request.get(URL(Path.root / "com.jamesward" / "travis-central-test", queryParams = QueryParams("version" -> "0.0.15")))).run
+        val latest = App.appWithMiddleware(blocker).runZIO(Request.get(URL(Path.root / "org.webjars" / "jquery" / "latest"))).run
+        val groupIdRedir = App.appWithMiddleware(blocker).runZIO(Request.get(URL((Path.root / "com.jamesward").addTrailingSlash))).run
+        val artifactIdRedir = App.appWithMiddleware(blocker).runZIO(Request.get(URL((Path.root / "com.jamesward" / "travis-central-test").addTrailingSlash))).run
+
+        val indexPath = App.appWithMiddleware(blocker).runZIO(Request.get(URL(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "index.html"))).run
+        val filePath = App.appWithMiddleware(blocker).runZIO(Request.get(URL(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "org" / "webjars" / "package-summary.html"))).run
+        val notFoundFilePath = App.appWithMiddleware(blocker).runZIO(Request.get(URL(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "asdf"))).exit.run
 
         assertTrue(
-          App.appWithMiddleware.runZIO(Request.get(URL(Path.empty))).run.status.isSuccess,
-          App.appWithMiddleware.runZIO(Request.get(URL(Path.root))).run.status.isSuccess,
+          App.appWithMiddleware(blocker).runZIO(Request.get(URL(Path.empty))).run.status.isSuccess,
+          App.appWithMiddleware(blocker).runZIO(Request.get(URL(Path.root))).run.status.isSuccess,
 
           groupIdResp.status.isRedirection,
           groupIdResp.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward")),
