@@ -150,11 +150,14 @@ object App extends ZIOAppDefault:
     (app @@ redirectQueryParams) ++ serveFile(blocker)
 
   def run =
+    /*
     val clientLayer = (
       DnsResolver.default ++
         (ZLayer.succeed(NettyConfig.default) >>> NettyClientDriver.live) ++
         ZLayer.succeed(Client.Config.default.withFixedConnectionPool(10))
       ) >>> Client.customized
+    */
+    val clientLayer = Client.default
 
     for
       blocker <- ConcurrentMap.empty[(GroupId, ArtifactId, Version), Promise[Nothing, Unit]]
