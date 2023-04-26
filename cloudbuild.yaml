@@ -3,8 +3,13 @@ steps:
     entrypoint: './sbt'
     args: ['test']
 
-  - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/$REPO_NAME:$COMMIT_SHA', '.']
+  - name: 'adoptopenjdk/openjdk11'
+    entrypoint: './sbt'
+    args: ['clean']
+
+  - name: 'gcr.io/k8s-skaffold/pack'
+    entrypoint: 'pack'
+    args: ['build', '--builder=paketobuildpacks/builder:tiny', '--publish=gcr.io/$PROJECT_ID/$REPO_NAME:$COMMIT_SHA']
 
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/$REPO_NAME:$COMMIT_SHA']
@@ -15,15 +20,15 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/$REPO_NAME:latest']
 
-  - name: ghcr.io/jamesward/easycloudrun
-    entrypoint: multiregion
+  - name: 'ghcr.io/jamesward/easycloudrun'
+    entrypoint: 'multiregion'
     env:
       - 'PROJECT_ID=$PROJECT_ID'
       - 'BUILD_ID=$BUILD_ID'
       - 'COMMIT_SHA=$COMMIT_SHA'
       - 'IMAGE_NAME=$REPO_NAME'
       - 'IMAGE_VERSION=$COMMIT_SHA'
-      - 'DEPLOY_OPTS=--memory=1Gi'
+      - 'DEPLOY_OPTS=--memory=512Mi'
       - 'DOMAINS=javadocs.dev'
 
 options:
