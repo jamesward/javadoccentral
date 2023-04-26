@@ -1,4 +1,3 @@
-import MavenCentral.{ArtifactId, GroupId, JavadocNotFoundError, Version}
 import zio.*
 import zio.concurrent.ConcurrentMap
 import zio.direct.*
@@ -20,17 +19,22 @@ object App extends ZIOAppDefault:
   given CanEqual[Path, Path] = CanEqual.derived
   given CanEqual[Method, Method] = CanEqual.derived
 
-  def withGroupId(groupId: GroupId): Handler[Client, Nothing, Request, Response] = {
+  def withGroupId(groupId: MavenCentral.GroupId): Handler[Client, Nothing, Request, Response] = {
     Handler.fromZIO {
       MavenCentral.searchArtifacts(groupId)
     }.flatMap { artifacts =>
       Handler.template("javadocs.dev")(UI.needArtifactId(groupId, artifacts))
-    }.catchAll { _ =>
-      Handler.status(Status.InternalServerError)
+    }.catchAllCause {
+      case Cause.Fail(_: MavenCentral.GroupIdNotFoundError, _) =>
+        Handler.notFound
+      case cause =>
+        Handler.fromZIO {
+          ZIO.logErrorCause(cause).as(Response.status(Status.InternalServerError))
+        }
     }
   }
 
-  def withArtifactId(groupId: GroupId, artifactId: ArtifactId): Handler[Client, Nothing, Request, Response] = {
+  def withArtifactId(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId): Handler[Client, Nothing, Request, Response] = {
     Handler.fromZIO {
       defer {
         val isArtifact = MavenCentral.isArtifact(groupId, artifactId).run
@@ -45,15 +49,20 @@ object App extends ZIOAppDefault:
       } { versions =>
         Handler.template("javadocs.dev")(UI.needVersion(groupId, artifactId, versions))
       }
-    }.catchAll { _ =>
-      Handler.status(Status.InternalServerError)
+    }.catchAllCause {
+      case Cause.Fail(_: MavenCentral.GroupIdOrArtifactIdNotFoundError, _) =>
+        Handler.notFound
+      case cause =>
+        Handler.fromZIO {
+          ZIO.logErrorCause(cause).as(Response.status(Status.InternalServerError))
+        }
     }
   }
 
-  def withVersion(groupId: GroupId, artifactId: ArtifactId, version: Version): Handler[Client, Nothing, Request, Response] = {
-    Handler.fromZIO[Client, Throwable, Path | Seq[Version]] {
+  def withVersion(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version): Handler[Client, Nothing, Request, Response] = {
+    Handler.fromZIO[Client, Throwable, Path | Seq[MavenCentral.Version]] {
       defer {
-        if version == Version.latest then
+        if version == MavenCentral.Version.latest then
           val maybeLatest = MavenCentral.latest(groupId, artifactId).run
           maybeLatest.fold {
             groupId / artifactId
@@ -70,14 +79,19 @@ object App extends ZIOAppDefault:
     }.flatMap {
       case path: Path =>
         Handler.response(Response.redirect(URL(path))) // todo: perm when not latest
-      case versions: Seq[Version] =>
+      case versions: Seq[MavenCentral.Version] =>
         Handler.template("javadocs.dev")(UI.noJavadoc(groupId, artifactId, versions, version))
-    }.catchAll { _ =>
-      Handler.status(Status.InternalServerError)
+    }.catchAllCause {
+      case Cause.Fail(_: MavenCentral.GroupIdOrArtifactIdNotFoundError, _) =>
+        Handler.notFound
+      case cause =>
+        Handler.fromZIO {
+          ZIO.logErrorCause(cause).as(Response.status(Status.InternalServerError))
+        }
     }
   }
 
-  def withFile(groupId: GroupId, artifactId: ArtifactId, version: Version, file: Path, blocker: ConcurrentMap[(GroupId, ArtifactId, Version), Promise[Nothing, Unit]]): Http[Client & Scope, Nothing, Request, Response] = {
+  def withFile(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, file: Path, blocker: ConcurrentMap[(MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version), Promise[Nothing, Unit]]): Http[Client & Scope, Nothing, Request, Response] = {
     Http.fromFileZIO {
       defer {
         val javadocDir = File(tmpDir, s"$groupId/$artifactId/$version")
@@ -99,11 +113,11 @@ object App extends ZIOAppDefault:
 
         javadocFile
       }
-    }.catchAllZIO {
-      case JavadocNotFoundError(groupId, artifactId, version) =>
+    }.catchAllCauseZIO {
+      case Cause.Fail(MavenCentral.JavadocNotFoundError(groupId, artifactId, version), _) =>
         ZIO.succeed(Response.redirect(URL(groupId / artifactId / version)))
-      case _ =>
-        ZIO.succeed(Response.status(Status.InternalServerError))
+      case cause =>
+        ZIO.logErrorCause(cause).as(Response.status(Status.InternalServerError))
     }
   }
 
@@ -111,9 +125,9 @@ object App extends ZIOAppDefault:
     case Method.GET -> Path.empty => Handler.template("javadocs.dev")(UI.index)
     case Method.GET -> Path.root => Handler.template("javadocs.dev")(UI.index)
     case Method.GET -> Path.root / "favicon.ico" => Handler.notFound
-    case Method.GET -> Path.root / GroupId(groupId) => withGroupId(groupId)
-    case Method.GET -> Path.root / GroupId(groupId) / ArtifactId(artifactId) => withArtifactId(groupId, artifactId)
-    case Method.GET -> Path.root / GroupId(groupId) / ArtifactId(artifactId) / Version(version) => withVersion(groupId, artifactId, version)
+    case Method.GET -> Path.root / MavenCentral.GroupId(groupId) => withGroupId(groupId)
+    case Method.GET -> Path.root / MavenCentral.GroupId(groupId) / MavenCentral.ArtifactId(artifactId) => withArtifactId(groupId, artifactId)
+    case Method.GET -> Path.root / MavenCentral.GroupId(groupId) / MavenCentral.ArtifactId(artifactId) / MavenCentral.Version(version) => withVersion(groupId, artifactId, version)
   }
 
   val redirectQueryParams = HttpAppMiddleware.ifRequestThenElseFunction(_.url.queryParams.nonEmpty)(
@@ -141,12 +155,12 @@ object App extends ZIOAppDefault:
       HttpAppMiddleware.redirect(url, true)
   )
 
-  def serveFile(blocker: ConcurrentMap[(GroupId, ArtifactId, Version), Promise[Nothing, Unit]]) = Http.collectHttp[Request] {
-    case Method.GET -> "" /: GroupId(groupId) /: ArtifactId(artifactId) /: Version(version) /: file =>
+  def serveFile(blocker: ConcurrentMap[(MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version), Promise[Nothing, Unit]]) = Http.collectHttp[Request] {
+    case Method.GET -> "" /: MavenCentral.GroupId(groupId) /: MavenCentral.ArtifactId(artifactId) /: MavenCentral.Version(version) /: file =>
       withFile(groupId, artifactId, version, file, blocker)
   }
 
-  def appWithMiddleware(blocker: ConcurrentMap[(GroupId, ArtifactId, Version), Promise[Nothing, Unit]]) =
+  def appWithMiddleware(blocker: ConcurrentMap[(MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version), Promise[Nothing, Unit]]) =
     (app @@ redirectQueryParams) ++ serveFile(blocker)
 
   def run =
@@ -160,7 +174,7 @@ object App extends ZIOAppDefault:
     val clientLayer = Client.default
 
     for
-      blocker <- ConcurrentMap.empty[(GroupId, ArtifactId, Version), Promise[Nothing, Unit]]
+      blocker <- ConcurrentMap.empty[(MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version), Promise[Nothing, Unit]]
       _ <- Server.serve(appWithMiddleware(blocker)).provide(Server.default, clientLayer, Scope.default)
     yield
       ()
