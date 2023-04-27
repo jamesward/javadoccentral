@@ -1,5 +1,11 @@
 enablePlugins(LauncherJarPlugin)
 
+// Hack Alert: This is the default when not in buildpacks (i.e. `default`)
+// In buildpacks it is javadoccentral which puts it alphabetically after dev.zio.zio-constraintless_3-0.3.1.jar
+// This causes the wrong Main-Class to get picked up.
+// https://github.com/paketo-buildpacks/executable-jar/issues/206
+organization := "default"
+
 name := "javadoccentral"
 
 scalacOptions ++= Seq(

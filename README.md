@@ -42,7 +42,7 @@ Create native image, with GraalVM:
 
 Build the container:
 ```
-docker build -t javadoccentral .
+pack build --builder=paketobuildpacks/builder:base javadoccentral
 ```
 
 Run the container:
