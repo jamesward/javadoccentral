@@ -42,5 +42,5 @@ Compile / doc / sources := Seq.empty
 
 fork := true
 
-//run / javaOptions += s"-agentlib:native-image-agent=config-output-dir=src/main/resources/META-INF/native-image"
+//run / javaOptions += s"-agentlib:native-image-agent=config-output-dir=src/graal"
 //javaOptions += s"-agentlib:native-image-agent=trace-output=${(target in GraalVMNativeImage).value}/trace-output.json"

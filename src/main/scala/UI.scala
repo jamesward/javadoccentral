@@ -86,7 +86,7 @@ object UI {
 
   def noJavadoc(groupId: GroupId, artifactId: ArtifactId, versions: Seq[Version], version: Version): Html = {
     div(
-      p(s"Version $version of that artifact does not have a JavaDoc jar."),
+      p(s"Version $version of that artifact does not exist or does not have a JavaDoc jar."),
       needVersion(groupId, artifactId, versions),
     )
   }

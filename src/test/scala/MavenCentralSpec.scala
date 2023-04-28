@@ -1,8 +1,7 @@
-import zio.{Chunk, Runtime, Scope, ZIO}
+import MavenCentral.{*, given}
+import zio.{Chunk, Exit, Runtime, Scope, ZIO}
 import zio.http.{Client, Path, Request, URL}
 import zio.test.*
-import zio.test.Assertion.*
-import MavenCentral.{*, given}
 import zio.direct.*
 
 import java.net.URI
@@ -11,6 +10,8 @@ import java.nio.file.Files
 object MavenCentralSpec extends ZIOSpecDefault:
 
   given CanEqual[String, String] = CanEqual.derived
+  given CanEqual[Seq[ArtifactId], Seq[ArtifactId]] = CanEqual.derived
+  given CanEqual[Exit[JavadocNotFoundError | Throwable, _], Exit[JavadocNotFoundError | Throwable, _]] = CanEqual.derived
 
   def spec = suite("MavenCentral")(
     test("artifactPath") {
@@ -25,25 +26,27 @@ object MavenCentralSpec extends ZIOSpecDefault:
       defer {
         val webjarArtifacts = searchArtifacts(GroupId("org.webjars")).run
         val springdataArtifacts = searchArtifacts(GroupId("org.springframework.data")).run
-        val err = searchArtifacts(GroupId("zxcv12313asdf")).exit.run
+        val err = searchArtifacts(GroupId("zxcv12313asdf")).flip.run
 
-        assertTrue(webjarArtifacts.size > 1000) &&
-        assert(webjarArtifacts)(isSorted(CaseInsensitiveOrdering)) &&
-        assertTrue(springdataArtifacts.size > 10) &&
-        assert(err)(failsWithA[GroupIdNotFoundError])
+        assertTrue(
+          webjarArtifacts.size > 1000,
+          webjarArtifacts == webjarArtifacts.sorted(CaseInsensitiveOrdering),
+          springdataArtifacts.size > 10,
+          err.isInstanceOf[GroupIdNotFoundError],
+        )
       }
     },
 
     test("searchVersions") {
       defer {
         val versions = searchVersions(GroupId("org.webjars"), ArtifactId("jquery")).run
-        val err = searchVersions(GroupId("com.jamesward"), ArtifactId("zxcvasdf")).exit.run
+        val err = searchVersions(GroupId("com.jamesward"), ArtifactId("zxcvasdf")).flip.run
 
         assertTrue(
           versions.contains("3.6.4"),
-          versions.indexOf(Version("1.10.1")) < versions.indexOf(Version("1.0.0"))
-        ) &&
-        assert(err)(failsWithA[GroupIdOrArtifactIdNotFoundError])
+          versions.indexOf(Version("1.10.1")) < versions.indexOf(Version("1.0.0")),
+          err.isInstanceOf[GroupIdOrArtifactIdNotFoundError],
+        )
       }
     },
 
@@ -74,10 +77,13 @@ object MavenCentralSpec extends ZIOSpecDefault:
 
     test("javadocUri") {
       defer {
-        val doesNotExist = javadocUri(GroupId("com.jamesward"), ArtifactId("travis-central-test"), Version("0.0.15")).exit.run
         val doesExist = javadocUri(GroupId("org.webjars"), ArtifactId("webjars-locator-core"), Version("0.52")).run
-        assert(doesNotExist)(failsWithA[MavenCentralError]) &&
-        assertTrue(doesExist == Url("https://repo1.maven.org/maven2/org/webjars/webjars-locator-core/0.52/webjars-locator-core-0.52-javadoc.jar"))
+        val doesNotExist = javadocUri(GroupId("com.jamesward"), ArtifactId("travis-central-test"), Version("0.0.15")).exit.run // todo: flip no worky?
+
+        assertTrue(
+          doesNotExist == Exit.fail(JavadocNotFoundError(GroupId("com.jamesward"), ArtifactId("travis-central-test"), Version("0.0.15"))),
+          doesExist == Url("https://repo1.maven.org/maven2/org/webjars/webjars-locator-core/0.52/webjars-locator-core-0.52-javadoc.jar"),
+        )
       }
     },
 

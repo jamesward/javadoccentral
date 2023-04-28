@@ -60,30 +60,35 @@ object App extends ZIOAppDefault:
   }
 
   def withVersion(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version): Handler[Client, Nothing, Request, Response] = {
-    Handler.fromZIO[Client, Throwable, Path | Seq[MavenCentral.Version]] {
-      defer {
-        if version == MavenCentral.Version.latest then
-          val maybeLatest = MavenCentral.latest(groupId, artifactId).run
-          maybeLatest.fold {
-            groupId / artifactId
-          } { latestVersion =>
-            groupId / artifactId / latestVersion
-          }
-        else
-          try
-            MavenCentral.javadocUri(groupId, artifactId, version).run
-            groupId / artifactId / version / "index.html"
-          catch
-            case _ => MavenCentral.searchVersions(groupId, artifactId).run
+    val javadocPathZIO = defer {
+      if version == MavenCentral.Version.latest then
+        val maybeLatest = MavenCentral.latest(groupId, artifactId).run
+        maybeLatest.fold {
+          groupId / artifactId
+        } { latestVersion =>
+          groupId / artifactId / latestVersion
+        }
+      else
+        MavenCentral.javadocUri(groupId, artifactId, version).run
+        groupId / artifactId / version / "index.html"
+    }
+
+    Handler.fromZIO {
+      javadocPathZIO.map { path =>
+        Response.redirect(URL(path)) // todo: perm when not latest
       }
-    }.flatMap {
-      case path: Path =>
-        Handler.response(Response.redirect(URL(path))) // todo: perm when not latest
-      case versions: Seq[MavenCentral.Version] =>
-        Handler.template("javadocs.dev")(UI.noJavadoc(groupId, artifactId, versions, version))
     }.catchAllCause {
-      case Cause.Fail(_: MavenCentral.GroupIdOrArtifactIdNotFoundError, _) =>
-        Handler.notFound
+      case Cause.Fail(MavenCentral.JavadocNotFoundError(groupId, artifactId, version), _) =>
+        Handler.fromZIO(MavenCentral.searchVersions(groupId, artifactId)).flatMap { versions =>
+          Handler.template("javadocs.dev")(UI.noJavadoc(groupId, artifactId, versions, version))
+        }.catchAllCause {
+          case Cause.Fail(MavenCentral.GroupIdOrArtifactIdNotFoundError(_, _), _) =>
+            Handler.notFound // todo: better handling
+          case cause =>
+            Handler.fromZIO {
+              ZIO.logErrorCause(cause).as(Response.status(Status.InternalServerError))
+            }
+        }
       case cause =>
         Handler.fromZIO {
           ZIO.logErrorCause(cause).as(Response.status(Status.InternalServerError))
@@ -91,33 +96,49 @@ object App extends ZIOAppDefault:
     }
   }
 
-  def withFile(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, file: Path, blocker: ConcurrentMap[(MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version), Promise[Nothing, Unit]]): Http[Client & Scope, Nothing, Request, Response] = {
-    Http.fromFileZIO {
-      defer {
-        val javadocDir = File(tmpDir, s"$groupId/$artifactId/$version")
-        val javadocFile = File(javadocDir, file.toString)
+  type Blocker = ConcurrentMap[(MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version), Promise[Nothing, Unit]]
 
-        // could be less racey
-        if !javadocDir.exists() then
-          val maybeBlock = blocker.get((groupId, artifactId, version)).run
-          // note: fold doesn't work with defer here
-          maybeBlock match
-            case Some(promise) =>
-              promise.await.run
-            case _ =>
-              val promise = Promise.make[Nothing, Unit].run
-              blocker.put((groupId, artifactId, version), promise).run
-              val javadocUri = MavenCentral.javadocUri(groupId, artifactId, version).run
-              MavenCentral.downloadAndExtractZip(javadocUri, javadocDir).run
-              promise.succeed(()).run
+  def withFile(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, file: Path, blocker: Blocker): Http[Client & Scope, Nothing, Request, Response] = {
+    val javadocFileZIO = defer {
+      val javadocDir = File(tmpDir, s"$groupId/$artifactId/$version")
+      val javadocFile = File(javadocDir, file.toString)
 
-        javadocFile
+      // could be less racey
+      if !javadocDir.exists() then
+        val maybeBlock = blocker.get((groupId, artifactId, version)).run
+        // note: fold doesn't work with defer here
+        maybeBlock match
+          case Some(promise) =>
+            promise.await.run
+          case _ =>
+            val promise = Promise.make[Nothing, Unit].run
+            blocker.put((groupId, artifactId, version), promise).run
+            val javadocUri = MavenCentral.javadocUri(groupId, artifactId, version).run
+            MavenCentral.downloadAndExtractZip(javadocUri, javadocDir).run
+            promise.succeed(()).run
+
+      javadocFile
+    }
+
+    Http.fromHttpZIO { _ =>
+      javadocFileZIO.map { javadocFile =>
+        Http.fromFile(javadocFile).catchAllCauseZIO { cause =>
+          ZIO.logErrorCause(cause).as(Response.status(Status.InternalServerError))
+        }
+      }.catchAllCause {
+        case Cause.Fail(MavenCentral.JavadocNotFoundError(groupId, artifactId, version), _) =>
+          ZIO.succeed(
+            Http.fromHandler(
+              Response.redirect(URL(groupId / artifactId / version)).toHandler
+            )
+          )
+        case cause =>
+          ZIO.logErrorCause(cause).as(
+            Http.fromHandler(
+              Response.status(Status.InternalServerError).toHandler
+            )
+          )
       }
-    }.catchAllCauseZIO {
-      case Cause.Fail(MavenCentral.JavadocNotFoundError(groupId, artifactId, version), _) =>
-        ZIO.succeed(Response.redirect(URL(groupId / artifactId / version)))
-      case cause =>
-        ZIO.logErrorCause(cause).as(Response.status(Status.InternalServerError))
     }
   }
 
