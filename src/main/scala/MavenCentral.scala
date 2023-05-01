@@ -16,7 +16,11 @@ import scala.util.matching.Regex
 object MavenCentral:
 
   given CanEqual[Path, Path] = CanEqual.derived
+  given CanEqual[GroupId, GroupId] = CanEqual.derived
+  given CanEqual[ArtifactId, ArtifactId] = CanEqual.derived
   given CanEqual[Version, Version] = CanEqual.derived
+  given CanEqual[GroupArtifact, GroupArtifact] = CanEqual.derived
+  given CanEqual[GroupArtifactVersion, GroupArtifactVersion] = CanEqual.derived
   given CanEqual[Url, Url] = CanEqual.derived
   given CanEqual[Status, Status] = CanEqual.derived
 
@@ -58,6 +62,17 @@ object MavenCentral:
     def apply(s: String): Url = s
 
   case class ArtifactAndVersion(artifactId: ArtifactId, maybeVersion: Option[Version] = None)
+  case class GroupArtifact(groupId: GroupId, artifactId: ArtifactId) {
+    lazy val toPath: Path = groupId / artifactId
+
+    @targetName("slash")
+    def /(version: Version): Path = toPath / version
+  }
+  case class GroupArtifactVersion(groupId: GroupId, artifactId: ArtifactId, version: Version) {
+    lazy val noVersion: GroupArtifact = GroupArtifact(groupId, artifactId)
+    lazy val toPath: Path = groupId / artifactId / version
+    override def toString: String = s"$groupId/$artifactId/$version"
+  }
 
   object CaseInsensitiveOrdering extends Ordering[ArtifactId]:
     def compare(a: ArtifactId, b: ArtifactId): Int = a.compareToIgnoreCase(b)
