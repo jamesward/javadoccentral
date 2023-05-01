@@ -182,7 +182,7 @@ object App extends ZIOAppDefault:
   }
 
   def appWithMiddleware(blocker: ConcurrentMap[(MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version), Promise[Nothing, Unit]]) =
-    (app @@ redirectQueryParams) ++ serveFile(blocker)
+    ((app @@ redirectQueryParams) ++ serveFile(blocker)) @@ HttpAppMiddleware.requestLogging()
 
   def run =
 //    val clientLayer = (

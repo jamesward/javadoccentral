@@ -84,12 +84,14 @@ object MavenCentral:
     response.body.asStream
       .via(ZPipeline.utf8Decode >>> ZPipeline.splitLines)
       .runFold(Seq.empty[String])(lineExtractor)
-      .mapError(ParseError(_))
+      .mapError(ParseError.apply)
 
   def searchArtifacts(groupId: GroupId): ZIO[Client, GroupIdNotFoundError | Throwable, Seq[ArtifactId]] = {
     val url = artifactUri + artifactPath(groupId).addTrailingSlash
     defer {
+      ZIO.log(s"GET $url").run
       val response = Client.request(url).run
+      ZIO.log(s"GET $url - ${response.status}").run
       response.status match
         case Status.NotFound =>
           ZIO.fail(GroupIdNotFoundError(groupId)).run
