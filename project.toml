@@ -1,3 +1,27 @@
 [[build.env]]
 name = "BPE_OVERRIDE_BPL_JVM_THREAD_COUNT"
 value = "50"
+
+[[build.env]]
+name = "BP_NATIVE_IMAGE"
+value = "true"
+
+[[build.env]]
+name = "BP_SBT_BUILD_ARGUMENTS"
+value = "stage"
+
+[[build.env]]
+name = "BP_SBT_BUILT_ARTIFACT"
+value = "target/universal/stage/lib/*.jar"
+
+[[build.env]]
+name = "BP_NATIVE_IMAGE_BUILT_ARTIFACT"
+value = "default.javadoccentral-**-launcher.jar"
+
+[[build.env]]
+name = "BP_BINARY_COMPRESSION_METHOD"
+value = "upx"
+
+[[build.env]]
+name = "BP_NATIVE_IMAGE_BUILD_ARGUMENTS"
+value = "--no-fallback --install-exit-handlers --initialize-at-run-time=io.netty.channel.DefaultFileRegion --initialize-at-run-time=io.netty.channel.epoll.Native --initialize-at-run-time=io.netty.channel.epoll.Epoll --initialize-at-run-time=io.netty.channel.epoll.EpollEventLoop --initialize-at-run-time=io.netty.channel.epoll.EpollEventArray --initialize-at-run-time=io.netty.channel.kqueue.KQueue --initialize-at-run-time=io.netty.channel.kqueue.KQueueEventLoop --initialize-at-run-time=io.netty.channel.kqueue.KQueueEventArray --initialize-at-run-time=io.netty.channel.kqueue.Native --initialize-at-run-time=io.netty.channel.unix.Limits --initialize-at-run-time=io.netty.channel.unix.Errors --initialize-at-run-time=io.netty.channel.unix.IovArray --initialize-at-run-time=io.netty.handler.codec.compression.ZstdOptions --initialize-at-run-time=io.netty.handler.ssl.BouncyCastleAlpnSslUtils --initialize-at-run-time=io.netty.incubator.channel.uring.IOUringEventLoopGroup"
