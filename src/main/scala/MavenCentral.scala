@@ -62,38 +62,36 @@ object MavenCentral:
     def apply(s: String): Url = s
 
   case class ArtifactAndVersion(artifactId: ArtifactId, maybeVersion: Option[Version] = None)
-  case class GroupArtifact(groupId: GroupId, artifactId: ArtifactId) {
+  case class GroupArtifact(groupId: GroupId, artifactId: ArtifactId):
     lazy val toPath: Path = groupId / artifactId
 
     @targetName("slash")
     def /(version: Version): Path = toPath / version
-  }
-  case class GroupArtifactVersion(groupId: GroupId, artifactId: ArtifactId, version: Version) {
+
+  case class GroupArtifactVersion(groupId: GroupId, artifactId: ArtifactId, version: Version):
     lazy val noVersion: GroupArtifact = GroupArtifact(groupId, artifactId)
     lazy val toPath: Path = groupId / artifactId / version
     override def toString: String = s"$groupId/$artifactId/$version"
-  }
+
 
   object CaseInsensitiveOrdering extends Ordering[ArtifactId]:
     def compare(a: ArtifactId, b: ArtifactId): Int = a.compareToIgnoreCase(b)
 
-  def artifactPath(groupId: GroupId, artifactAndVersion: Option[ArtifactAndVersion] = None): Path = {
+  def artifactPath(groupId: GroupId, artifactAndVersion: Option[ArtifactAndVersion] = None): Path =
     val withGroup = groupId.split('.').foldLeft(Path.empty)(_ / _)
     val withArtifact = artifactAndVersion.fold(withGroup)(withGroup / _.artifactId)
     val withVersion = artifactAndVersion.flatMap(_.maybeVersion).fold(withArtifact)(withArtifact / _)
 
     withVersion
-  }
 
   private val filenameExtractor: Regex = """.*<a href="([^"]+)".*""".r
 
   private def lineExtractor(names: Seq[String], line: String): Seq[String] =
-    line match {
+    line match
       case filenameExtractor(line) if line.endsWith("/") && !line.startsWith("..") =>
         names :+ line.stripSuffix("/")
       case _ =>
         names
-    }
 
   private def responseToNames(response: Response): ZIO[Any, ParseError, Seq[String]] =
     response.body.asStream
@@ -101,9 +99,9 @@ object MavenCentral:
       .runFold(Seq.empty[String])(lineExtractor)
       .mapError(ParseError.apply)
 
-  def searchArtifacts(groupId: GroupId): ZIO[Client, GroupIdNotFoundError | Throwable, Seq[ArtifactId]] = {
+  def searchArtifacts(groupId: GroupId): ZIO[Client, GroupIdNotFoundError | Throwable, Seq[ArtifactId]] =
     val url = artifactUri + artifactPath(groupId).addTrailingSlash
-    defer {
+    defer:
       ZIO.log(s"GET $url").run
       val response = Client.request(url).run
       ZIO.log(s"GET $url - ${response.status}").run
@@ -114,12 +112,11 @@ object MavenCentral:
           responseToNames(response).run.map(ArtifactId(_)).sorted(CaseInsensitiveOrdering)
         case _ =>
           ZIO.fail(UnknownError(response)).run
-    } // todo: retry once on Throwable
-  }
+      // todo: retry once on Throwable
 
-  def searchVersions(groupId: GroupId, artifactId: ArtifactId): ZIO[Client, GroupIdOrArtifactIdNotFoundError | Throwable, Seq[Version]] = {
+  def searchVersions(groupId: GroupId, artifactId: ArtifactId): ZIO[Client, GroupIdOrArtifactIdNotFoundError | Throwable, Seq[Version]] =
     val url = artifactUri + artifactPath(groupId, Some(ArtifactAndVersion(artifactId))).addTrailingSlash
-    defer {
+    defer:
       val response = Client.request(url).run
       response.status match
         case Status.NotFound =>
@@ -128,16 +125,13 @@ object MavenCentral:
           responseToNames(response).run.map(Version(_)).reverse
         case _ =>
           ZIO.fail(UnknownError(response)).run
-    }
-  }
 
-  def latest(groupId: GroupId, artifactId: ArtifactId): ZIO[Client, GroupIdOrArtifactIdNotFoundError | Throwable, Option[Version]] = {
+  def latest(groupId: GroupId, artifactId: ArtifactId): ZIO[Client, GroupIdOrArtifactIdNotFoundError | Throwable, Option[Version]] =
     searchVersions(groupId, artifactId).map(_.headOption)
-  }
 
-  def isArtifact(groupId: GroupId, artifactId: ArtifactId): ZIO[Client, Throwable, Boolean] = {
+  def isArtifact(groupId: GroupId, artifactId: ArtifactId): ZIO[Client, Throwable, Boolean] =
     val url = artifactUri + artifactPath(groupId, Some(ArtifactAndVersion(artifactId))) / "maven-metadata.xml"
-    defer {
+    defer:
       val response = Client.request(url).run
       response.status match
         case s if s.isSuccess =>
@@ -146,19 +140,15 @@ object MavenCentral:
           body.contains(s"<groupId>${groupId}</groupId>")
         case _ =>
           false
-    }
-  }
 
-  def artifactExists(groupId: GroupId, artifactId: ArtifactId, version: Version): ZIO[Client, Throwable, Boolean] = {
+  def artifactExists(groupId: GroupId, artifactId: ArtifactId, version: Version): ZIO[Client, Throwable, Boolean] =
     val url = artifactUri + artifactPath(groupId, Some(ArtifactAndVersion(artifactId, Some(version)))).addTrailingSlash
-    defer {
+    defer:
       Client.request(url, Method.HEAD).run.status.isSuccess
-    }
-  }
 
-  def javadocUri(groupId: GroupId, artifactId: ArtifactId, version: Version): ZIO[Client, JavadocNotFoundError | Throwable, Url] = {
+  def javadocUri(groupId: GroupId, artifactId: ArtifactId, version: Version): ZIO[Client, JavadocNotFoundError | Throwable, Url] =
     val url = artifactUri + artifactPath(groupId, Some(ArtifactAndVersion(artifactId, Some(version)))) / s"$artifactId-$version-javadoc.jar"
-    defer {
+    defer:
       val response = Client.request(url, Method.HEAD).run
       response.status match
         case status if status.isSuccess =>
@@ -167,39 +157,35 @@ object MavenCentral:
           ZIO.fail(JavadocNotFoundError(groupId, artifactId, version)).run
         case _ =>
           ZIO.fail(UnknownError(response)).run
-    }
-  }
 
   // todo: this is terrible
   //       zip handling via zio?
   //       what about file locking
-  def downloadAndExtractZip(source: Url, destination: File): ZIO[Client & Scope, Throwable, Unit] = {
-    defer {
-      val response= Client.request(source).run
+  def downloadAndExtractZip(source: Url, destination: File): ZIO[Client, Throwable, Unit] =
+    defer:
+      val response = Client.request(source).run
       if response.status.isError then
         ZIO.fail(UnknownError(response)).run
       else
-        val zipArchiveInputStream = ZIO.fromAutoCloseable {
-          response.body.asStream.toInputStream.map(ZipArchiveInputStream(_))
-        }.run
+        run:
+          ZIO.scoped:
+            defer:
+              val zipArchiveInputStream =
+                run:
+                  ZIO.fromAutoCloseable:
+                    response.body.asStream.toInputStream.map(ZipArchiveInputStream(_))
 
-        LazyList
-          .continually(zipArchiveInputStream.getNextEntry)
-          .takeWhile {
-            case _: ArchiveEntry => true
-            case _ => false
-          }
-          .foreach { ze =>
-            val tmpFile = File(destination, ze.nn.getName)
-            if (ze.nn.isDirectory) {
-              tmpFile.mkdirs()
-            }
-            else {
-              if (!tmpFile.getParentFile.nn.exists()) {
-                tmpFile.getParentFile.nn.mkdirs()
-              }
-              Files.copy(zipArchiveInputStream, tmpFile.toPath)
-            }
-          }
-    }
-  }
+              LazyList
+                .continually(zipArchiveInputStream.getNextEntry)
+                .takeWhile:
+                  case _: ArchiveEntry => true
+                  case _ => false
+
+                .foreach: ze =>
+                  val tmpFile = File(destination, ze.nn.getName)
+                  if (ze.nn.isDirectory)
+                    tmpFile.mkdirs()
+                  else
+                    if (!tmpFile.getParentFile.nn.exists())
+                      tmpFile.getParentFile.nn.mkdirs()
+                    Files.copy(zipArchiveInputStream, tmpFile.toPath)

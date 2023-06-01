@@ -35,11 +35,6 @@ Run and output GraalVM configs, with GraalVM:
 ./sbt run
 ```
 
-Create native image, with GraalVM:
-```
-./sbt graalvm-native-image:packageBin
-```
-
 Build the container:
 ```
 pack build --builder=paketobuildpacks/builder:base javadoccentral

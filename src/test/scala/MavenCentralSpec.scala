@@ -14,16 +14,15 @@ object MavenCentralSpec extends ZIOSpecDefault:
   given CanEqual[Exit[JavadocNotFoundError | Throwable, _], Exit[JavadocNotFoundError | Throwable, _]] = CanEqual.derived
 
   def spec = suite("MavenCentral")(
-    test("artifactPath") {
+    test("artifactPath"):
       assertTrue(
         artifactPath(GroupId("org.webjars")) == Path.decode("org/webjars"),
         artifactPath(GroupId("org.webjars"), Some(ArtifactAndVersion(ArtifactId("jquery")))) == Path.decode("org/webjars/jquery"),
         artifactPath(GroupId("org.webjars"), Some(ArtifactAndVersion(ArtifactId("jquery"), Some(Version("3.6.4"))))) == Path.decode("org/webjars/jquery/3.6.4")
       )
-    },
-
-    test("searchArtifacts") {
-      defer {
+    ,
+    test("searchArtifacts"):
+      defer:
         val webjarArtifacts = searchArtifacts(GroupId("org.webjars")).run
         val springdataArtifacts = searchArtifacts(GroupId("org.springframework.data")).run
         val err = searchArtifacts(GroupId("zxcv12313asdf")).flip.run
@@ -34,11 +33,9 @@ object MavenCentralSpec extends ZIOSpecDefault:
           springdataArtifacts.size > 10,
           err.isInstanceOf[GroupIdNotFoundError],
         )
-      }
-    },
-
-    test("searchVersions") {
-      defer {
+    ,
+    test("searchVersions"):
+      defer:
         val versions = searchVersions(GroupId("org.webjars"), ArtifactId("jquery")).run
         val err = searchVersions(GroupId("com.jamesward"), ArtifactId("zxcvasdf")).flip.run
 
@@ -47,36 +44,28 @@ object MavenCentralSpec extends ZIOSpecDefault:
           versions.indexOf(Version("1.10.1")) < versions.indexOf(Version("1.0.0")),
           err.isInstanceOf[GroupIdOrArtifactIdNotFoundError],
         )
-      }
-    },
-
-    test("latest") {
-      defer {
+    ,
+    test("latest"):
+      defer:
         assertTrue(latest(GroupId("com.jamesward"), ArtifactId("travis-central-test")).run.get == Version("0.0.15"))
-      }
-    },
-
-    test("isArtifact") {
-      defer {
+    ,
+    test("isArtifact"):
+      defer:
         assertTrue(
           isArtifact(GroupId("com.jamesward"), ArtifactId("travis-central-test")).run,
           !isArtifact(GroupId("org.springframework"), ArtifactId("data")).run,
           !isArtifact(GroupId("org.springframework"), ArtifactId("cloud")).run,
         )
-      }
-    },
-
-    test("artifactExists") {
-      defer {
+    ,
+    test("artifactExists"):
+      defer:
         assertTrue(
           artifactExists(GroupId("com.jamesward"), ArtifactId("travis-central-test"), Version("0.0.15")).run,
           !artifactExists(GroupId("com.jamesward"), ArtifactId("travis-central-test"), Version("0.0.0")).run,
         )
-      }
-    },
-
-    test("javadocUri") {
-      defer {
+    ,
+    test("javadocUri"):
+      defer:
         val doesExist = javadocUri(GroupId("org.webjars"), ArtifactId("webjars-locator-core"), Version("0.52")).run
         val doesNotExist = javadocUri(GroupId("com.jamesward"), ArtifactId("travis-central-test"), Version("0.0.15")).exit.run // todo: flip no worky?
 
@@ -84,12 +73,9 @@ object MavenCentralSpec extends ZIOSpecDefault:
           doesNotExist == Exit.fail(JavadocNotFoundError(GroupId("com.jamesward"), ArtifactId("travis-central-test"), Version("0.0.15"))),
           doesExist == Url("https://repo1.maven.org/maven2/org/webjars/webjars-locator-core/0.52/webjars-locator-core-0.52-javadoc.jar"),
         )
-      }
-    },
-
-    test("downloadAndExtractZip") {
+    ,
+    test("downloadAndExtractZip"):
       val url = Url("https://repo1.maven.org/maven2/com/jamesward/travis-central-test/0.0.15/travis-central-test-0.0.15.jar")
       val tmpFile = Files.createTempDirectory("test").nn.toFile.nn
       downloadAndExtractZip(url, tmpFile).as(assertTrue(tmpFile.list().nn.contains("META-INF")))
-    }.provide(Client.default ++ Scope.default),
   ).provide(Client.default)

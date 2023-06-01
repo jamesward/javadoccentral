@@ -17,8 +17,8 @@ object AppSpec extends ZIOSpecDefault:
   given CanEqual[Status, Status] = CanEqual.derived
 
   def spec = suite("App")(
-    test("routing") {
-      defer {
+    test("routing"):
+      defer:
         val blocker = ConcurrentMap.empty[GroupArtifactVersion, Promise[Nothing, Unit]].run
         val latestCache = Cache.make(50, 60.minutes, Lookup(App.latest)).run
         val javadocExistsCache = Cache.make(50, 60.minutes, Lookup(App.javadocExists)).run
@@ -32,7 +32,7 @@ object AppSpec extends ZIOSpecDefault:
 
         val indexPath = App.appWithMiddleware(blocker, latestCache, javadocExistsCache).runZIO(Request.get(URL(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "index.html"))).run
         val filePath = App.appWithMiddleware(blocker, latestCache, javadocExistsCache).runZIO(Request.get(URL(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "org" / "webjars" / "package-summary.html"))).run
-        val notFoundFilePath = App.appWithMiddleware(blocker, latestCache, javadocExistsCache).runZIO(Request.get(URL(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "asdf"))).exit.run
+        val notFoundFilePath = App.appWithMiddleware(blocker, latestCache, javadocExistsCache).runZIO(Request.get(URL(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "asdf"))).run
 
         assertTrue(
           App.appWithMiddleware(blocker, latestCache, javadocExistsCache).runZIO(Request.get(URL(Path.empty))).run.status.isSuccess,
@@ -58,8 +58,6 @@ object AppSpec extends ZIOSpecDefault:
 
           indexPath.status.isSuccess,
           filePath.status.isSuccess,
-          notFoundFilePath.isFailure,
+          notFoundFilePath.status == Status.NotFound,
         )
-      }
-    },
-  ).provide(Client.default, Scope.default)
+  ).provide(Client.default)
