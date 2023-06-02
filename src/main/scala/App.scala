@@ -14,6 +14,7 @@ import zio.stream.ZStream
 import java.io.File
 import java.nio.file.{AccessDeniedException, Files}
 
+
 object App extends ZIOAppDefault:
   // todo: maybe via env?
   val tmpDir = Files.createTempDirectory("jars").nn.toFile
@@ -80,7 +81,9 @@ object App extends ZIOAppDefault:
         Response.redirect(URL(path)) // todo: perm when not latest
     .catchAllCause:
       case Cause.Fail(MavenCentral.JavadocNotFoundError(groupId, artifactId, version), _) =>
-        Handler.fromZIO(MavenCentral.searchVersions(groupId, artifactId)).flatMap: versions =>
+        Handler.fromZIO:
+          MavenCentral.searchVersions(groupId, artifactId)
+        .flatMap: versions =>
           Handler.template("javadocs.dev")(UI.noJavadoc(groupId, artifactId, versions, version))
         .catchAllCause:
           case Cause.Fail(MavenCentral.GroupIdOrArtifactIdNotFoundError(_, _), _) =>
