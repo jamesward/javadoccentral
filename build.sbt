@@ -16,13 +16,13 @@ scalacOptions ++= Seq(
 
 scalaVersion := "3.3.0"
 
-val zioVersion = "2.0.13"
+val zioVersion = "2.0.15"
 
 libraryDependencies ++= Seq(
   "dev.zio" %% "zio"                % zioVersion,
   "dev.zio" %% "zio-concurrent"     % zioVersion,
   "dev.zio" %% "zio-cache"          % "0.2.3",
-  "dev.zio" %% "zio-logging"        % "2.1.11",
+  "dev.zio" %% "zio-logging"        % "2.1.13",
   "dev.zio" %% "zio-direct"         % "1.0.0-RC7",
   "dev.zio" %% "zio-direct-streams" % "1.0.0-RC7",
   "dev.zio" %% "zio-http"           % "3.0.0-RC2",
