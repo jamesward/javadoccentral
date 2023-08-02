@@ -1,6 +1,7 @@
 JavaDoc Central
 ---------------
-![CloudBuild](https://badger-x5ht4amjia-uc.a.run.app/build/status?project=jamesward&id=4097b960-a9af-4a61-b309-0e372889552e)
+
+![CloudBuild](https://badger-bdrmenfgcq-uc.a.run.app/build/status?project=jamesward&id=4097b960-a9af-4a61-b309-0e372889552e)
 
 Artifacts in Maven Central typically provide a JavaDoc Jar that contains the versioned documentation for the artifact.  While IDEs use this to display the docs for a library, it is also sometimes nice to browse the docs in a web browser.  This project is a simple web app that allows you to view the JavaDoc for any artifact in Maven Central.
 
