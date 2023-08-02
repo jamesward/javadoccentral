@@ -1,6 +1,5 @@
-import MavenCentral.{ArtifactId, GroupId, Version}
-
 import zio.http.html.*
+import com.jamesward.zio_mavencentral.MavenCentral
 
 object UI:
 
@@ -13,7 +12,7 @@ object UI:
       input(valueAttr := "Go!", typeAttr := "submit"),
     )
 
-  def invalidGroupId(groupId: GroupId): Html =
+  def invalidGroupId(groupId: MavenCentral.GroupId): Html =
     form(actionAttr := "/", methodAttr := "get",
       label(
         "GroupId:",
@@ -30,7 +29,7 @@ object UI:
       input(valueAttr := "Go!", typeAttr := "submit"),
     )
 
-  def needArtifactId(groupId: GroupId, artifactIds: Seq[ArtifactId]): Html =
+  def needArtifactId(groupId: MavenCentral.GroupId, artifactIds: Seq[MavenCentral.ArtifactId]): Html =
     form(actionAttr := s"/$groupId", methodAttr := "get",
       label(
         a(
@@ -53,7 +52,7 @@ object UI:
       input(valueAttr := "Go!", typeAttr := "submit"),
     )
 
-  def needVersion(groupId: GroupId, artifactId: ArtifactId, versions: Seq[Version]): Html =
+  def needVersion(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, versions: Seq[MavenCentral.Version]): Html =
     form(actionAttr := s"/$groupId/$artifactId", methodAttr := "get",
       label(
         a(hrefAttr := "/", "GroupId"),
@@ -78,7 +77,7 @@ object UI:
       input(valueAttr := "Go!", typeAttr := "submit")
     )
 
-  def noJavadoc(groupId: GroupId, artifactId: ArtifactId, versions: Seq[Version], version: Version): Html =
+  def noJavadoc(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, versions: Seq[MavenCentral.Version], version: MavenCentral.Version): Html =
     div(
       p(s"Version $version of that artifact does not exist or does not have a JavaDoc jar."),
       needVersion(groupId, artifactId, versions),

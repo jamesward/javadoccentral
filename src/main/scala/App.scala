@@ -1,15 +1,10 @@
-import MavenCentral.given
+import com.jamesward.zio_mavencentral.MavenCentral
+
 import zio.*
 import zio.cache.{Cache, Lookup}
 import zio.concurrent.ConcurrentMap
 import zio.direct.*
 import zio.http.*
-import zio.http.html.*
-import zio.http.Path.Segment
-import zio.http.Status.TemporaryRedirect
-import zio.http.netty.NettyConfig
-import zio.http.netty.client.NettyClientDriver
-import zio.stream.ZStream
 
 import java.io.File
 import java.nio.file.{AccessDeniedException, Files}

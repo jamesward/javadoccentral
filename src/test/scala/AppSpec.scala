@@ -1,25 +1,19 @@
-import App.given
-import MavenCentral.*
+import com.jamesward.zio_mavencentral.MavenCentral
+import com.jamesward.zio_mavencentral.MavenCentral.given
 import zio.cache.{Cache, Lookup}
 import zio.concurrent.ConcurrentMap
-import zio.*
 import zio.direct.*
-import zio.http.{Client, Header, Path, QueryParams, Request, Status, URL}
+import zio.http.*
 import zio.test.*
 import zio.test.Assertion.*
-import zio.{Chunk, Promise, Runtime, Scope, ZIO}
-
-import java.net.URI
-import java.nio.file.Files
+import zio.*
 
 object AppSpec extends ZIOSpecDefault:
-
-  given CanEqual[Status, Status] = CanEqual.derived
 
   def spec = suite("App")(
     test("routing"):
       defer:
-        val blocker = ConcurrentMap.empty[GroupArtifactVersion, Promise[Nothing, Unit]].run
+        val blocker = ConcurrentMap.empty[MavenCentral.GroupArtifactVersion, Promise[Nothing, Unit]].run
         val latestCache = Cache.make(50, 60.minutes, Lookup(App.latest)).run
         val javadocExistsCache = Cache.make(50, 60.minutes, Lookup(App.javadocExists)).run
 
@@ -48,7 +42,7 @@ object AppSpec extends ZIOSpecDefault:
           versionResp.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward/travis-central-test/0.0.15")),
 
           latest.status.isRedirection,
-          latest.headers.get(Header.Location).exists(_.url.path == Path.decode("/org.webjars/jquery/3.6.4")),
+          latest.headers.get(Header.Location).exists(_.url.path == Path.decode("/org.webjars/jquery/3.7.0")),
 
           groupIdRedir.status.isRedirection,
           groupIdRedir.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward")),
