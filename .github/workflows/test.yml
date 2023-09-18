@@ -19,4 +19,4 @@ jobs:
     - uses: buildpacks/github-actions/setup-pack@v5.0.0
 
     - run: |
-        pack build --builder=paketobuildpacks/builder:base
+        pack build --builder=paketobuildpacks/builder:base javadoccentral
