@@ -1,0 +1,21 @@
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+
+    - uses: actions/setup-java@v3
+      with:
+        distribution: 'temurin'
+        java-version: 17
+        cache: 'sbt'
+
+    - run: |
+        ./sbt test
+        ./sbt clean
+
+    - uses: buildpacks/github-actions/setup-pack@v5.0.0
+      run: |
+        pack build --builder=paketobuildpacks/builder:base
