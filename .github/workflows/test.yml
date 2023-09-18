@@ -17,5 +17,6 @@ jobs:
         ./sbt clean
 
     - uses: buildpacks/github-actions/setup-pack@v5.0.0
-      run: |
+
+    - run: |
         pack build --builder=paketobuildpacks/builder:base
