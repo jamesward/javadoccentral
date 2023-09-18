@@ -51,6 +51,7 @@ object App extends ZIOAppDefault:
   type LatestCache = Cache[MavenCentral.GroupArtifact, MavenCentral.GroupIdOrArtifactIdNotFoundError | Throwable, Path]
   type JavadocExistsCache = Cache[MavenCentral.GroupArtifactVersion, MavenCentral.JavadocNotFoundError | Throwable, Path]
 
+  // todo: is the option handling here correct?
   def latest(groupArtifact: MavenCentral.GroupArtifact): ZIO[Client, MavenCentral.GroupIdOrArtifactIdNotFoundError | Throwable, Path] =
     defer:
       val maybeLatest = MavenCentral.latest(groupArtifact.groupId, groupArtifact.artifactId).run
@@ -197,8 +198,14 @@ object App extends ZIOAppDefault:
     // todo: log filtering so they don't show up in tests / runtime config
     defer:
       val blocker = ConcurrentMap.empty[MavenCentral.GroupArtifactVersion, Promise[Nothing, Unit]].run
-      val latestCache = Cache.make(50, 1.hour, Lookup(latest)).run
-      val javadocExistsCache = Cache.make(50, Duration.Infinity, Lookup(javadocExists)).run
+      val latestCache = Cache.makeWith(1_000, Lookup(latest)) {
+        case Exit.Success(_) => 1.hour
+        case Exit.Failure(_) => Duration.Zero
+      }.run
+      val javadocExistsCache = Cache.makeWith(1_000, Lookup(javadocExists)) {
+        case Exit.Success(_) => Duration.Infinity
+        case Exit.Failure(_) => Duration.Zero
+      }.run
       val app = appWithMiddleware(blocker, latestCache, javadocExistsCache)
       Server.serve(app).run
       ()
