@@ -9,7 +9,7 @@ organization := "default"
 name := "javadoccentral"
 
 // so we don't have to wait on Maven Central sync
-resolvers += "OSS Staging" at "https://oss.sonatype.org/content/groups/staging"
+//resolvers += "OSS Staging" at "https://oss.sonatype.org/content/groups/staging"
 
 scalacOptions ++= Seq(
   "-Yexplicit-nulls",
@@ -28,10 +28,10 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-logging"        % "2.1.14",
   "dev.zio" %% "zio-direct"         % "1.0.0-RC7",
   "dev.zio" %% "zio-direct-streams" % "1.0.0-RC7",
-  "dev.zio" %% "zio-http"           % "3.0.0-RC2",
+  "dev.zio" %% "zio-http"           % "3.0.0-RC3",
   "org.apache.commons" %  "commons-compress" % "1.24.0",
 
-  "com.jamesward" %% "zio-mavencentral" % "0.0.6",
+  "com.jamesward" %% "zio-mavencentral" % "0.0.7",
 
   "dev.zio" %% "zio-test"           % zioVersion % Test,
   "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,

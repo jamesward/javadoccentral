@@ -1,4 +1,4 @@
-import zio.http.html.*
+import zio.http.template.*
 import com.jamesward.zio_mavencentral.MavenCentral
 
 object UI:

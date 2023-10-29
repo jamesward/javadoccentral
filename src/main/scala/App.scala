@@ -1,35 +1,36 @@
 import com.jamesward.zio_mavencentral.MavenCentral
-
 import zio.*
 import zio.cache.{Cache, Lookup}
 import zio.concurrent.ConcurrentMap
 import zio.direct.*
 import zio.http.*
+import zio.http.codec.PathCodec
 
-import java.io.File
-import java.nio.file.{AccessDeniedException, Files}
+import java.io.{File, FileNotFoundException}
+import java.nio.file.Files
+import scala.annotation.unused
 
 
 object App extends ZIOAppDefault:
   // todo: maybe via env?
-  val tmpDir = Files.createTempDirectory("jars").nn.toFile
+  private val tmpDir = Files.createTempDirectory("jars").nn.toFile
 
   given CanEqual[Path, Path] = CanEqual.derived
   given CanEqual[Method, Method] = CanEqual.derived
 
-  def withGroupId(groupId: MavenCentral.GroupId): Handler[Client, Nothing, Request, Response] =
+  def withGroupId(groupId: MavenCentral.GroupId, @unused request: Request): Handler[Client & Scope, Nothing, (MavenCentral.GroupId, Request), Response] =
     Handler.fromZIO:
       MavenCentral.searchArtifacts(groupId)
     .flatMap: artifacts =>
       Handler.template("javadocs.dev")(UI.needArtifactId(groupId, artifacts))
     .catchAllCause:
       case Cause.Fail(_: MavenCentral.GroupIdNotFoundError, _) =>
-        Handler.notFound
+        Handler.notFound(groupId.toString)
       case cause =>
         Handler.fromZIO:
           ZIO.logErrorCause(cause).as(Response.status(Status.InternalServerError))
 
-  def withArtifactId(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId): Handler[Client, Nothing, Request, Response] =
+  def withArtifactId(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, @unused request: Request): Handler[Client & Scope, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, Request), Response] =
     Handler.fromZIO:
       defer:
         val isArtifact = MavenCentral.isArtifact(groupId, artifactId).run
@@ -43,7 +44,7 @@ object App extends ZIOAppDefault:
         Handler.template("javadocs.dev")(UI.needVersion(groupId, artifactId, versions))
     .catchAllCause:
       case Cause.Fail(_: MavenCentral.GroupIdOrArtifactIdNotFoundError, _) =>
-        Handler.notFound
+        Handler.notFound(MavenCentral.GroupArtifact(groupId, artifactId).toString)
       case cause =>
         Handler.fromZIO:
           ZIO.logErrorCause(cause).as(Response.status(Status.InternalServerError))
@@ -52,7 +53,7 @@ object App extends ZIOAppDefault:
   type JavadocExistsCache = Cache[MavenCentral.GroupArtifactVersion, MavenCentral.JavadocNotFoundError | Throwable, Path]
 
   // todo: is the option handling here correct?
-  def latest(groupArtifact: MavenCentral.GroupArtifact): ZIO[Client, MavenCentral.GroupIdOrArtifactIdNotFoundError | Throwable, Path] =
+  def latest(groupArtifact: MavenCentral.GroupArtifact): ZIO[Client & Scope, MavenCentral.GroupIdOrArtifactIdNotFoundError | Throwable, Path] =
     defer:
       val maybeLatest = MavenCentral.latest(groupArtifact.groupId, groupArtifact.artifactId).run
       maybeLatest.fold:
@@ -60,12 +61,13 @@ object App extends ZIOAppDefault:
       .apply: latestVersion =>
         groupArtifact / latestVersion
 
-  def javadocExists(groupArtifactVersion: MavenCentral.GroupArtifactVersion): ZIO[Client, MavenCentral.JavadocNotFoundError | Throwable, Path] =
+  def javadocExists(groupArtifactVersion: MavenCentral.GroupArtifactVersion): ZIO[Client & Scope, MavenCentral.JavadocNotFoundError | Throwable, Path] =
     defer:
       MavenCentral.javadocUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version).run // javadoc exists
       groupArtifactVersion.toPath / "index.html"
 
-  def withVersion(groupArtifactVersion: MavenCentral.GroupArtifactVersion)(latestCache: LatestCache, javadocExistsCache: JavadocExistsCache): Handler[Client, Nothing, Request, Response] =
+  def withVersion(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, @unused request: Request)(latestCache: LatestCache, javadocExistsCache: JavadocExistsCache): Handler[Client & Scope, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Request), Response] =
+    val groupArtifactVersion = MavenCentral.GroupArtifactVersion(groupId, artifactId, version)
     val javadocPathZIO =
       if groupArtifactVersion.version == MavenCentral.Version.latest then
         latestCache.get(groupArtifactVersion.noVersion)
@@ -83,7 +85,7 @@ object App extends ZIOAppDefault:
           Handler.template("javadocs.dev")(UI.noJavadoc(groupId, artifactId, versions, version))
         .catchAllCause:
           case Cause.Fail(MavenCentral.GroupIdOrArtifactIdNotFoundError(_, _), _) =>
-            Handler.notFound // todo: better handling
+            Handler.notFound(groupArtifactVersion.toString) // todo: better handling
           case cause =>
             Handler.fromZIO:
               ZIO.logErrorCause(cause).as(Response.status(Status.InternalServerError))
@@ -93,43 +95,8 @@ object App extends ZIOAppDefault:
 
   type Blocker = ConcurrentMap[MavenCentral.GroupArtifactVersion, Promise[Nothing, Unit]]
 
-  // From: zio.http.determineMediaType
-  def determineMediaType(filePath: String): Option[MediaType] =
-    filePath.lastIndexOf(".") match
-      case -1 => None
-      case i =>
-        // Extract file extension
-        filePath.substring(i + 1) match
-          case s: String => MediaType.forFileExtension(s)
-          case _ => None
-
-  // From: zio.http.fromFileZIO
-  def fileHandler(file: File): Handler[Any, AccessDeniedException, Request, Response] =
-    if file.isFile && !file.canRead then
-      Handler.fail(AccessDeniedException(file.getAbsolutePath))
-    else
-      Handler.fromZIO:
-        ZIO.attempt:
-          if file.isFile then
-            val length = Headers(Header.ContentLength(file.length()))
-            val response = Response(headers = length, body = Body.fromFile(file))
-            val pathName = file.toPath.toString
-
-            // Set MIME type in the response headers. This is only relevant in
-            // case of RandomAccessFile transfers as browsers use the MIME type,
-            // not the file extension, to determine how to process a URL.
-            // {{{<a href="MSDN Doc">https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Type</a>}}}
-            determineMediaType(pathName).fold(response): mediaType =>
-              response.withHeader(Header.ContentType(mediaType))
-          else
-            Response.status(Status.NotFound)
-        .catchAll: e =>
-          val msg = e.getMessage match
-            case s: String => s
-            case _ => "Unknown Error"
-          ZIO.succeed(Response.text(msg).withStatus(Status.InternalServerError))
-
-  def withFile(groupArtifactVersion: MavenCentral.GroupArtifactVersion, file: Path, blocker: Blocker): Handler[Client, Nothing, Request, Response] =
+  def withFile(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, file: Path, @unused request: Request, blocker: Blocker): Handler[Client & Scope, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
+    val groupArtifactVersion = MavenCentral.GroupArtifactVersion(groupId, artifactId, version)
     val javadocFileZIO = defer:
       val javadocDir = File(tmpDir, groupArtifactVersion.toString)
       val javadocFile = File(javadocDir, file.toString)
@@ -150,49 +117,66 @@ object App extends ZIOAppDefault:
 
       javadocFile
 
-    Handler.fromZIO(javadocFileZIO).flatMap: javadocFile =>
-      fileHandler(javadocFile)
-    .catchAllCause:
-      case Cause.Fail(MavenCentral.JavadocNotFoundError(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version), _) =>
-        Response.redirect(URL(groupArtifactVersion.toPath)).toHandler
+    // todo: could be better
+    Handler.fromZIO(javadocFileZIO).flatMap(Handler.fromFile).catchAllCause:
+      case Cause.Fail(error, _) =>
+        if error.isInstanceOf[MavenCentral.JavadocNotFoundError] then
+          Response.redirect(URL(groupArtifactVersion.toPath)).toHandler
+        if error.isInstanceOf[FileNotFoundException] then
+          Response.notFound((groupArtifactVersion.toPath ++ file).toString).toHandler
+        else
+          Handler.internalServerError
       case cause =>
         Handler.fromZIO:
           ZIO.logErrorCause(cause).as(Response.status(Status.InternalServerError))
 
-  def app(latestCache: LatestCache, javadocExistsCache: JavadocExistsCache, blocker: Blocker) = Http.collectHandler[Request]:
-    case Method.GET -> Path.empty => Handler.template("javadocs.dev")(UI.index)
-    case Method.GET -> Path.root => Handler.template("javadocs.dev")(UI.index)
-    case Method.GET -> Path.root / "favicon.ico" => Handler.notFound
-    case Method.GET -> Path.root / MavenCentral.GroupId(groupId) => withGroupId(groupId)
-    case Method.GET -> Path.root / MavenCentral.GroupId(groupId) / MavenCentral.ArtifactId(artifactId) => withArtifactId(groupId, artifactId)
-    case Method.GET -> Path.root / MavenCentral.GroupId(groupId) / MavenCentral.ArtifactId(artifactId) / MavenCentral.Version(version) => withVersion(MavenCentral.GroupArtifactVersion(groupId, artifactId, version))(latestCache, javadocExistsCache)
-    case Method.GET -> "" /: MavenCentral.GroupId(groupId) /: MavenCentral.ArtifactId(artifactId) /: MavenCentral.Version(version) /: file => withFile(MavenCentral.GroupArtifactVersion(groupId, artifactId, version), file, blocker)
 
-  val redirectQueryParams = HttpAppMiddleware.ifRequestThenElseFunction(_.url.queryParams.nonEmpty)(
-    // remove trailing slash on groupId & artifactId
-    ifFalse = request =>
-      if request.path != Path.empty && request.path != Path.root && request.path.trailingSlash then
-        HttpAppMiddleware.redirect(URL(request.path.dropTrailingSlash), true)
+  private def groupIdExtractor(groupId: String) = MavenCentral.GroupId.unapply(groupId).toRight(groupId)
+  private val groupId: PathCodec[MavenCentral.GroupId] =
+    string("groupId").transformOrFailLeft(groupIdExtractor)(_.toString)
+
+  private def artifactIdExtractor(artifactId: String) = MavenCentral.ArtifactId.unapply(artifactId).toRight(artifactId)
+  private val artifactId: PathCodec[MavenCentral.ArtifactId] =
+    string("artifactId").transformOrFailLeft(artifactIdExtractor)(_.toString)
+
+  private def versionExtractor(version: String) = MavenCentral.Version.unapply(version).toRight(version)
+  private val version: PathCodec[MavenCentral.Version] =
+    string("version").transformOrFailLeft(versionExtractor)(_.toString)
+
+  def app(latestCache: LatestCache, javadocExistsCache: JavadocExistsCache, blocker: Blocker): Routes[Client & Scope, Nothing] =
+    Routes[Client & Scope, Nothing](
+      Method.GET / "" -> Handler.template("javadocs.dev")(UI.index),
+      Method.GET / "favicon.io" -> Handler.notFound,
+      Method.GET / groupId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, Request)](withGroupId),
+      Method.GET / groupId / artifactId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, Request)](withArtifactId),
+      Method.GET / groupId / artifactId / version -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Request)] {
+        (groupId, artifactId, version, request) =>
+          withVersion(groupId, artifactId, version, request)(latestCache, javadocExistsCache)
+      },
+      Method.GET / groupId / artifactId / version / trailing -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request)] {
+        (groupId, artifactId, version, file, request) =>
+          withFile(groupId, artifactId, version, file, request, blocker)
+      },
+    )
+
+  private val redirectQueryParams = HandlerAspect.intercept: (request, response) =>
+    request.url.queryParams.get("groupId").map: groupId =>
+      request.url.path(Path.root / groupId).queryParams()
+    .orElse:
+      request.url.queryParams.get("artifactId").map: artifactId =>
+        request.url.path(request.path / artifactId).queryParams()
+    .orElse:
+      request.url.queryParams.get("version").map: version =>
+        request.url.path(request.path / version).queryParams()
+    .fold(
+      if request.url.path.hasTrailingSlash then
+        Response.redirect(request.url.dropTrailingSlash)
       else
-        RequestHandlerMiddleware.identity,
+        response
+    )(Response.redirect(_, true))
 
-    // redirected query strings form submissions to path style
-    ifTrue = request =>
-      val url = request.url.queryParams.get("groupId").map: chunks =>
-        request.url.withPath(Path.root / chunks.head).withQueryParams()
-      .orElse:
-        request.url.queryParams.get("artifactId").map: chunks =>
-          request.url.withPath(request.path / chunks.head).withQueryParams()
-      .orElse:
-        request.url.queryParams.get("version").map: chunks =>
-          request.url.withPath(request.path / chunks.head).withQueryParams()
-      .getOrElse(request.url)
-
-      HttpAppMiddleware.redirect(url, true)
-  )
-
-  def appWithMiddleware(blocker: Blocker, latestCache: LatestCache, javadocExistsCache: JavadocExistsCache): Http[Client, Nothing, Request, Response] =
-    app(latestCache, javadocExistsCache, blocker) @@ redirectQueryParams @@ HttpAppMiddleware.requestLogging()
+  def appWithMiddleware(blocker: Blocker, latestCache: LatestCache, javadocExistsCache: JavadocExistsCache): HttpApp[Client & Scope] =
+    app(latestCache, javadocExistsCache, blocker).toHttpApp @@ redirectQueryParams @@ Middleware.requestLogging()
 
   def run =
     // todo: log filtering so they don't show up in tests / runtime config
@@ -209,4 +193,4 @@ object App extends ZIOAppDefault:
       val app = appWithMiddleware(blocker, latestCache, javadocExistsCache)
       Server.serve(app).run
       ()
-    .provide(Server.default, Client.default)
+    .provide(Server.default, Client.default, Scope.default)
