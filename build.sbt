@@ -31,7 +31,7 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-http"           % "3.0.0-RC3",
   "org.apache.commons" %  "commons-compress" % "1.25.0",
 
-  "com.jamesward" %% "zio-mavencentral" % "0.0.7",
+  "com.jamesward" %% "zio-mavencentral" % "0.0.8",
 
   "dev.zio" %% "zio-test"           % zioVersion % Test,
   "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,
