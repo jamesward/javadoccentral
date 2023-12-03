@@ -19,19 +19,19 @@ scalacOptions ++= Seq(
 
 scalaVersion := "3.3.1"
 
-val zioVersion = "2.0.18"
+val zioVersion = "2.0.19"
 
 libraryDependencies ++= Seq(
   "dev.zio" %% "zio"                % zioVersion,
   "dev.zio" %% "zio-concurrent"     % zioVersion,
   "dev.zio" %% "zio-cache"          % "0.2.3",
-  "dev.zio" %% "zio-logging"        % "2.1.14",
+  "dev.zio" %% "zio-logging"        % "2.1.16",
   "dev.zio" %% "zio-direct"         % "1.0.0-RC7",
   "dev.zio" %% "zio-direct-streams" % "1.0.0-RC7",
   "dev.zio" %% "zio-http"           % "3.0.0-RC4",
-  "org.apache.commons" %  "commons-compress" % "1.24.0",
+  "org.apache.commons" %  "commons-compress" % "1.25.0",
 
-  "com.jamesward" %% "zio-mavencentral" % "0.0.7",
+  "com.jamesward" %% "zio-mavencentral" % "0.0.8",
 
   "dev.zio" %% "zio-test"           % zioVersion % Test,
   "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,
