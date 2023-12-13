@@ -19,7 +19,7 @@ scalacOptions ++= Seq(
 
 scalaVersion := "3.3.1"
 
-val zioVersion = "2.0.19"
+val zioVersion = "2.0.20"
 
 libraryDependencies ++= Seq(
   "dev.zio" %% "zio"                % zioVersion,

@@ -29,27 +29,23 @@ object AppSpec extends ZIOSpecDefault:
         val filePath = App.appWithMiddleware(blocker, latestCache, javadocExistsCache).runZIO(Request.get(URL(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "org" / "webjars" / "package-summary.html"))).run
         val notFoundFilePath = App.appWithMiddleware(blocker, latestCache, javadocExistsCache).runZIO(Request.get(URL(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "asdf"))).run
 
-        /*
-        assertTrue broken with defer:
-        [error] 31 |        assertTrue(
-        [error]    |java.lang.Exception: Expected an expression. This is a partially applied Term. Try eta-expanding the term first.
-         */
-
-        assert(App.appWithMiddleware(blocker, latestCache, javadocExistsCache).runZIO(Request.get(URL(Path.empty))).run.status.isSuccess)(isTrue) &&
-        assert(App.appWithMiddleware(blocker, latestCache, javadocExistsCache).runZIO(Request.get(URL(Path.root))).run.status.isSuccess)(isTrue) &&
-        assert(groupIdResp.status.isRedirection)(isTrue) &&
-        assert(groupIdResp.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward")))(isTrue) &&
-        assert(artifactIdResp.status.isRedirection)(isTrue) &&
-        assert(artifactIdResp.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward/travis-central-test")))(isTrue) &&
-        assert(versionResp.status.isRedirection)(isTrue) &&
-        assert(versionResp.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward/travis-central-test/0.0.15")))(isTrue) &&
-        assert(latest.status.isRedirection)(isTrue) &&
-        assert(latest.headers.get(Header.Location).exists(_.url.path == Path.decode("/org.webjars/jquery/3.7.1")))(isTrue) &&
-        assert(groupIdRedir.status.isRedirection)(isTrue)
-        assert(groupIdRedir.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward")))(isTrue) &&
-        assert(artifactIdRedir.status.isRedirection)(isTrue) &&
-        assert(artifactIdRedir.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward/travis-central-test")))(isTrue) &&
-        assert(indexPath.status.isSuccess)(isTrue) &&
-        assert(filePath.status.isSuccess)(isTrue) &&
-        assert(notFoundFilePath.status == Status.NotFound)(isTrue)
+        assertTrue(
+          App.appWithMiddleware(blocker, latestCache, javadocExistsCache).runZIO(Request.get(URL(Path.empty))).run.status.isSuccess,
+          App.appWithMiddleware(blocker, latestCache, javadocExistsCache).runZIO(Request.get(URL(Path.root))).run.status.isRedirection,
+          groupIdResp.status.isRedirection,
+          groupIdResp.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward")),
+          artifactIdResp.status.isRedirection,
+          artifactIdResp.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward/travis-central-test")),
+          versionResp.status.isRedirection,
+          versionResp.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward/travis-central-test/0.0.15")),
+          latest.status.isRedirection,
+          latest.headers.get(Header.Location).exists(_.url.path == Path.decode("/org.webjars/jquery/3.7.1")),
+          groupIdRedir.status.isRedirection,
+          groupIdRedir.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward")),
+          artifactIdRedir.status.isRedirection,
+          artifactIdRedir.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward/travis-central-test")),
+          indexPath.status.isSuccess,
+          filePath.status.isSuccess,
+          notFoundFilePath.status == Status.NotFound,
+        )
   ).provide(Client.default, Scope.default)
