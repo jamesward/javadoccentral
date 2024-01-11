@@ -48,4 +48,4 @@ object AppSpec extends ZIOSpecDefault:
           filePath.status.isSuccess,
           notFoundFilePath.status == Status.NotFound,
         )
-  ).provide(Client.default, Scope.default)
+  ).provide(Client.default)
