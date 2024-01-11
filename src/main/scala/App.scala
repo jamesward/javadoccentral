@@ -153,7 +153,7 @@ object App extends ZIOAppDefault:
   def app(latestCache: LatestCache, javadocExistsCache: JavadocExistsCache, blocker: Blocker): Routes[Client, Nothing] =
     Routes[Client, Nothing](
       Method.GET / "" -> Handler.template("javadocs.dev")(UI.index),
-      Method.GET / "favicon.io" -> Handler.notFound,
+      Method.GET / "favicon.ico" -> Handler.notFound,
       Method.GET / groupId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, Request)](withGroupId),
       Method.GET / groupId / artifactId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, Request)](withArtifactId),
       Method.GET / groupId / artifactId / version -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Request)] {
