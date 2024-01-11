@@ -18,9 +18,10 @@ object App extends ZIOAppDefault:
   given CanEqual[Path, Path] = CanEqual.derived
   given CanEqual[Method, Method] = CanEqual.derived
 
-  def withGroupId(groupId: MavenCentral.GroupId, @unused request: Request): Handler[Client & Scope, Nothing, (MavenCentral.GroupId, Request), Response] =
+  def withGroupId(groupId: MavenCentral.GroupId, @unused request: Request): Handler[Client, Nothing, (MavenCentral.GroupId, Request), Response] =
     Handler.fromZIO:
-      MavenCentral.searchArtifacts(groupId)
+      ZIO.scoped:
+        MavenCentral.searchArtifacts(groupId)
     .flatMap: artifacts =>
       Handler.template("javadocs.dev")(UI.needArtifactId(groupId, artifacts))
     .catchAllCause:
@@ -30,12 +31,13 @@ object App extends ZIOAppDefault:
         Handler.fromZIO:
           ZIO.logErrorCause(cause).as(Response.status(Status.InternalServerError))
 
-  def withArtifactId(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, @unused request: Request): Handler[Client & Scope, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, Request), Response] =
+  def withArtifactId(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, @unused request: Request): Handler[Client, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, Request), Response] =
     Handler.fromZIO:
-      defer:
-        val isArtifact = MavenCentral.isArtifact(groupId, artifactId).run
-        Option.when(isArtifact):
-          MavenCentral.searchVersions(groupId, artifactId).run
+      ZIO.scoped:
+        defer:
+          val isArtifact = MavenCentral.isArtifact(groupId, artifactId).run
+          Option.when(isArtifact):
+            MavenCentral.searchVersions(groupId, artifactId).run
     .flatMap: maybeVersions =>
       maybeVersions.fold:
         // todo: better api?
@@ -53,20 +55,22 @@ object App extends ZIOAppDefault:
   type JavadocExistsCache = Cache[MavenCentral.GroupArtifactVersion, MavenCentral.JavadocNotFoundError | Throwable, Path]
 
   // todo: is the option handling here correct?
-  def latest(groupArtifact: MavenCentral.GroupArtifact): ZIO[Client & Scope, MavenCentral.GroupIdOrArtifactIdNotFoundError | Throwable, Path] =
-    defer:
-      val maybeLatest = MavenCentral.latest(groupArtifact.groupId, groupArtifact.artifactId).run
-      maybeLatest.fold:
-        groupArtifact.toPath
-      .apply: latestVersion =>
-        groupArtifact / latestVersion
+  def latest(groupArtifact: MavenCentral.GroupArtifact): ZIO[Client, MavenCentral.GroupIdOrArtifactIdNotFoundError | Throwable, Path] =
+    ZIO.scoped:
+      defer:
+        val maybeLatest = MavenCentral.latest(groupArtifact.groupId, groupArtifact.artifactId).run
+        maybeLatest.fold:
+          groupArtifact.toPath
+        .apply: latestVersion =>
+          groupArtifact / latestVersion
 
-  def javadocExists(groupArtifactVersion: MavenCentral.GroupArtifactVersion): ZIO[Client & Scope, MavenCentral.JavadocNotFoundError | Throwable, Path] =
-    defer:
-      MavenCentral.javadocUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version).run // javadoc exists
-      groupArtifactVersion.toPath / "index.html"
+  def javadocExists(groupArtifactVersion: MavenCentral.GroupArtifactVersion): ZIO[Client, MavenCentral.JavadocNotFoundError | Throwable, Path] =
+    ZIO.scoped:
+      defer:
+        MavenCentral.javadocUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version).run // javadoc exists
+        groupArtifactVersion.toPath / "index.html"
 
-  def withVersion(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, @unused request: Request)(latestCache: LatestCache, javadocExistsCache: JavadocExistsCache): Handler[Client & Scope, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Request), Response] =
+  def withVersion(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, @unused request: Request)(latestCache: LatestCache, javadocExistsCache: JavadocExistsCache): Handler[Client, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Request), Response] =
     val groupArtifactVersion = MavenCentral.GroupArtifactVersion(groupId, artifactId, version)
     val javadocPathZIO =
       if groupArtifactVersion.version == MavenCentral.Version.latest then
@@ -80,7 +84,8 @@ object App extends ZIOAppDefault:
     .catchAllCause:
       case Cause.Fail(MavenCentral.JavadocNotFoundError(groupId, artifactId, version), _) =>
         Handler.fromZIO:
-          MavenCentral.searchVersions(groupId, artifactId)
+          ZIO.scoped:
+            MavenCentral.searchVersions(groupId, artifactId)
         .flatMap: versions =>
           Handler.template("javadocs.dev")(UI.noJavadoc(groupId, artifactId, versions, version))
         .catchAllCause:
@@ -95,27 +100,29 @@ object App extends ZIOAppDefault:
 
   type Blocker = ConcurrentMap[MavenCentral.GroupArtifactVersion, Promise[Nothing, Unit]]
 
-  def withFile(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, file: Path, @unused request: Request, blocker: Blocker): Handler[Client & Scope, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
+  def withFile(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, file: Path, @unused request: Request, blocker: Blocker): Handler[Client, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
     val groupArtifactVersion = MavenCentral.GroupArtifactVersion(groupId, artifactId, version)
-    val javadocFileZIO = defer:
-      val javadocDir = File(tmpDir, groupArtifactVersion.toString)
-      val javadocFile = File(javadocDir, file.toString)
+    val javadocFileZIO =
+      ZIO.scoped:
+        defer:
+          val javadocDir = File(tmpDir, groupArtifactVersion.toString)
+          val javadocFile = File(javadocDir, file.toString)
 
-      // could be less racey
-      if !javadocDir.exists() then
-        val maybeBlock = blocker.get(groupArtifactVersion).run
-        // note: fold doesn't work with defer here
-        maybeBlock match
-          case Some(promise) =>
-            promise.await.run
-          case _ =>
-            val promise = Promise.make[Nothing, Unit].run
-            blocker.put(groupArtifactVersion, promise).run
-            val javadocUri = MavenCentral.javadocUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version).run
-            MavenCentral.downloadAndExtractZip(javadocUri, javadocDir).run
-            promise.succeed(()).run
+          // could be less racey
+          if !javadocDir.exists() then
+            val maybeBlock = blocker.get(groupArtifactVersion).run
+            // note: fold doesn't work with defer here
+            maybeBlock match
+              case Some(promise) =>
+                promise.await.run
+              case _ =>
+                val promise = Promise.make[Nothing, Unit].run
+                blocker.put(groupArtifactVersion, promise).run
+                val javadocUri = MavenCentral.javadocUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version).run
+                MavenCentral.downloadAndExtractZip(javadocUri, javadocDir).run
+                promise.succeed(()).run
 
-      javadocFile
+          javadocFile
 
     // todo: could be better
     Handler.fromZIO(javadocFileZIO).flatMap(Handler.fromFile).catchAllCause:
@@ -143,8 +150,8 @@ object App extends ZIOAppDefault:
   private val version: PathCodec[MavenCentral.Version] =
     string("version").transformOrFailLeft(versionExtractor)(_.toString)
 
-  def app(latestCache: LatestCache, javadocExistsCache: JavadocExistsCache, blocker: Blocker): Routes[Client & Scope, Nothing] =
-    Routes[Client & Scope, Nothing](
+  def app(latestCache: LatestCache, javadocExistsCache: JavadocExistsCache, blocker: Blocker): Routes[Client, Nothing] =
+    Routes[Client, Nothing](
       Method.GET / "" -> Handler.template("javadocs.dev")(UI.index),
       Method.GET / "favicon.io" -> Handler.notFound,
       Method.GET / groupId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, Request)](withGroupId),
@@ -175,7 +182,7 @@ object App extends ZIOAppDefault:
         response
     )(Response.redirect(_, true))
 
-  def appWithMiddleware(blocker: Blocker, latestCache: LatestCache, javadocExistsCache: JavadocExistsCache): HttpApp[Client & Scope] =
+  def appWithMiddleware(blocker: Blocker, latestCache: LatestCache, javadocExistsCache: JavadocExistsCache): HttpApp[Client] =
     app(latestCache, javadocExistsCache, blocker).toHttpApp @@ redirectQueryParams @@ Middleware.requestLogging()
 
   def run =
@@ -193,4 +200,7 @@ object App extends ZIOAppDefault:
       val app = appWithMiddleware(blocker, latestCache, javadocExistsCache)
       Server.serve(app).run
       ()
-    .provide(Server.default, Client.default, Scope.default)
+    .provide(
+      Server.default,
+      Client.default,
+    )
