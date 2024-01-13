@@ -9,7 +9,7 @@ steps:
 
   - name: 'gcr.io/k8s-skaffold/pack'
     entrypoint: 'pack'
-    args: ['build', '--builder=paketobuildpacks/builder:base', '--buildpack=gcr.io/paketo-buildpacks/java-native-image', '--publish', 'gcr.io/$PROJECT_ID/$REPO_NAME:$COMMIT_SHA']
+    args: ['build', '--builder=paketobuildpacks/builder:tiny', '--buildpack=gcr.io/paketo-buildpacks/java-native-image', '--publish', 'gcr.io/$PROJECT_ID/$REPO_NAME:$COMMIT_SHA']
 
   - name: 'gcr.io/cloud-builders/docker'
     args: ['pull', 'gcr.io/$PROJECT_ID/$REPO_NAME:$COMMIT_SHA']

@@ -38,7 +38,7 @@ Run and output GraalVM configs, with GraalVM:
 
 Build the container:
 ```
-pack build --builder=paketobuildpacks/builder:base \
+pack build --builder=paketobuildpacks/builder:tiny \
  --buildpack gcr.io/paketo-buildpacks/java-native-image \
  javadoccentral
 ```
