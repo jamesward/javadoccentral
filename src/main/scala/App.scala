@@ -154,6 +154,7 @@ object App extends ZIOAppDefault:
     Routes[Client, Nothing](
       Method.GET / "" -> Handler.template("javadocs.dev")(UI.index),
       Method.GET / "favicon.ico" -> Handler.notFound,
+      Method.GET / "robots.txt" -> Handler.notFound,
       Method.GET / groupId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, Request)](withGroupId),
       Method.GET / groupId / artifactId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, Request)](withArtifactId),
       Method.GET / groupId / artifactId / version -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Request)] {
