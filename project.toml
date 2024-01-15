@@ -29,3 +29,10 @@ value = "upx"
 [[build.env]]
 name = "BP_NATIVE_IMAGE_BUILD_ARGUMENTS"
 value = "--install-exit-handlers -H:+UnlockExperimentalVMOptions --strict-image-heap --initialize-at-build-time=org.apache.commons.compress --initialize-at-build-time=org.slf4j.simple.SimpleLogger --initialize-at-build-time=org.slf4j.simple.SimpleLoggerConfiguration --initialize-at-build-time=org.slf4j.simple.OutputChoice --initialize-at-build-time=org.slf4j.simple.OutputChoice$OutputChoiceType --initialize-at-run-time=io.netty.handler.ssl.BouncyCastleAlpnSslUtils --initialize-at-run-time=io.netty.channel.kqueue.KQueueEventLoop --initialize-at-run-time=io.netty.channel.epoll.EpollEventLoop"
+
+#
+## todo: maybe replace with NATIVE_IMAGE_OPTIONS runtime env var in GraalVM JDK 22 ? Not sure if it is for runtime
+##   https://github.com/oracle/graal/pull/7745
+#[[build.env]]
+#name = "BPE_JAVA_TOOL_OPTIONS"
+#value = "-Xmx128m -XX:+PrintGC -XX:+PrintGCTimeStamps"
