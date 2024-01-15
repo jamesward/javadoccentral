@@ -49,7 +49,5 @@ fork := true
 
 javaOptions += "-Djava.net.preferIPv4Stack=true"
 
-reStart / javaOptions += "-Djava.util.logging.config.file=asdf"
-
-//run / javaOptions += s"-agentlib:native-image-agent=config-output-dir=src/graal"
+//run / javaOptions += s"-agentlib:native-image-agent=config-output-dir=src/main/resources/META-INF/native-image"
 //javaOptions += s"-agentlib:native-image-agent=trace-output=${(target in GraalVMNativeImage).value}/trace-output.json"

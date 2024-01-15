@@ -1,1 +1,1 @@
-web: ./default.javadoccentral-0.1.0-SNAPSHOT-launcher -Xmx256m
+web: ./default.javadoccentral-0.1.0-SNAPSHOT-launcher -Xmx128m -XX:MaxDirectMemorySize=256m
