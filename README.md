@@ -38,12 +38,11 @@ Run and output GraalVM configs, with GraalVM:
 
 Build the container:
 ```
-pack build --builder=paketobuildpacks/builder:tiny \
- --buildpack gcr.io/paketo-buildpacks/java-native-image \
+pack build --builder=paketobuildpacks/builder-jammy-base \
  javadoccentral
 ```
 
 Run the container:
 ```
-docker run -p8080:8080 javadoccentral
+docker run -p8080:8080 -m 512m javadoccentral
 ```
