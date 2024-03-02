@@ -17,7 +17,7 @@ scalacOptions ++= Seq(
   "-Xfatal-warnings",
 )
 
-scalaVersion := "3.3.1"
+scalaVersion := "3.4.0"
 
 val zioVersion = "2.1-RC1"
 
@@ -25,7 +25,7 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio"                % zioVersion,
   "dev.zio" %% "zio-concurrent"     % zioVersion,
   "dev.zio" %% "zio-cache"          % "0.2.3",
-  "dev.zio" %% "zio-logging"        % "2.1.17",
+  "dev.zio" %% "zio-logging"        % "2.2.0",
   "dev.zio" %% "zio-direct"         % "1.0.0-RC7",
   "dev.zio" %% "zio-direct-streams" % "1.0.0-RC7",
   "dev.zio" %% "zio-http"           % "3.0.0-RC4",
