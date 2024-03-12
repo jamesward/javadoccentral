@@ -41,7 +41,7 @@ object App extends ZIOAppDefault:
     .flatMap: maybeVersions =>
       maybeVersions.fold:
         // todo: better api?
-        Handler.response(Response.redirect(URL(Path.root / (groupId.toString + "." + artifactId.toString))))
+        Handler.fromResponse(Response.redirect(URL(Path.root / (groupId.toString + "." + artifactId.toString))))
       .apply: versions =>
         Handler.template("javadocs.dev")(UI.needVersion(groupId, artifactId, versions))
     .catchAllCause:
@@ -168,14 +168,14 @@ object App extends ZIOAppDefault:
     )
 
   private val redirectQueryParams = HandlerAspect.intercept: (request, response) =>
-    request.url.queryParams.get("groupId").map: groupId =>
-      request.url.path(Path.root / groupId).queryParams()
+    request.url.queryParam("groupId").map: groupId =>
+      request.url.path(Path.root / groupId).setQueryParams()
     .orElse:
-      request.url.queryParams.get("artifactId").map: artifactId =>
-        request.url.path(request.path / artifactId).queryParams()
+      request.url.queryParam("artifactId").map: artifactId =>
+        request.url.path(request.path / artifactId).setQueryParams()
     .orElse:
-      request.url.queryParams.get("version").map: version =>
-        request.url.path(request.path / version).queryParams()
+      request.url.queryParam("version").map: version =>
+        request.url.path(request.path / version).setQueryParams()
     .fold(
       if request.url.path.hasTrailingSlash then
         Response.redirect(request.url.dropTrailingSlash)
