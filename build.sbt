@@ -19,7 +19,8 @@ scalacOptions ++= Seq(
 
 scalaVersion := "3.4.1"
 
-val zioVersion = "2.1-RC1"
+// can't bump to 2.1 due to: https://github.com/zio/zio-cache/issues/167
+val zioVersion = "2.0.22"
 
 libraryDependencies ++= Seq(
   "dev.zio" %% "zio"                 % zioVersion,
