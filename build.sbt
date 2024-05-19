@@ -17,7 +17,7 @@ scalacOptions ++= Seq(
   "-Xfatal-warnings",
 )
 
-scalaVersion := "3.4.1"
+scalaVersion := "3.4.2"
 
 // can't bump to 2.1 due to: https://github.com/zio/zio-cache/issues/167
 val zioVersion = "2.1.1"
@@ -26,14 +26,14 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio"                 % zioVersion,
   "dev.zio" %% "zio-concurrent"      % zioVersion,
   "dev.zio" %% "zio-cache"           % "0.2.3",
-  "dev.zio" %% "zio-logging"         % "2.2.3",
+  "dev.zio" %% "zio-logging"         % "2.2.4",
   "dev.zio" %% "zio-direct"          % "1.0.0-RC7",
   "dev.zio" %% "zio-direct-streams"  % "1.0.0-RC7",
-  "dev.zio" %% "zio-http"            % "3.0.0-RC6",
+  "dev.zio" %% "zio-http"            % "3.0.0-RC7",
   "org.apache.commons" %  "commons-compress" % "1.26.1",
   "org.slf4j" % "slf4j-simple" % "2.0.13",
 
-  "com.jamesward" %% "zio-mavencentral" % "0.0.13",
+  "com.jamesward" %% "zio-mavencentral" % "0.0.14",
 
   "dev.zio" %% "zio-test"           % zioVersion % Test,
   "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,

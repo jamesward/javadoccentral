@@ -183,8 +183,8 @@ object App extends ZIOAppDefault:
         response
     )(Response.redirect(_, true))
 
-  def appWithMiddleware(blocker: Blocker, latestCache: LatestCache, javadocExistsCache: JavadocExistsCache): HttpApp[Client] =
-    app(latestCache, javadocExistsCache, blocker).toHttpApp @@ redirectQueryParams @@ Middleware.requestLogging()
+  def appWithMiddleware(blocker: Blocker, latestCache: LatestCache, javadocExistsCache: JavadocExistsCache): Routes[Client, Nothing] =
+    app(latestCache, javadocExistsCache, blocker) @@ redirectQueryParams @@ Middleware.requestLogging()
 
   def run =
     // todo: log filtering so they don't show up in tests / runtime config
