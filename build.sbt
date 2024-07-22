@@ -33,7 +33,7 @@ libraryDependencies ++= Seq(
   "org.apache.commons" %  "commons-compress" % "1.26.2",
   "org.slf4j" % "slf4j-simple" % "2.0.13",
 
-  "com.jamesward" %% "zio-mavencentral" % "0.0.14",
+  "com.jamesward" %% "zio-mavencentral" % "0.0.15",
 
   "dev.zio" %% "zio-test"           % zioVersion % Test,
   "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,
