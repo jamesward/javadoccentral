@@ -1,4 +1,5 @@
 import com.jamesward.zio_mavencentral.MavenCentral
+import com.jamesward.zio_mavencentral.MavenCentral.JavadocNotFoundError
 import zio.*
 import zio.cache.{Cache, Lookup}
 import zio.concurrent.ConcurrentMap
@@ -100,9 +101,15 @@ object App extends ZIOAppDefault:
 
   type Blocker = ConcurrentMap[MavenCentral.GroupArtifactVersion, Promise[Nothing, Unit]]
 
+  class JavadocNotFoundException(javadocNotFoundError: JavadocNotFoundError) extends Throwable
+
+  object JavadocNotFoundException:
+    val from: PartialFunction[JavadocNotFoundError | Throwable, Throwable] =
+      case e: JavadocNotFoundError => JavadocNotFoundException(e)
+
   def withFile(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, file: Path, @unused request: Request, blocker: Blocker): Handler[Client, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
     val groupArtifactVersion = MavenCentral.GroupArtifactVersion(groupId, artifactId, version)
-    val javadocFileZIO =
+    val javadocFileZIO: ZIO[Client, Throwable, File] =
       ZIO.scoped:
         defer:
           val javadocDir = File(tmpDir, groupArtifactVersion.toString)
@@ -118,25 +125,23 @@ object App extends ZIOAppDefault:
               case _ =>
                 val promise = Promise.make[Nothing, Unit].run
                 blocker.put(groupArtifactVersion, promise).run
-                val javadocUri = MavenCentral.javadocUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version).run
+                val javadocUri = MavenCentral.javadocUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version).mapError(JavadocNotFoundException.from).run
                 MavenCentral.downloadAndExtractZip(javadocUri, javadocDir).run
                 promise.succeed(()).run
 
           javadocFile
 
-    // todo: could be better
-    Handler.fromZIO(javadocFileZIO).flatMap(Handler.fromFile).catchAllCause:
-      case Cause.Fail(error, _) =>
-        if error.isInstanceOf[MavenCentral.JavadocNotFoundError] then
-          Response.redirect(URL(groupArtifactVersion.toPath)).toHandler
-        if error.isInstanceOf[FileNotFoundException] then
-          Response.notFound((groupArtifactVersion.toPath ++ file).toString).toHandler
-        else
-          Handler.internalServerError
-      case cause =>
+    Handler.fromFileZIO(javadocFileZIO).catchAll:
+      case _: JavadocNotFoundException =>
+        Response.redirect(URL(groupArtifactVersion.toPath)).toHandler
+      case _: FileNotFoundException =>
+        Response.notFound((groupArtifactVersion.toPath ++ file).toString).toHandler
+      case error =>
         Handler.fromZIO:
-          ZIO.logErrorCause(cause).as(Response.status(Status.InternalServerError))
-
+          val message = error.getMessage match
+            case s: String => s
+            case _ => "Unknown Error"
+          ZIO.logError(message).as(Response.status(Status.InternalServerError))
 
   private def groupIdExtractor(groupId: String) = MavenCentral.GroupId.unapply(groupId).toRight(groupId)
   private val groupId: PathCodec[MavenCentral.GroupId] =
