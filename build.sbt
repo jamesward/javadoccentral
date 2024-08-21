@@ -30,7 +30,7 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-direct"          % "1.0.0-RC7",
   "dev.zio" %% "zio-direct-streams"  % "1.0.0-RC7",
   "dev.zio" %% "zio-http"            % "3.0.0-RC9",
-  "org.apache.commons" %  "commons-compress" % "1.27.0",
+  "org.apache.commons" %  "commons-compress" % "1.27.1",
   "org.slf4j" % "slf4j-simple" % "2.0.16",
 
   "com.jamesward" %% "zio-mavencentral" % "0.0.15",
