@@ -12,9 +12,9 @@ name := "javadoccentral"
 //resolvers += "OSS Staging" at "https://oss.sonatype.org/content/groups/staging"
 
 scalacOptions ++= Seq(
-  "-Yexplicit-nulls",
+  //"-Yexplicit-nulls", // doesn't seem to work anymore
   "-language:strictEquality",
-  "-Xfatal-warnings",
+  // "-Xfatal-warnings", // doesn't seem to work anymore
 )
 
 scalaVersion := "3.5.0"

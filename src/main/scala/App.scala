@@ -138,9 +138,7 @@ object App extends ZIOAppDefault:
         Response.notFound((groupArtifactVersion.toPath ++ file).toString).toHandler
       case error =>
         Handler.fromZIO:
-          val message = error.getMessage match
-            case s: String => s
-            case _ => "Unknown Error"
+          val message = Option(error.getMessage).getOrElse("Unknown Error")
           ZIO.logError(message).as(Response.status(Status.InternalServerError))
 
   private def groupIdExtractor(groupId: String) = MavenCentral.GroupId.unapply(groupId).toRight(groupId)
