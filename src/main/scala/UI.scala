@@ -6,7 +6,7 @@ object UI:
   val index: Html =
     form(actionAttr := "/", methodAttr := "get",
       label("GroupId (i.e. ", a(href := "/org.springframework", "org.springframework"), "): ",
-        input(nameAttr := "groupId", requiredAttr := "required")
+        input(nameAttr := "groupId", requiredAttr := true)
       ),
       " ",
       input(valueAttr := "Go!", typeAttr := "submit"),
@@ -22,7 +22,7 @@ object UI:
           onFocusAttr := "this.setCustomValidity('GroupID is invalid'); this.reportValidity();",
           onInputAttr := "this.setCustomValidity(''); this.reportValidity()",
           autofocusAttr := "autofocus",
-          requiredAttr := "required",
+          requiredAttr := true,
         )
       ),
       " ",
