@@ -17,7 +17,7 @@ scalacOptions ++= Seq(
   // "-Xfatal-warnings", // doesn't seem to work anymore
 )
 
-scalaVersion := "3.6.3"
+scalaVersion := "3.6.4"
 
 // can't bump to 2.1 due to: https://github.com/zio/zio-cache/issues/167
 val zioVersion = "2.1.16"
