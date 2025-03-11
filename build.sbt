@@ -19,7 +19,6 @@ scalacOptions ++= Seq(
 
 scalaVersion := "3.6.4"
 
-// can't bump to 2.1 due to: https://github.com/zio/zio-cache/issues/167
 val zioVersion = "2.1.16"
 
 libraryDependencies ++= Seq(
@@ -29,7 +28,7 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-logging"         % "2.5.0",
   "dev.zio" %% "zio-direct"          % "1.0.0-RC7",
   "dev.zio" %% "zio-direct-streams"  % "1.0.0-RC7",
-  "dev.zio" %% "zio-http"            % "3.0.1",
+  "dev.zio" %% "zio-http"            % "3.1.0",
   "org.apache.commons" %  "commons-compress" % "1.27.1",
   "org.slf4j" % "slf4j-simple" % "2.0.17",
 

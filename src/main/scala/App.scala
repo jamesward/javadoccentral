@@ -71,7 +71,7 @@ object App extends ZIOAppDefault:
         MavenCentral.javadocUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version).run // javadoc exists
         groupArtifactVersion.toPath / "index.html"
 
-  def withVersion(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, @unused request: Request)(latestCache: LatestCache, javadocExistsCache: JavadocExistsCache): Handler[Client, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Request), Response] =
+  def withVersion(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, @unused request: Request)(latestCache: LatestCache, javadocExistsCache: JavadocExistsCache): Handler[Client, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
     val groupArtifactVersion = MavenCentral.GroupArtifactVersion(groupId, artifactId, version)
     val javadocPathZIO =
       if groupArtifactVersion.version == MavenCentral.Version.latest then
@@ -160,13 +160,12 @@ object App extends ZIOAppDefault:
       Method.GET / "robots.txt" -> Handler.notFound,
       Method.GET / groupId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, Request)](withGroupId),
       Method.GET / groupId / artifactId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, Request)](withArtifactId),
-      Method.GET / groupId / artifactId / version -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Request)] {
-        (groupId, artifactId, version, request) =>
-          withVersion(groupId, artifactId, version, request)(latestCache, javadocExistsCache)
-      },
       Method.GET / groupId / artifactId / version / trailing -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request)] {
         (groupId, artifactId, version, file, request) =>
-          withFile(groupId, artifactId, version, file, request, blocker)
+          if (file.isEmpty)
+            withVersion(groupId, artifactId, version, request)(latestCache, javadocExistsCache)
+          else
+            withFile(groupId, artifactId, version, file, request, blocker)
       },
     )
 
