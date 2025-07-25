@@ -190,6 +190,15 @@ object App extends ZIOAppDefault:
 
   def run =
     // todo: log filtering so they don't show up in tests / runtime config
+
+    val server =
+      ZLayer.fromZIO:
+        defer:
+          val system = ZIO.system.run
+          val maybePort = system.env("PORT").run.flatMap(_.toIntOption)
+          maybePort.fold(Server.default)(Server.defaultWithPort)
+      .flatten
+
     defer:
       val blocker = ConcurrentMap.empty[MavenCentral.GroupArtifactVersion, Promise[Nothing, Unit]].run
       val latestCache = Cache.makeWith(1_000, Lookup(latest)) {
@@ -204,6 +213,6 @@ object App extends ZIOAppDefault:
       Server.serve(app).run
       ()
     .provide(
-      Server.default,
+      server,
       Client.default,
     )
