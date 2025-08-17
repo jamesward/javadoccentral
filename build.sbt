@@ -28,11 +28,15 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-logging"         % "2.5.1",
   "dev.zio" %% "zio-direct"          % "1.0.0-RC7",
   "dev.zio" %% "zio-direct-streams"  % "1.0.0-RC7",
-  "dev.zio" %% "zio-http"            % "3.3.3",
+  "dev.zio" %% "zio-http"            % "3.4.0",
   "org.apache.commons" %  "commons-compress" % "1.28.0",
   "org.slf4j" % "slf4j-simple" % "2.0.17",
 
-  "com.jamesward" %% "zio-mavencentral" % "0.0.20",
+  "com.jamesward" %% "zio-mavencentral" % "0.0.22",
+
+  "com.softwaremill.chimp" %% "core" % "0.1.4",
+  "com.softwaremill.sttp.tapir" %% "tapir-zio" % "1.11.42",
+  "com.softwaremill.sttp.tapir" %% "tapir-zio-http-server" % "1.11.42",
 
   "dev.zio" %% "zio-test"           % zioVersion % Test,
   "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,
