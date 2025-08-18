@@ -66,4 +66,10 @@ object MCP:
         .either
 
 
-  val mcpServerEndpoint = mcpEndpoint(List(getLatestServerTool, getClassesServerTool, getSymbolContentsServerTool), List("mcp"))
+  val mcpServerEndpoint = mcpEndpoint(
+    List(getLatestServerTool, getClassesServerTool, getSymbolContentsServerTool),
+    List("mcp"),
+    "javadocs.dev",
+    "0.0.1",
+    false
+  )
