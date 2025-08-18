@@ -88,6 +88,27 @@ object ExtractorSpec extends ZIOSpecDefault:
           scaladoc.size == 544
         )
     },
+    test("kotlin - ktor-io-jvm/3.2.3") {
+      defer:
+        val doccontents = Extractor.javadocContents(gav("io.ktor", "ktor-io-jvm", "3.2.3")).run
+        assertTrue(
+          doccontents.size == 465
+        )
+    },
+    test("java - spring-ai-mcp/1.0.1") {
+      defer:
+        val doccontents = Extractor.javadocContents(gav("org.springframework.ai", "spring-ai-mcp", "1.0.1")).run
+        assertTrue(
+          doccontents.size == 25
+        )
+    },
+    test("symbolContents - zio-mavencentral_3") {
+      defer:
+        val contents = Extractor.javadocSymbolContents(gav("com.jamesward", "zio-mavencentral_3", "0.0.21"), "com/jamesward/zio_mavencentral/MavenCentral$$GroupId$.html#unapply-fffffd22").run
+        assertTrue(
+          contents.contains("com.jamesward.zio_mavencentral.MavenCentral.GroupId")
+        )
+    }
   ).provide(
     Scope.default,
     Client.default,

@@ -1,11 +1,9 @@
 JavaDoc Central
 ---------------
 
-![CloudBuild](https://badger-bdrmenfgcq-uc.a.run.app/build/status?project=jamesward&id=4097b960-a9af-4a61-b309-0e372889552e)
-
 Artifacts in Maven Central typically provide a JavaDoc Jar that contains the versioned documentation for the artifact.  While IDEs use this to display the docs for a library, it is also sometimes nice to browse the docs in a web browser.  This project is a simple web app that allows you to view the JavaDoc for any artifact in Maven Central.
 
-Usage Guide:
+## Usage Guide
 
 Main page: [javadocs.dev](https://javadocs.dev/)
 
@@ -22,6 +20,12 @@ Or just the `GROUP_ID`, like:
 
 You can also specify `latest` for the version, like:  
 `https://javadocs.dev/org.webjars/webjars-locator/latest`
+
+
+## MCP Server
+
+Point your MCP client to `https://www.javadocs.dev/mcp` (Streamable HTTP)
+
 
 ## Dev Info
 
