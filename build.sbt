@@ -35,8 +35,8 @@ libraryDependencies ++= Seq(
   "com.jamesward" %% "zio-mavencentral" % "0.0.22",
 
   "com.softwaremill.chimp" %% "core" % "0.1.4",
-  "com.softwaremill.sttp.tapir" %% "tapir-zio" % "1.11.42",
-  "com.softwaremill.sttp.tapir" %% "tapir-zio-http-server" % "1.11.42",
+  "com.softwaremill.sttp.tapir" %% "tapir-zio" % "1.11.44",
+  "com.softwaremill.sttp.tapir" %% "tapir-zio-http-server" % "1.11.44",
 
   "dev.zio" %% "zio-test"           % zioVersion % Test,
   "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,
