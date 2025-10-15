@@ -41,6 +41,24 @@ object ExtractorSpec extends ZIOSpecDefault:
         contents.size == 2,
       )
     },
+    test("parseKotlindoc") {
+      val contents = Extractor.parseKotlindoc(
+        """[{
+          |    "name": "MyClass",
+          |    "description": "A sample class",
+          |    "location": "com/example/MyClass.html"
+          |}, {
+          |    "name": "MyFunction",
+          |    "description": "A sample function",
+          |    "location": "com/example/MyFunction.html"
+          |}]
+          |""".stripMargin).toOption.get
+
+      assertTrue(
+        contents.size == 2,
+        contents.exists(c => c.name == "MyClass" && c.link == "com/example/MyClass.html")
+      )
+    },
     test("artifact does not exist") {
       assertZIO(Extractor.javadocContents(gav("com.jamesward", "zio-mavencentral_3", "0.0.0")).exit)(
         failsWithA[JavadocNotFoundError]
