@@ -4,7 +4,6 @@ import io.circe.syntax.*
 import io.circe.generic.semiauto.{deriveCodec, deriveEncoder}
 import io.circe.{Codec, Decoder, Encoder}
 import sttp.tapir.Schema
-import sttp.tapir.generic.auto.*
 import zio.http.Client
 import zio.{RIO, ZIO}
 
@@ -33,10 +32,7 @@ object MCP:
 
   val getLatestServerTool = getLatestTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker, X]]: (input, _) =>
     ZIO.scoped:
-      Extractor.latest(input)
-        .map(_.toString)
-        .mapError(_.toString)
-        .either
+      Extractor.latest(input).mapBoth(_.toString, _.toString).either
 
 
   val getClassesTool = tool("get_javadoc_content_list")
@@ -45,10 +41,7 @@ object MCP:
 
   val getClassesServerTool = getClassesTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker, X]]: (input, _) =>
     ZIO.scoped:
-      Extractor.javadocContents(input)
-        .map(_.asJson.toString)
-        .mapError(_.toString)
-        .either
+      Extractor.javadocContents(input).mapBoth(_.toString, _.asJson.toString).either
 
 
   case class JavadocSymbol(groupId: GroupId, artifactId: ArtifactId, version: Version, link: String) derives io.circe.Codec, Schema
