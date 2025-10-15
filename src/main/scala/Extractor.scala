@@ -6,6 +6,9 @@ import zio.direct.*
 import zio.http.Client
 import zio.prelude.data.Optional.AllValuesAreNullable
 import zio.{Promise, Scope, ZIO}
+import zio.schema.{DeriveSchema, Schema}
+import zio.schema.codec.JsonCodec
+
 
 import java.io.File
 import java.nio.file.Files
@@ -19,6 +22,18 @@ object Extractor:
   case class LatestNotFound(groupArtifact: GroupArtifact)
 
   case class Content(link: String, external: Boolean, info: String, name: String, `type`: String, declartion: String, kind: String, extra: String)
+
+  case class ScaladocContent(l: String, e: Boolean, i: String, n: String, t: String, d: String, k: String, x: String)
+  case class KotlindocContent(name: String, description: String, location: String)
+
+  import zio.schema.{DeriveSchema, Schema}
+  import zio.schema.codec.JsonCodec
+
+  given Schema[ScaladocContent] = DeriveSchema.gen[ScaladocContent]
+  given Schema[KotlindocContent] = DeriveSchema.gen[KotlindocContent]
+
+  private val scaladocCodec = JsonCodec.jsonCodec(Schema.set[ScaladocContent])
+  private val kotlindocCodec = JsonCodec.jsonCodec(Schema.set[KotlindocContent])
 
   type LatestCache = Cache[GroupArtifact, GroupIdOrArtifactIdNotFoundError | LatestNotFound, Version]
   type JavadocCache = Cache[GroupArtifactVersion, JavadocNotFoundError, File]
@@ -64,39 +79,14 @@ object Extractor:
     else
       ZIO.fail(JavadocFileNotFound(groupArtifactVersion, path))
 
-  def parseScaladoc(contents: String): Either[io.circe.Error, Set[Content]] =
-    import io.circe.Decoder
-    import io.circe.parser.decode
+  def parseScaladoc(contents: String): Either[String, Set[Content]] =
+    scaladocCodec.decodeJson(contents)
+      .map(_.map(sc => Content(sc.l, sc.e, sc.i, sc.n, sc.t, sc.d, sc.k, sc.x)))
 
-    given Decoder[Content] = Decoder.instance { c =>
-      for
-        link <- c.downField("l").as[String]
-        external <- c.downField("e").as[Boolean]
-        info <- c.downField("i").as[String]
-        name <- c.downField("n").as[String]
-        tpe <- c.downField("t").as[String]
-        decl <- c.downField("d").as[String]
-        kind <- c.downField("k").as[String]
-        extra <- c.downField("x").as[String]
-      yield Content(link, external, info, name, tpe, decl, kind, extra)
-    }
+  def parseKotlindoc(contents: String): Either[String, Set[Content]] =
+    kotlindocCodec.decodeJson(contents)
+      .map(_.map(kc => Content(kc.location, false, kc.description, kc.name, "", "", "", "")))
 
-    decode[Set[Content]](contents)
-
-  def parseKotlindoc(contents: String): Either[io.circe.Error, Set[Content]] =
-    import io.circe.Decoder
-    import io.circe.parser.decode
-
-    given Decoder[Content] = Decoder.instance { c =>
-      for
-        name <- c.downField("name").as[String]
-        description <- c.downField("description").as[String]
-        location <- c.downField("location").as[String]
-        // searchKeys <- c.downField("searchKeys").as[List[String]]
-      yield Content(location, false, description, name, "", "", "", "")
-    }
-
-    decode[Set[Content]](contents)
 
   def bruteForce(baseDir: File): Set[Content] =
     // todo: handle index.html & zio/stm/index.html
@@ -143,8 +133,11 @@ object Extractor:
   // could be better based on index-all.html
   def javadocJavaFormat(groupArtifactVersion: GroupArtifactVersion, javadocDir: File):
       ZIO[Any, JavadocFormatFailure, Set[Content]] =
-    javadocFile(groupArtifactVersion, javadocDir, "element-list")
-      .map: file =>
+    javadocFile(groupArtifactVersion, javadocDir, "element-list").mapBoth(
+      _ =>
+        JavadocFormatFailure()
+      ,
+      file =>
         val elements = Files.readAllLines(file.toPath).asScala
         elements.flatMap: element =>
           val elementDir = File(javadocDir, element.replace('.', '/'))
@@ -155,8 +148,7 @@ object Extractor:
               Content(javadocDir.toPath.relativize(file).toString, false, "", "", "", "", "", "")
         .flatten
         .toSet
-      .mapError: _ =>
-        JavadocFormatFailure()
+    )
 
   def javadocContents(groupArtifactVersion: GroupArtifactVersion):
       ZIO[JavadocCache & Client & FetchBlocker & Scope, JavadocNotFoundError, Set[Content]] =
@@ -167,7 +159,7 @@ object Extractor:
       javadocScalaFormat(groupArtifactVersion, javadocDir)
         .orElse(javadocKotlinFormat(groupArtifactVersion, javadocDir))
         .orElse(javadocJavaFormat(groupArtifactVersion, javadocDir))
-        .catchAll:
+        .catchAll: // todo: any other way to just remove the JavadocFormatFailure from the error channel?
           case _: JavadocFormatFailure =>
             ZIO.succeed(bruteForce(javadocDir))
           case e: JavadocNotFoundError =>
