@@ -1,11 +1,13 @@
 import io.modelcontextprotocol.client.McpClient
 import io.modelcontextprotocol.spec.McpClientTransport
-import io.modelcontextprotocol.spec.McpSchema.{CallToolRequest, ClientCapabilities, ListToolsResult, Tool}
+import io.modelcontextprotocol.spec.McpSchema
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport
+import mcp.model.{Common, Request, Response}
 import zio.*
 import zio.test.*
 import zio.direct.*
 import zio.http.*
+import zio.schema.codec.JsonCodec
 
 import scala.jdk.CollectionConverters.*
 
@@ -38,15 +40,41 @@ object MCPSpec extends ZIOSpecDefault:
 
   def mcpSyncClient(transport: McpClientTransport) = McpClient.sync(transport)
     .requestTimeout(java.time.Duration.ofSeconds(10))
-    .capabilities(ClientCapabilities.builder().build())
+    .capabilities(McpSchema.ClientCapabilities.builder().build())
     .build()
 
-  def listTools(listToolsResult: ListToolsResult): Seq[Tool] =
+  // non-local because of mutability in MCP client response
+  def listTools(listToolsResult: McpSchema.ListToolsResult): Seq[McpSchema.Tool] =
     listToolsResult.tools().asScala.toSeq
 
-  val getLatestVersion = new CallToolRequest("get_latest_version", Map("groupId" -> "io.modelcontextprotocol.sdk", "artifactId" -> "mcp").asJava)
+  // non-local because of mutability in MCP client response
+  val getLatestVersion = McpSchema.CallToolRequest("get_latest_version", Map("groupId" -> "io.modelcontextprotocol.sdk", "artifactId" -> "mcp").asJava)
 
   def spec = suite("MCP")(
+    suite("spec")(
+      test("JSONRPCRequest") {
+        val codec = JsonCodec.schemaBasedBinaryCodec[Request.JSONRPCRequest]
+        val initialize = Request.JSONRPCRequest.Initialize(id = 1, params = Request.ClientImplementation(capabilities = Request.ClientCapabilities(), clientInfo = Common.Info("asdf", "1.0.0")))
+        val initializeDecoded = codec.encode(initialize).asString
+        println(initializeDecoded)
+
+        val initializeString = """{"jsonrpc":"2.0","method":"initialize","id":"1","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"MCP Client","version":"1.0.0"}}}"""
+        val decoded = JsonCodec.schemaBasedBinaryCodec[Request.JSONRPCRequest].decode(Chunk.fromArray(initializeString.getBytes))
+
+        assertTrue(
+          initializeDecoded.contains(""""method":"initialize""""),
+          decoded.isRight,
+        )
+      },
+      test("JSONRPCResponse") {
+        val codec = JsonCodec.schemaBasedBinaryCodec[Response.JSONRPCResponse]
+        val initialize = Response.JSONRPCResponse.Initialize(id = 1, result = Response.ServerImplementation(capabilities = Response.ServerCapabilities(None), serverInfo = Common.Info("asdf", "1.0.0")))
+        val initializeDecoded = codec.encode(initialize).asString
+        assertTrue(
+          initializeDecoded.contains("""{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","""),
+        )
+      }
+    ),
     suite("streamable")(
       test("listTools") {
         defer:
@@ -60,7 +88,7 @@ object MCPSpec extends ZIOSpecDefault:
 
           val initializeResult = mcpClient.initialize()
 
-//          mcpClient.ping()
+          mcpClient.ping()
 
           val listToolsResult = mcpClient.listTools()
 
@@ -72,5 +100,5 @@ object MCPSpec extends ZIOSpecDefault:
             !toolCallResult.isError,
           )
       }
-    )
-  ).provideLayerShared(serverLayer) @@ TestAspect.withLiveClock
+    ).provideLayerShared(serverLayer)
+  ) @@ TestAspect.withLiveClock

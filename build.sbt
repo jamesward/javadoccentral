@@ -15,28 +15,38 @@ scalacOptions ++= Seq(
   //"-Yexplicit-nulls", // doesn't seem to work anymore
   "-language:strictEquality",
   // "-Xfatal-warnings", // doesn't seem to work anymore
+//  "-Xcheck-macros",
+//  "-Xprint:typer",      // Shows the code after type checking
+//  "-Ylog:all",          // Verbose logging (very verbose!)
+//  "-Yshow-tree-ids",
 )
 
 scalaVersion := "3.7.3"
 
-val zioVersion = "2.1.21"
+val zioVersion = "2.1.22"
 
 libraryDependencies ++= Seq(
-  "dev.zio" %% "zio"                 % zioVersion,
-  "dev.zio" %% "zio-concurrent"      % zioVersion,
-  "dev.zio" %% "zio-cache"           % "0.2.5",
-  "dev.zio" %% "zio-logging"         % "2.5.1",
-  "dev.zio" %% "zio-direct"          % "1.0.0-RC7",
-  "dev.zio" %% "zio-direct-streams"  % "1.0.0-RC7",
-  "dev.zio" %% "zio-http"            % "3.5.1",
+  "dev.zio" %% "zio"                   % zioVersion,
+  "dev.zio" %% "zio-concurrent"        % zioVersion,
+  "dev.zio" %% "zio-cache"             % "0.2.5",
+  "dev.zio" %% "zio-logging"           % "2.5.1",
+  "dev.zio" %% "zio-direct"            % "1.0.0-RC7",
+  "dev.zio" %% "zio-direct-streams"    % "1.0.0-RC7",
+  "dev.zio" %% "zio-http"              % "3.5.1",
+  "dev.zio" %% "zio-schema"            % "1.7.5",
+  "dev.zio" %% "zio-schema-derivation" % "1.7.5",
+  "dev.zio" %% "zio-schema-json"       % "1.7.5",
+  "dev.zio" %% "zio-schema-macros"     % "1.7.5",
+  "dev.zio" %% "zio-schema"            % "1.7.5",
+
   "org.apache.commons" %  "commons-compress" % "1.28.0",
   "org.slf4j" % "slf4j-simple" % "2.0.17",
 
   "com.jamesward" %% "zio-mavencentral" % "0.0.22",
 
-  "com.softwaremill.chimp" %% "core" % "0.1.4",
-  "com.softwaremill.sttp.tapir" %% "tapir-zio" % "1.11.49",
-  "com.softwaremill.sttp.tapir" %% "tapir-zio-http-server" % "1.11.49",
+//  "com.softwaremill.chimp" %% "core" % "0.1.4",
+//  "com.softwaremill.sttp.tapir" %% "tapir-zio" % "1.11.49",
+//  "com.softwaremill.sttp.tapir" %% "tapir-zio-http-server" % "1.11.49",
 
   "dev.zio" %% "zio-test"           % zioVersion % Test,
   "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,

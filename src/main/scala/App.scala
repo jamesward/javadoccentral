@@ -1,5 +1,4 @@
 import com.jamesward.zio_mavencentral.MavenCentral
-import sttp.tapir.server.ziohttp.ZioHttpInterpreter
 import zio.*
 import zio.cache.{Cache, Lookup}
 import zio.concurrent.ConcurrentMap
@@ -7,6 +6,8 @@ import zio.direct.*
 import zio.http.*
 import zio.http.codec.PathCodec
 import zio.http.template.Template
+import zio.schema.annotation.description
+import zio.schema.{DeriveSchema, Schema}
 
 import java.nio.file.Files
 import scala.annotation.unused
@@ -15,6 +16,12 @@ import scala.annotation.unused
 object App extends ZIOAppDefault:
   given CanEqual[Path, Path] = CanEqual.derived
   given CanEqual[Method, Method] = CanEqual.derived
+
+  given Schema[MavenCentral.GroupId] = Schema.primitive[String].transform(MavenCentral.GroupId(_), _.toString).annotate(description("The Maven artifact's group id"))
+  given Schema[MavenCentral.ArtifactId] = Schema.primitive[String].transform(MavenCentral.ArtifactId(_), _.toString).annotate(description("The Maven artifact's artifact id"))
+  given Schema[MavenCentral.Version] = Schema.primitive[String].transform(MavenCentral.Version(_), _.toString).annotate(description("The Maven artifact's version"))
+  given Schema[MavenCentral.GroupArtifact] = DeriveSchema.gen[MavenCentral.GroupArtifact]
+  given Schema[MavenCentral.GroupArtifactVersion] = DeriveSchema.gen[MavenCentral.GroupArtifactVersion]
 
   def withGroupId(groupId: MavenCentral.GroupId, @unused request: Request): Handler[Client, Nothing, (MavenCentral.GroupId, Request), Response] =
     Handler.fromZIO:
@@ -119,7 +126,15 @@ object App extends ZIOAppDefault:
   }
 
   val app: Routes[Extractor.LatestCache & Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.TmpDir & Client, Response] =
-    val mcpRoutes = ZioHttpInterpreter().toHttp(MCP.mcpServerEndpoint)
+    val getLatestVersionTool = mcp.model.Common.Tool(
+      name = "get_latest_version",
+      description = "Gets the latest version of a given artifact",
+      handler = Extractor.latest
+    )
+
+    val tools = List(getLatestVersionTool)
+
+    val mcpRoutes = mcp.zio.MCPHandler.routes(tools)
 
     val appRoutes = Routes[Extractor.LatestCache & Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.TmpDir & Client, Nothing](
       Method.GET / "" -> Handler.template("javadocs.dev")(UI.index),
