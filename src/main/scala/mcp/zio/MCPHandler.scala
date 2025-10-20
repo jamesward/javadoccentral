@@ -4,13 +4,22 @@ import mcp.model.Common.{Info, Tool}
 import mcp.model.Request.JSONRPCRequest
 import mcp.model.Response.Content.TextContent
 import mcp.model.Response.*
-import zio.ZIO
+import zio.{Chunk, ZIO}
 import zio.http.*
 import zio.schema.codec.JsonCodec
 import zio.json.EncoderOps
 import zio.schema.Schema
 
 object MCPHandler:
+
+  case class Tools[-Env](tools: Chunk[Tool[?, Env, ?, ?]]):
+    val metas = tools.map:
+      tool => ToolMeta(name = tool.name, title = tool.description, description = tool.description, inputSchema = tool.inputSchemaAsJsonSchema)
+
+  object Tools:
+    def apply[Env](tool: Tool[?, Env, ?, ?], tools: Tool[?, Env, ?, ?]*): Tools[Env] =
+      Tools(Chunk.fromIterable(tool +: tools))
+
 
   case class ToolCallArgumentsError[TI](message: String, argumentsSchema: Schema[TI], argumentsJson: String)
 
@@ -31,12 +40,8 @@ object MCPHandler:
     request.body.to[JSONRPCRequest].debug
 
   // todo: ServerInfo from Env?
-  // todo: type params
-  def mcpHandler[R, TI, TR, TE, TA: Schema](tools: List[Tool[TI, TR, TE, TA]])(req: Request): Handler[R & TR, Nothing, Request, Response] =
-    val toolMetas = tools.map:
-      tool => ToolMeta(name = tool.name, title = tool.description, description = tool.description, inputSchema = tool.inputSchemaAsJsonSchema)
-
-    println(toolMetas)
+  def mcpHandler[Env](tools: Tools[Env])(req: Request): Handler[Env, Nothing, Request, Response] =
+    println(tools.metas)
 
     Handler.fromZIO:
       val e = reqToJSONRPCReqeuest(req).flatMap:
@@ -50,19 +55,19 @@ object MCPHandler:
         case req: JSONRPCRequest.NotificationsInitialized =>
           ZIO.succeed(Response.status(Status.Accepted))
         case req: JSONRPCRequest.ToolsList =>
-          val mcpResponse = JSONRPCResponse.ToolList(id = req.id, result = ToolMetas(toolMetas))
+          val mcpResponse = JSONRPCResponse.ToolList(id = req.id, result = ToolMetas(tools.metas.toList))
           ZIO.succeed(Response(body = Body.from(mcpResponse)).contentType(MediaType.application.json))
         case req: JSONRPCRequest.ToolsCall =>
-          tools.foreach(tool => println(tool.name))
+          tools.tools.foreach(tool => println(tool.name))
           println(req.params.name)
-          val maybeTool = tools.find(_.name == req.params.name)
+          val maybeTool = tools.tools.find(_.name == req.params.name)
           println(maybeTool)
 
           ZIO.fromOption(maybeTool).flatMap:
             tool =>
               callTool(req)(tool).map: result =>
                 println(result)
-                val jsonEncoder = JsonCodec.jsonEncoder(summon[Schema[TA]])
+                val jsonEncoder = JsonCodec.jsonEncoder(tool.outputSchema)
                 val resultJson = result.toJson(using jsonEncoder)
                 println(resultJson)
                 // todo: better handling of json into result
@@ -79,5 +84,5 @@ object MCPHandler:
         case _ =>
           ZIO.succeed(Response(Status.BadRequest, body = Body.fromString(s"Could not call tool")))
 
-  def routes[R, TI, TR, TE, TA: Schema](tools: List[Tool[TI, TR, TE, TA]]): Routes[R & TR, Response] =
+  def routes[Env](tools: Tools[Env]): Routes[Env, Response] =
     Routes(Method.POST / "mcp" -> Handler.fromFunctionHandler[Request](mcpHandler(tools)))

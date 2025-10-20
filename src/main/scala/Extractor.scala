@@ -9,7 +9,6 @@ import zio.{Promise, Scope, ZIO}
 import zio.schema.{DeriveSchema, Schema}
 import zio.schema.codec.JsonCodec
 
-
 import java.io.File
 import java.nio.file.Files
 import scala.jdk.CollectionConverters.*
@@ -26,9 +25,7 @@ object Extractor:
   case class ScaladocContent(l: String, e: Boolean, i: String, n: String, t: String, d: String, k: String, x: String)
   case class KotlindocContent(name: String, description: String, location: String)
 
-  import zio.schema.{DeriveSchema, Schema}
-  import zio.schema.codec.JsonCodec
-
+  given Schema[Content] = DeriveSchema.gen[Content]
   given Schema[ScaladocContent] = DeriveSchema.gen[ScaladocContent]
   given Schema[KotlindocContent] = DeriveSchema.gen[KotlindocContent]
 

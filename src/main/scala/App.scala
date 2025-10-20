@@ -1,4 +1,5 @@
 import com.jamesward.zio_mavencentral.MavenCentral
+import mcp.zio.MCPHandler
 import zio.*
 import zio.cache.{Cache, Lookup}
 import zio.concurrent.ConcurrentMap
@@ -7,7 +8,7 @@ import zio.http.*
 import zio.http.codec.PathCodec
 import zio.http.template.Template
 import zio.schema.annotation.description
-import zio.schema.{DeriveSchema, Schema}
+import zio.schema.{DeriveSchema, Schema, derived}
 
 import java.nio.file.Files
 import scala.annotation.unused
@@ -125,16 +126,42 @@ object App extends ZIOAppDefault:
       withFile(groupId, artifactId, version, path, request)
   }
 
-  val app: Routes[Extractor.LatestCache & Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.TmpDir & Client, Response] =
-    val getLatestVersionTool = mcp.model.Common.Tool(
+  val getLatestVersionTool =
+    mcp.model.Common.Tool(
       name = "get_latest_version",
       description = "Gets the latest version of a given artifact",
-      handler = Extractor.latest
+      handler = (groupArtifact: MavenCentral.GroupArtifact) =>
+        ZIO.scoped:
+          Extractor.latest(groupArtifact)
     )
 
-    val tools = List(getLatestVersionTool)
+  val getClassesTool = mcp.model.Common.Tool(
+    name = "get_javadoc_content_list",
+    description = "Gets a list of the contents of a javadoc jar",
+    handler = (groupArtifactVersion: MavenCentral.GroupArtifactVersion) =>
+      ZIO.scoped:
+        Extractor.javadocContents(groupArtifactVersion)
+  )
 
-    val mcpRoutes = mcp.zio.MCPHandler.routes(tools)
+  case class JavadocSymbol(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, link: String) derives Schema
+
+  val getSymbolContentsTool = mcp.model.Common.Tool(
+    name = "get_javadoc_symbol_contents",
+    description = s"Gets the contents of a javadoc symbol. Get the symbole link from the ${getClassesTool.name} tool.",
+    handler = (javadocSymbol: JavadocSymbol) =>
+      val groupArtifactVersion = MavenCentral.GroupArtifactVersion(javadocSymbol.groupId, javadocSymbol.artifactId, javadocSymbol.version)
+      ZIO.scoped:
+        Extractor.javadocSymbolContents(groupArtifactVersion, javadocSymbol.link)
+  )
+
+  val app: Routes[Extractor.LatestCache & Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.TmpDir & Client, Response] =
+    val tools = MCPHandler.Tools(
+      getLatestVersionTool,
+      getClassesTool,
+      getSymbolContentsTool,
+    )
+
+    val mcpRoutes = MCPHandler.routes(tools)
 
     val appRoutes = Routes[Extractor.LatestCache & Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.TmpDir & Client, Nothing](
       Method.GET / "" -> Handler.template("javadocs.dev")(UI.index),

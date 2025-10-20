@@ -20,15 +20,16 @@ object Common:
 
   case class JSONRPCError(code: Int, message: String, data: Option[Json])
 
-  case class Tool[S: Schema, R, E, A: Schema](
+  case class Tool[S: Schema, -Env, +Err, A: Schema](
                                                name: String,
                                                description: String,
-                                               handler: S => ZIO[R, E, A]
+                                               handler: S => ZIO[Env, Err, A]
                                              ):
     //    type InputSchema = Schema[S]
     val inputSchema = summon[Schema[S]]
     val inputSchemaAsJsonSchema: JsonSchemaType =
       JsonSchema.schemaToJsonSchema(summon[Schema[S]])
+    val outputSchema = summon[Schema[A]]
 
   val PARSE_ERROR = -32700
   val INVALID_REQUEST = -32600

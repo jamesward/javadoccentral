@@ -19,6 +19,7 @@ object Response:
   given Schema[Contents] = DeriveSchema.gen[Contents]
   given Schema[JSONRPCResponse] = DeriveSchema.gen[JSONRPCResponse]
   given Schema[JSONRPCResponse.ToolResult] = DeriveSchema.gen[JSONRPCResponse.ToolResult]
+  given Schema[JSONRPCResponse.ToolList] = DeriveSchema.gen[JSONRPCResponse.ToolList]
 
   given zio.json.JsonCodec[ToolsCapability] = JsonCodec.jsonCodec(summon[Schema[ToolsCapability]])
   given zio.json.JsonCodec[ServerCapabilities] = JsonCodec.jsonCodec(summon[Schema[ServerCapabilities]])
@@ -29,6 +30,7 @@ object Response:
   given zio.json.JsonCodec[Contents] = JsonCodec.jsonCodec(summon[Schema[Contents]])
   given zio.json.JsonCodec[JSONRPCResponse] = JsonCodec.jsonCodec(summon[Schema[JSONRPCResponse]])
   given zio.json.JsonCodec[JSONRPCResponse.ToolResult] = JsonCodec.jsonCodec(summon[Schema[JSONRPCResponse.ToolResult]])
+  given zio.json.JsonCodec[JSONRPCResponse.ToolList] = JsonCodec.jsonCodec(summon[Schema[JSONRPCResponse.ToolList]])
 
   given BinaryCodec[ToolsCapability] = JsonCodec.schemaBasedBinaryCodec[ToolsCapability]
   given BinaryCodec[ServerCapabilities] = JsonCodec.schemaBasedBinaryCodec[ServerCapabilities]
@@ -39,6 +41,7 @@ object Response:
   given BinaryCodec[Contents] = JsonCodec.schemaBasedBinaryCodec[Contents]
   given BinaryCodec[JSONRPCResponse] = JsonCodec.schemaBasedBinaryCodec[JSONRPCResponse]
   given BinaryCodec[JSONRPCResponse.ToolResult] = JsonCodec.schemaBasedBinaryCodec[JSONRPCResponse.ToolResult]
+  given BinaryCodec[JSONRPCResponse.ToolList] = JsonCodec.schemaBasedBinaryCodec[JSONRPCResponse.ToolList]
 
 
   case class ToolsCapability(
