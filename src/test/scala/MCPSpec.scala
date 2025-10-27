@@ -99,6 +99,50 @@ object MCPSpec extends ZIOSpecDefault:
             listTools(listToolsResult).exists(_.name() == "get_latest_version"),
             !toolCallResult.isError,
           )
+      },
+      test("invalid tool") {
+        defer:
+          val port = ZIO.service[ServerPort].run
+          val toolCallReq = zio.http.Request.post(
+            url = URL.decode(s"http://localhost:$port/mcp").toOption.get,
+            body =  Body.fromString("""{"jsonrpc":"2.0","method":"tools/call","id":"1","params":{"name":"asdf"}}""")
+          )
+          val resp = Client.batched(toolCallReq).run
+          val respBody = resp.body.to[Response.JSONRPCResponse.Error].run
+          assertTrue(
+            respBody.error.message.contains("asdf")
+          )
+      },
+      test("tool error") {
+        defer:
+          val port = ZIO.service[ServerPort].run
+          val toolCallReq = zio.http.Request.post(
+            url = URL.decode(s"http://localhost:$port/mcp").toOption.get,
+            body =  Body.fromString("""{
+                                      |  "jsonrpc": "2.0",
+                                      |  "id": 2,
+                                      |  "method": "tools/call",
+                                      |  "params": {
+                                      |    "name": "get_latest_version",
+                                      |    "arguments": {
+                                      |      "groupId": "org.webjars",
+                                      |      "artifactId": "asdf"
+                                      |    }
+                                      |  }
+                                      |}
+                                      |""".stripMargin)
+          )
+          val resp = Client.batched(toolCallReq).run
+          val respBody = resp.body.to[Response.JSONRPCResponse.ToolResult].run
+
+          println(respBody)
+
+          assertTrue(
+            // todo: what should the resp status be?
+            respBody.result.isError &&
+              respBody.result.content.size == 1 &&
+              respBody.result.content.head.asInstanceOf[Response.Content.TextContent].text.contains("asdf")
+          )
       }
-    ).provideLayerShared(serverLayer)
+    ).provideLayerShared(serverLayer ++ Client.default)
   ) @@ TestAspect.withLiveClock

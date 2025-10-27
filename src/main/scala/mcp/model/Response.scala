@@ -2,6 +2,8 @@ package mcp.model
 
 import mcp.schema.JsonSchema.JsonSchemaType
 import mcp.model.Common.*
+import zio.http.{Body, MediaType, Status}
+import zio.json.EncoderOps
 import zio.json.ast.Json
 import zio.schema.{DeriveSchema, Schema}
 import zio.schema.annotation.{caseName, discriminatorName, noDiscriminator}
@@ -20,6 +22,7 @@ object Response:
   given Schema[JSONRPCResponse] = DeriveSchema.gen[JSONRPCResponse]
   given Schema[JSONRPCResponse.ToolResult] = DeriveSchema.gen[JSONRPCResponse.ToolResult]
   given Schema[JSONRPCResponse.ToolList] = DeriveSchema.gen[JSONRPCResponse.ToolList]
+  given Schema[JSONRPCResponse.Error] = DeriveSchema.gen[JSONRPCResponse.Error]
 
   given zio.json.JsonCodec[ToolsCapability] = JsonCodec.jsonCodec(summon[Schema[ToolsCapability]])
   given zio.json.JsonCodec[ServerCapabilities] = JsonCodec.jsonCodec(summon[Schema[ServerCapabilities]])
@@ -31,6 +34,7 @@ object Response:
   given zio.json.JsonCodec[JSONRPCResponse] = JsonCodec.jsonCodec(summon[Schema[JSONRPCResponse]])
   given zio.json.JsonCodec[JSONRPCResponse.ToolResult] = JsonCodec.jsonCodec(summon[Schema[JSONRPCResponse.ToolResult]])
   given zio.json.JsonCodec[JSONRPCResponse.ToolList] = JsonCodec.jsonCodec(summon[Schema[JSONRPCResponse.ToolList]])
+  given zio.json.JsonCodec[JSONRPCResponse.Error] = JsonCodec.jsonCodec(summon[Schema[JSONRPCResponse.Error]])
 
   given BinaryCodec[ToolsCapability] = JsonCodec.schemaBasedBinaryCodec[ToolsCapability]
   given BinaryCodec[ServerCapabilities] = JsonCodec.schemaBasedBinaryCodec[ServerCapabilities]
@@ -42,6 +46,7 @@ object Response:
   given BinaryCodec[JSONRPCResponse] = JsonCodec.schemaBasedBinaryCodec[JSONRPCResponse]
   given BinaryCodec[JSONRPCResponse.ToolResult] = JsonCodec.schemaBasedBinaryCodec[JSONRPCResponse.ToolResult]
   given BinaryCodec[JSONRPCResponse.ToolList] = JsonCodec.schemaBasedBinaryCodec[JSONRPCResponse.ToolList]
+  given BinaryCodec[JSONRPCResponse.Error] = JsonCodec.schemaBasedBinaryCodec[JSONRPCResponse.Error]
 
 
   case class ToolsCapability(
@@ -109,5 +114,19 @@ object Response:
                      jsonrpc: String = JSONRPC_VERSION,
                      id: RequestId,
                      result: Contents,
+//                     isError: Boolean = false,
                    ) extends JSONRPCResponse(jsonrpc, id)
 
+    case Empty(
+               jsonrpc: String = JSONRPC_VERSION,
+               id: RequestId,
+             ) extends JSONRPCResponse(jsonrpc, id)
+
+    lazy val toResponse: zio.http.Response =
+      this match
+        case _: Empty =>
+          zio.http.Response(Status.Accepted)
+        //        case err: Error =>
+        //          zio.http.Response(body = Body.from(err)).contentType(MediaType.application.json)
+        case resp =>
+          zio.http.Response(body = Body.from(resp)).contentType(MediaType.application.json)

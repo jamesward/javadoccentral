@@ -43,40 +43,40 @@ object Request:
 
   @discriminatorName("method")
   enum JSONRPCRequest(
-                       jsonrpc: String,
-                       id: RequestId,
+                       val jsonrpc: String = JSONRPC_VERSION,
+                       val id: RequestId,
                      ):
     @caseName("initialize")
     case Initialize(
-                     jsonrpc: String = JSONRPC_VERSION, // todo: include here otherwise not serialized
-                     id: RequestId,
+//                     jsonrpc: String = JSONRPC_VERSION, // todo: include here otherwise not serialized
+                     override val id: RequestId,
                      params: ClientImplementation,
-                   ) extends JSONRPCRequest(jsonrpc, id)
+                   ) extends JSONRPCRequest(id = id)
 
-    // todo: no ID
+    // todo: no ID?
     @caseName("notifications/initialized")
     case NotificationsInitialized(
-                                   jsonrpc: String = JSONRPC_VERSION, // todo: include here otherwise not serialized
-                                   id: RequestId = -1,
-                                 ) extends JSONRPCRequest(jsonrpc, id)
+//                                   jsonrpc: String = JSONRPC_VERSION, // todo: include here otherwise not serialized
+      override val id: RequestId = -1,
+                                 ) extends JSONRPCRequest(id = id)
 
     @caseName("ping")
     case Ping(
-               jsonrpc: String = JSONRPC_VERSION, // todo: include here otherwise not serialized
-               id: RequestId,
-             ) extends JSONRPCRequest(jsonrpc, id)
+//               jsonrpc: String = JSONRPC_VERSION, // todo: include here otherwise not serialized
+      override val id: RequestId,
+             ) extends JSONRPCRequest(id = id)
 
     @caseName("tools/list")
     case ToolsList(
-                    jsonrpc: String = JSONRPC_VERSION, // todo: include here otherwise not serialized
-                    id: RequestId,
-                  ) extends JSONRPCRequest(jsonrpc, id)
+//                    jsonrpc: String = JSONRPC_VERSION, // todo: include here otherwise not serialized
+      override val id: RequestId,
+                  ) extends JSONRPCRequest(id = id)
 
     @caseName("tools/call")
     case ToolsCall(
-                    jsonrpc: String = JSONRPC_VERSION, // todo: include here otherwise not serialized
-                    id: RequestId,
+//                    jsonrpc: String = JSONRPC_VERSION, // todo: include here otherwise not serialized
+      override val id: RequestId,
                     params: ToolParams
-                  ) extends JSONRPCRequest(jsonrpc, id)
+                  ) extends JSONRPCRequest(id = id)
 
 

@@ -7,6 +7,7 @@ import zio.direct.*
 import zio.http.*
 import zio.http.codec.PathCodec
 import zio.http.template.Template
+import zio.logging.{LogFormat, consoleLogger}
 import zio.schema.annotation.description
 import zio.schema.{DeriveSchema, Schema, derived}
 
@@ -192,7 +193,7 @@ object App extends ZIOAppDefault:
     )(Response.redirect(_, true))
 
   val appWithMiddleware: Routes[Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.LatestCache & Extractor.TmpDir & Client, Response] =
-    app @@ redirectQueryParams @@ Middleware.requestLogging()
+    app @@ redirectQueryParams @@ Middleware.requestLogging(loggedRequestHeaders = Set(Header.Accept), loggedResponseHeaders = Set(Header.ContentType), logRequestBody = true, logResponseBody = true)
 
   // todo: i think there is a better way
   val server =
@@ -217,6 +218,12 @@ object App extends ZIOAppDefault:
       case Exit.Failure(_) => Duration.Zero
 
   val tmpDirLayer = ZLayer.succeed(Extractor.TmpDir(Files.createTempDirectory("jars").nn.toFile))
+
+  // ZIO debug logging enabled
+  override val bootstrap = Runtime.removeDefaultLoggers ++
+    Runtime
+      .addLogger(ZLogger.default.map(println(_))
+        .filterLogLevel(_ >= LogLevel.Debug))
 
   def run =
     // todo: log filtering so they don't show up in tests / runtime config
