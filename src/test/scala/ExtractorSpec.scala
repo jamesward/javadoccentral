@@ -108,6 +108,15 @@ object ExtractorSpec extends ZIOSpecDefault:
         assertTrue(
           contents.contains("com.jamesward.zio_mavencentral.MavenCentral.GroupId")
         )
+    },
+    test("symbolContents - smaller") {
+      defer:
+        val contents = Extractor.javadocSymbolContents(gav("com.vaadin", "vaadin-confirm-dialog-flow", "24.9.0"), "com/vaadin/flow/component/confirmdialog/ConfirmDialog.html").run
+        assertTrue(
+          contents.length < 31_000,
+          contents.contains("This method is inherited from HasOrderedComponents"),
+          contents.lines().count() > 1000,
+        )
     }
   ).provide(
     Scope.default,
