@@ -127,8 +127,7 @@ object Extractor:
       .flatMap: file =>
         val contents = Files.readString(file.toPath).stripPrefix("pages = ").stripSuffix(";")
         ZIO.fromEither(parseScaladoc(contents))
-      .mapError: _ =>
-        JavadocFormatFailure()
+      .orElseFail(JavadocFormatFailure())
 
   // todo: handle order version of dokka (fun!)
   def javadocKotlinFormat(groupArtifactVersion: GroupArtifactVersion, javadocDir: File):
@@ -137,14 +136,13 @@ object Extractor:
       .flatMap: file =>
         val contents = Files.readString(file.toPath)
         ZIO.fromEither(parseKotlindoc(contents))
-      .mapError: _ =>
-        JavadocFormatFailure()
+      .orElseFail(JavadocFormatFailure())
 
   // could be better based on index-all.html
   def javadocJavaFormat(groupArtifactVersion: GroupArtifactVersion, javadocDir: File):
       ZIO[Any, JavadocFormatFailure, Set[Content]] =
-    javadocFile(groupArtifactVersion, javadocDir, "element-list")
-      .map: file =>
+    javadocFile(groupArtifactVersion, javadocDir, "element-list").mapBoth(_ => JavadocFormatFailure(),
+      file =>
         val elements = Files.readAllLines(file.toPath).asScala
         elements.flatMap: element =>
           val elementDir = File(javadocDir, element.replace('.', '/'))
@@ -155,8 +153,7 @@ object Extractor:
               Content(javadocDir.toPath.relativize(file).toString, false, "", "", "", "", "", "")
         .flatten
         .toSet
-      .mapError: _ =>
-        JavadocFormatFailure()
+    )
 
   def javadocContents(groupArtifactVersion: GroupArtifactVersion):
       ZIO[JavadocCache & Client & FetchBlocker & Scope, JavadocNotFoundError, Set[Content]] =
