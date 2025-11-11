@@ -33,10 +33,7 @@ object MCP:
 
   val getLatestServerTool = getLatestTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker, X]]: (input, _) =>
     ZIO.scoped:
-      Extractor.latest(input)
-        .map(_.toString)
-        .mapError(_.toString)
-        .either
+      Extractor.latest(input).mapBoth(_.toString, _.toString).either
 
 
   val getClassesTool = tool("get_javadoc_content_list")
@@ -45,31 +42,26 @@ object MCP:
 
   val getClassesServerTool = getClassesTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker, X]]: (input, _) =>
     ZIO.scoped:
-      Extractor.javadocContents(input)
-        .map(_.asJson.toString)
-        .mapError(_.toString)
-        .either
+      Extractor.javadocContents(input).mapBoth(_.toString, _.asJson.toString).either
 
 
   case class JavadocSymbol(groupId: GroupId, artifactId: ArtifactId, version: Version, link: String) derives io.circe.Codec, Schema
 
   val getSymbolContentsTool = tool("get_javadoc_symbol_contents")
-    .description(s"Gets the contents of a javadoc symbol. Get the symbole link from the ${getClassesTool.name} tool.")
+    .description(s"Gets the contents of a javadoc symbol. Get the symbol link from the ${getClassesTool.name} tool.")
     .input[JavadocSymbol]
 
   // todo: should this convert the html to markdown?
   val getSymbolContentsServerTool = getSymbolContentsTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker, X]]: (input, _) =>
     val groupArtifactVersion = GroupArtifactVersion(input.groupId, input.artifactId, input.version)
     ZIO.scoped:
-      Extractor.javadocSymbolContents(groupArtifactVersion, input.link)
-        .mapError(_.toString)
-        .either
+      Extractor.javadocSymbolContents(groupArtifactVersion, input.link).mapError(_.toString).either
 
 
   val mcpServerEndpoint = mcpEndpoint(
     List(getLatestServerTool, getClassesServerTool, getSymbolContentsServerTool),
     List("mcp"),
     "javadocs.dev",
-    "0.0.1",
+    "0.0.2",
     false
   )
