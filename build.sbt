@@ -32,7 +32,7 @@ libraryDependencies ++= Seq(
   "org.apache.commons" %  "commons-compress" % "1.28.0",
   "org.slf4j" % "slf4j-simple" % "2.0.17",
 
-  "com.jamesward" %% "zio-mavencentral" % "0.0.22",
+  "com.jamesward" %% "zio-mavencentral" % "0.0.23",
 
   "com.softwaremill.chimp" %% "core" % "0.1.6",
   "com.softwaremill.sttp.tapir" %% "tapir-zio" % "1.12.6",
