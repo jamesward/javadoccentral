@@ -6,7 +6,7 @@ import org.jsoup.safety.{Cleaner, Safelist}
 import zio.cache.Cache
 import zio.concurrent.ConcurrentMap
 import zio.direct.*
-import zio.http.Client
+import zio.http.{Client, URL}
 import zio.prelude.data.Optional.AllValuesAreNullable
 import zio.{Promise, Scope, ZIO}
 
@@ -29,13 +29,21 @@ object Extractor:
 
   def latest(groupArtifact: GroupArtifact): ZIO[Client, GroupIdOrArtifactIdNotFoundError | LatestNotFound, Version] =
     ZIO.scoped:
-      MavenCentral.latest(groupArtifact.groupId, groupArtifact.artifactId).someOrFail(LatestNotFound(groupArtifact))
+      MavenCentral.latest(groupArtifact.groupId, groupArtifact.artifactId)
+        .catchAll:
+          case t: Throwable => ZIO.die(t)
+          case groupIdOrArtifactIdNotFoundError: GroupIdOrArtifactIdNotFoundError => ZIO.fail(groupIdOrArtifactIdNotFoundError)
+        .someOrFail(LatestNotFound(groupArtifact))
 
   def javadoc(groupArtifactVersion: GroupArtifactVersion):
       ZIO[Client & FetchBlocker & TmpDir, JavadocNotFoundError, File] =
     ZIO.scoped:
+      val javadocUriOrDie: ZIO[Client & Scope, JavadocNotFoundError, URL] = MavenCentral.javadocUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version).catchAll:
+        case t: Throwable => ZIO.die(t)
+        case javadocNotFoundError: JavadocNotFoundError => ZIO.fail(javadocNotFoundError)
+
       defer:
-        val javadocUrl = MavenCentral.javadocUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version).run
+        val javadocUrl = javadocUriOrDie.run
         val blocker = ZIO.service[FetchBlocker].run
         val tmpDir = ZIO.service[TmpDir].run
         val javadocDir = File(tmpDir.dir, groupArtifactVersion.toString)
@@ -50,7 +58,7 @@ object Extractor:
             case _ =>
               val promise = Promise.make[Nothing, Unit].run
               blocker.put(groupArtifactVersion, promise).run
-              MavenCentral.downloadAndExtractZip(javadocUrl, javadocDir).run
+              MavenCentral.downloadAndExtractZip(javadocUrl, javadocDir).orDie.run
               promise.succeed(()).run
 
         javadocDir
