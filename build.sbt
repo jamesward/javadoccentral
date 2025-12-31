@@ -29,10 +29,12 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-direct"          % "1.0.0-RC7",
   "dev.zio" %% "zio-direct-streams"  % "1.0.0-RC7",
   "dev.zio" %% "zio-http"            % "3.7.4",
-  "org.apache.commons" %  "commons-compress" % "1.28.0",
+  "dev.zio" %% "zio-redis"           % "1.1.12",
+  "dev.zio" %% "zio-schema-protobuf" % "1.7.6",
+
   "org.slf4j" % "slf4j-simple" % "2.0.17",
 
-  "com.jamesward" %% "zio-mavencentral" % "0.0.24",
+  "com.jamesward" %% "zio-mavencentral" % "0.0.25",
 
   "com.softwaremill.chimp" %% "core" % "0.1.6",
   "com.softwaremill.sttp.tapir" %% "tapir-zio" % "1.13.4",
@@ -43,6 +45,7 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-test"           % zioVersion % Test,
   "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,
   "dev.zio" %% "zio-test-magnolia"  % zioVersion % Test,
+  "dev.zio" %% "zio-redis-embedded" % "1.1.12" % Test,
 )
 
 testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework")
@@ -57,3 +60,6 @@ javaOptions += "-Djava.net.preferIPv4Stack=true"
 
 //run / javaOptions += s"-agentlib:native-image-agent=config-output-dir=src/main/resources/META-INF/native-image"
 //javaOptions += s"-agentlib:native-image-agent=trace-output=${(target in GraalVMNativeImage).value}/trace-output.json"
+
+reStart / mainClass := Some("AppTest")
+reStart / fullClasspath := (Test / fullClasspath).value

@@ -6,7 +6,9 @@ import io.circe.{Codec, Decoder, Encoder}
 import sttp.tapir.Schema
 import sttp.tapir.generic.auto.*
 import zio.http.Client
+import zio.redis.Redis
 import zio.{RIO, ZIO}
+import zio.direct.*
 
 object MCP:
 
@@ -17,6 +19,8 @@ object MCP:
   given Codec[GroupId] = Codec.from(Decoder.decodeString.map(GroupId(_)), Encoder.encodeString.contramap(_.asInstanceOf[String]))
   given Codec[ArtifactId] = Codec.from(Decoder.decodeString.map(ArtifactId(_)), Encoder.encodeString.contramap(_.asInstanceOf[String]))
   given Codec[Version] = Codec.from(Decoder.decodeString.map(Version(_)), Encoder.encodeString.contramap(_.asInstanceOf[String]))
+
+  case class Symbol(query: String) derives io.circe.Codec, Schema
 
   given Codec[GroupArtifactVersion] = deriveCodec
   given Schema[GroupArtifactVersion] = Schema.derived
@@ -31,7 +35,7 @@ object MCP:
     .description("Gets the latest version of a given artifact")
     .input[GroupArtifact]
 
-  val getLatestServerTool = getLatestTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker, X]]: (input, _) =>
+  val getLatestServerTool = getLatestTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker & Redis, X]]: (input, _) =>
     ZIO.scoped:
       Extractor.latest(input).mapBoth(_.toString, _.toString).either
 
@@ -40,9 +44,11 @@ object MCP:
     .description("Gets a list of the contents of a javadoc jar")
     .input[GroupArtifactVersion]
 
-  val getClassesServerTool = getClassesTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker, X]]: (input, _) =>
+  val getClassesServerTool = getClassesTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker & Redis, X]]: (input, _) =>
     ZIO.scoped:
-      Extractor.javadocContents(input).mapBoth(_.toString, _.asJson.toString).either
+      defer:
+        App.indexJavadocContents(input).run
+        Extractor.javadocContents(input).mapBoth(_.toString, _.asJson.toString).either.run
 
 
   case class JavadocSymbol(groupId: GroupId, artifactId: ArtifactId, version: Version, link: String) derives io.circe.Codec, Schema
@@ -52,14 +58,23 @@ object MCP:
     .input[JavadocSymbol]
 
   // todo: should this convert the html to markdown?
-  val getSymbolContentsServerTool = getSymbolContentsTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker, X]]: (input, _) =>
+  val getSymbolContentsServerTool = getSymbolContentsTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker & Redis, X]]: (input, _) =>
     val groupArtifactVersion = GroupArtifactVersion(input.groupId, input.artifactId, input.version)
     ZIO.scoped:
       Extractor.javadocSymbolContents(groupArtifactVersion, input.link).mapError(_.toString).either
 
 
+  val symbolToArtifactTool = tool("symbol_to_artifact")
+    .description("Gets the group and artifact for a given symbol/class/package")
+    .input[Symbol]
+
+  val symbolToArtifactServerTool = symbolToArtifactTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker & Redis, X]]: (input, _) =>
+    ZIO.scoped:
+      SymbolSearch.search(input.query).mapBoth(_.getMessage, _.asJson.toString).either
+
+
   val mcpServerEndpoint = mcpEndpoint(
-    List(getLatestServerTool, getClassesServerTool, getSymbolContentsServerTool),
+    List(getLatestServerTool, getClassesServerTool, getSymbolContentsServerTool, symbolToArtifactServerTool),
     List("mcp"),
     "javadocs.dev",
     "0.0.2",

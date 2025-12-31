@@ -112,3 +112,16 @@ object UI:
       p(s"Version $version of that artifact does not exist or does not have a JavaDoc jar."),
       needVersion(groupId, artifactId, versions),
     )
+
+  def symbolSearchResults(query: String, groupArtifacts: Set[MavenCentral.GroupArtifact]): Html =
+    div(
+      h3("Search results for: ", code(query)),
+      if groupArtifacts.isEmpty then
+        div(p("No results found - but maybe the library just hasn't been indexed yet?"))
+      else
+        ul(
+          groupArtifacts.toSeq.map:
+            groupArtifact =>
+              li(a(href := groupArtifact.toPath.toString, s"${groupArtifact.groupId}:${groupArtifact.artifactId}"))
+        )
+    ) ++ pageFooter

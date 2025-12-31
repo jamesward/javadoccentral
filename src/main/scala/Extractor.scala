@@ -21,11 +21,14 @@ object Extractor:
 
   case class LatestNotFound(groupArtifact: GroupArtifact)
 
-  case class Content(link: String, external: Boolean, info: String, name: String, `type`: String, declartion: String, kind: String, extra: String)
+  case class Content(link: String, external: Boolean, fqn: String, `type`: String, kind: String, extra: String)
 
   type LatestCache = Cache[GroupArtifact, GroupIdOrArtifactIdNotFoundError | LatestNotFound, Version]
   type JavadocCache = Cache[GroupArtifactVersion, JavadocNotFoundError, File]
   type FetchBlocker = ConcurrentMap[GroupArtifactVersion, Promise[Nothing, Unit]]
+
+  def gav(groupId: String, artifactId: String, version: String) =
+    GroupArtifactVersion(GroupId(groupId), ArtifactId(artifactId), Version(version))
 
   def latest(groupArtifact: GroupArtifact): ZIO[Client, GroupIdOrArtifactIdNotFoundError | LatestNotFound, Version] =
     ZIO.scoped:
@@ -89,7 +92,7 @@ object Extractor:
         decl <- c.downField("d").as[String]
         kind <- c.downField("k").as[String]
         extra <- c.downField("x").as[String]
-      yield Content(link, external, info, name, tpe, decl, kind, extra)
+      yield Content(link, external, s"$decl.$name", tpe, kind, extra)
     }
 
     decode[Set[Content]](contents)
@@ -104,7 +107,8 @@ object Extractor:
         description <- c.downField("description").as[String]
         location <- c.downField("location").as[String]
         // searchKeys <- c.downField("searchKeys").as[List[String]]
-      yield Content(location, false, description, name, "", "", "", "")
+        // todo: extract kind i.e. abstract class SingleInstancePool<T : Any> : ObjectPool<T>
+      yield Content(location, false, description, name.trim, "", "")
     }
 
     decode[Set[Content]](contents)
@@ -119,9 +123,7 @@ object Extractor:
         Content(
           baseDir.toPath.relativize(path).toString,
           false,
-          "",
           path.getFileName.toString.stripSuffix(".html"),
-          "",
           "",
           "",
           "",
@@ -152,16 +154,25 @@ object Extractor:
   // could be better based on index-all.html
   def javadocJavaFormat(groupArtifactVersion: GroupArtifactVersion, javadocDir: File):
       ZIO[Any, JavadocFormatFailure, Set[Content]] =
-    javadocFile(groupArtifactVersion, javadocDir, "element-list").mapBoth(_ => JavadocFormatFailure(),
+    javadocFile(groupArtifactVersion, javadocDir, "element-list").mapBoth(
+      _ => JavadocFormatFailure(),
       file =>
         val elements = Files.readAllLines(file.toPath).asScala
         elements.flatMap: element =>
           val elementDir = File(javadocDir, element.replace('.', '/'))
           val files = Files.walk(elementDir.toPath).iterator().asScala
           files
-            .filter(_.toString.endsWith(".html"))
-            .map: file =>
-              Content(javadocDir.toPath.relativize(file).toString, false, "", "", "", "", "", "")
+            .map:
+              javadocDir.toPath.relativize
+            .filter:
+              file =>
+                file.toString.endsWith(".html") &&
+                  !file.getFileName.toString.startsWith("package-") &&
+                  !file.toString.contains("class-use")
+            .map:
+              file =>
+                val fqn = file.toString.stripSuffix(".html").replace('/', '.')
+                Content(file.toString, false, fqn, "", "", "")
         .flatten
         .toSet
     )

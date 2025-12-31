@@ -6,12 +6,9 @@ import zio.http.Client
 import zio.test.*
 import zio.test.Assertion.failsWithA
 import zio.{Exit, Scope, ZLayer}
-
+import Extractor.gav
 
 object ExtractorSpec extends ZIOSpecDefault:
-
-  def gav(groupId: String, artifactId: String, version: String) =
-    GroupArtifactVersion(GroupId(groupId), ArtifactId(artifactId), Version(version))
 
   def spec = suite("Extractor")(
     test("parseScaladoc") {
@@ -68,10 +65,10 @@ object ExtractorSpec extends ZIOSpecDefault:
           scaladoc.size == 48,
           scaladoc.exists { contents =>
             contents.link == "com/jamesward/zio_mavencentral/MavenCentral$.html#" &&
-              contents.name == "MavenCentral" &&
-              contents.declartion == "com.jamesward.zio_mavencentral" &&
+              contents.fqn == "com.jamesward.zio_mavencentral.MavenCentral" &&
               contents.kind == "object"
-          }
+          },
+          scaladoc.exists(_.`type` == "searchArtifacts(groupId: GroupId): ZIO[Client & Scope, GroupIdNotFoundError | Throwable, Seq[ArtifactId]]")
         )
     },
     test("scaladoc - zio_3") {
@@ -92,14 +89,17 @@ object ExtractorSpec extends ZIOSpecDefault:
       defer:
         val doccontents = Extractor.javadocContents(gav("io.ktor", "ktor-io-jvm", "3.2.3")).run
         assertTrue(
-          doccontents.size == 465
+          doccontents.size == 465,
+          doccontents.exists(_.fqn == "io.ktor.utils.io.pool.SingleInstancePool"),
+          doccontents.exists(_.`type` == "abstract class SingleInstancePool<T : Any> : ObjectPool<T>"),
         )
     },
     test("java - spring-ai-mcp/1.0.1") {
       defer:
         val doccontents = Extractor.javadocContents(gav("org.springframework.ai", "spring-ai-mcp", "1.0.1")).run
         assertTrue(
-          doccontents.size == 25
+          doccontents.size == 8,
+          doccontents.exists(_.fqn == "org.springframework.ai.mcp.SyncMcpToolCallback")
         )
     },
     test("symbolContents - zio-mavencentral_3") {
@@ -123,5 +123,5 @@ object ExtractorSpec extends ZIOSpecDefault:
     Client.default,
     App.javadocCacheLayer,
     App.blockerLayer,
-    App.tmpDirLayer,
+    App.tmpDirLayer.debug,
   )

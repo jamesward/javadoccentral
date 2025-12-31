@@ -6,6 +6,8 @@ import zio.direct.*
 import zio.http.*
 import zio.test.*
 import zio.*
+import zio.redis.{CodecSupplier, Redis}
+import zio.redis.embedded.EmbeddedRedis
 
 object AppSpec extends ZIOSpecDefault:
 
@@ -50,4 +52,7 @@ object AppSpec extends ZIOSpecDefault:
     App.tmpDirLayer,
     Client.default,
     Scope.default,
+    EmbeddedRedis.layer,
+    Redis.singleNode,
+    ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
   )

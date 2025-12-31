@@ -7,7 +7,9 @@ import zio.direct.*
 import zio.http.*
 import zio.http.codec.PathCodec
 import zio.http.template.Template
+import zio.redis.{CodecSupplier, Redis, RedisConfig}
 
+import java.net.URI
 import java.nio.file.Files
 import scala.annotation.unused
 
@@ -48,8 +50,18 @@ object App extends ZIOAppDefault:
       .orElse:
         Response.redirect(URL(Path.root / groupId.toString)).toHandler  // todo: message
 
+  def indexJavadocContents(groupArtifactVersion: MavenCentral.GroupArtifactVersion):
+    ZIO[Client & Extractor.FetchBlocker & Extractor.JavadocCache & Redis & Scope, Nothing, Unit] =
+
+    val getContentsAndUpdateIndex = for
+      contents <- Extractor.javadocContents(groupArtifactVersion).debug
+      _ <- SymbolSearch.update(groupArtifactVersion.noVersion, contents).debug
+    yield ()
+
+    getContentsAndUpdateIndex.forkDaemon.unit
+
   def withVersion(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, @unused request: Request):
-      Handler[Extractor.LatestCache & Client & Extractor.JavadocCache, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
+      Handler[Extractor.LatestCache & Client & Extractor.JavadocCache & Redis & Extractor.FetchBlocker & Extractor.TmpDir, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
     val groupArtifactVersion = MavenCentral.GroupArtifactVersion(groupId, artifactId, version)
 
     Handler.fromZIO:
@@ -78,13 +90,14 @@ object App extends ZIOAppDefault:
   case class JavadocException(error: MavenCentral.JavadocNotFoundError | Extractor.JavadocFileNotFound) extends Exception
 
   def withFile(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, file: Path, @unused request: Request):
-      Handler[Extractor.FetchBlocker & Client & Extractor.TmpDir, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
+      Handler[Extractor.FetchBlocker & Client & Extractor.TmpDir & Redis & Extractor.JavadocCache, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
     val groupArtifactVersion = MavenCentral.GroupArtifactVersion(groupId, artifactId, version)
 
     Handler.fromFileZIO:
       ZIO.scoped:
         defer:
           val javadocDir = Extractor.javadoc(groupArtifactVersion).run
+          ZIO.when(file.toString == "index.html")(indexJavadocContents(groupArtifactVersion)).run
           Extractor.javadocFile(groupArtifactVersion, javadocDir, file.toString).run
         .catchAll(e => ZIO.fail(JavadocException(e)))
     .catchAll:
@@ -111,18 +124,33 @@ object App extends ZIOAppDefault:
     string("version").transformOrFailLeft(versionExtractor)(_.toString)
 
   def withVersionAndFile(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, path: Path, request: Request):
-      Handler[Extractor.FetchBlocker & Client & Extractor.LatestCache & Extractor.JavadocCache & Extractor.TmpDir, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] = {
+      Handler[Extractor.FetchBlocker & Client & Extractor.LatestCache & Extractor.JavadocCache & Extractor.TmpDir & Redis, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] = {
     if (path.isEmpty)
       withVersion(groupId, artifactId, version, request)
     else
       withFile(groupId, artifactId, version, path, request)
   }
 
-  val app: Routes[Extractor.LatestCache & Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.TmpDir & Client, Response] =
+  def index(request: Request): Handler[Redis, Nothing, Request, Response] =
+    request.queryParameters.map.keys.headOption.fold(Handler.template("javadocs.dev")(UI.index)):
+      query =>
+        Handler.fromZIO:
+          SymbolSearch.search(query).tapError:
+            e =>
+              ZIO.logError(e.getMessage)
+        .flatMap:
+          results =>
+            Handler.template("javadocs.dev")(UI.symbolSearchResults(query, results))
+        .catchAll:
+          _ =>
+            // todo: convey error
+            Handler.template("javadocs.dev")(UI.symbolSearchResults(query, Set.empty))
+
+  val app: Routes[Extractor.LatestCache & Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.TmpDir & Client & Redis, Response] =
     val mcpRoutes = ZioHttpInterpreter().toHttp(MCP.mcpServerEndpoint)
 
-    val appRoutes = Routes[Extractor.LatestCache & Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.TmpDir & Client, Nothing](
-      Method.GET / "" -> Handler.template("javadocs.dev")(UI.index),
+    val appRoutes = Routes[Extractor.LatestCache & Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.TmpDir & Client & Redis, Nothing](
+      Method.GET / "" -> Handler.fromFunctionHandler[Request](index),
       Method.GET / "favicon.ico" -> Handler.notFound,
       Method.GET / "robots.txt" -> Handler.notFound,
       Method.GET / ".well-known" / trailing -> Handler.notFound,
@@ -149,7 +177,7 @@ object App extends ZIOAppDefault:
         response
     )(Response.redirect(_, true))
 
-  val appWithMiddleware: Routes[Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.LatestCache & Extractor.TmpDir & Client, Response] =
+  val appWithMiddleware: Routes[Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.LatestCache & Extractor.TmpDir & Client & Redis, Response] =
     app @@ redirectQueryParams @@ Middleware.requestLogging()
 
   // todo: i think there is a better way
@@ -176,6 +204,32 @@ object App extends ZIOAppDefault:
 
   val tmpDirLayer = ZLayer.succeed(Extractor.TmpDir(Files.createTempDirectory("jars").nn.toFile))
 
+  val redisUri: ZIO[Any, Throwable, URI] =
+    ZIO.systemWith:
+      system =>
+        system.env("REDIS_URL")
+          .someOrFail(new RuntimeException("REDIS_URL env var not set"))
+          .map:
+            redisUrl =>
+              URI(redisUrl)
+
+  val redisConfigLayer: ZLayer[Any, Throwable, RedisConfig] =
+    ZLayer.fromZIO:
+      defer:
+        val uri = redisUri.run
+        RedisConfig(uri.getHost, uri.getPort, ssl = true, verifyCertificate = false)
+
+  // may not work with reconnects
+  val redisAuthLayer: ZLayer[CodecSupplier & RedisConfig, Throwable, Redis] =
+    Redis.singleNode.flatMap:
+      env =>
+        ZLayer.fromZIO:
+          defer:
+            val uri = redisUri.run
+            val redis = env.get[Redis]
+            val password = uri.getUserInfo.drop(1) // REDIS_URL has an empty username
+            redis.auth(password).as(redis).run
+
   def run =
     // todo: log filtering so they don't show up in tests / runtime config
     Server.serve(appWithMiddleware).provide(
@@ -185,4 +239,7 @@ object App extends ZIOAppDefault:
       latestCacheLayer,
       javadocCacheLayer,
       tmpDirLayer,
+      redisConfigLayer,
+      redisAuthLayer,
+      ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
     )
