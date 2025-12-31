@@ -54,8 +54,8 @@ object App extends ZIOAppDefault:
     ZIO[Client & Extractor.FetchBlocker & Extractor.JavadocCache & Redis & Scope, Nothing, Unit] =
 
     val getContentsAndUpdateIndex = for
-      contents <- Extractor.javadocContents(groupArtifactVersion).debug
-      _ <- SymbolSearch.update(groupArtifactVersion.noVersion, contents).debug
+      contents <- Extractor.javadocContents(groupArtifactVersion)
+      _ <- SymbolSearch.update(groupArtifactVersion.noVersion, contents)
     yield ()
 
     getContentsAndUpdateIndex.forkDaemon.unit
