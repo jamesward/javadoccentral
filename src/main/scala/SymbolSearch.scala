@@ -4,6 +4,7 @@ import zio.redis.{CodecSupplier, Redis, RedisType}
 import zio.direct.*
 import zio.schema.Schema
 import zio.schema.codec.{BinaryCodec, ProtobufCodec}
+import zio.stream.ZStream
 
 object SymbolSearch:
 
@@ -22,10 +23,17 @@ object SymbolSearch:
   def search(symbol: String): ZIO[Redis, Throwable, Set[MavenCentral.GroupArtifact]] =
     defer:
       val redis = ZIO.service[Redis].run
-      val matches = redis.scan(0L, Some("*" + symbol + "*")).returning[String].run
-      matches._2.mapZIOPar:
-        key =>
-          redis.sMembers(key).returning[MavenCentral.GroupArtifact]
+      val pattern = "*" + symbol + "*"
+
+      val allKeys = ZStream.paginateZIO(0L): cursor =>
+        redis.scan(cursor, Some(pattern)).returning[String].debug.map:
+          case (nextCursor, keys) =>
+            val next = if (nextCursor == 0L) None else Some(nextCursor)
+            (keys, next)
+      .runCollect.run.flatten
+
+      ZIO.foreachPar(allKeys): key =>
+        redis.sMembers(key).returning[MavenCentral.GroupArtifact]
       .run
       .flatten
       .toSet
