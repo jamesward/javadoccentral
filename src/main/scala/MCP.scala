@@ -1,3 +1,4 @@
+import SymbolSearch.HerokuInference
 import chimp.{mcpEndpoint, tool}
 import com.jamesward.zio_mavencentral.MavenCentral.*
 import io.circe.syntax.*
@@ -35,7 +36,7 @@ object MCP:
     .description("Gets the latest version of a given artifact")
     .input[GroupArtifact]
 
-  val getLatestServerTool = getLatestTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker & Redis, X]]: (input, _) =>
+  val getLatestServerTool = getLatestTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker & Redis & HerokuInference, X]]: (input, _) =>
     ZIO.scoped:
       Extractor.latest(input).mapBoth(_.toString, _.toString).either
 
@@ -44,7 +45,7 @@ object MCP:
     .description("Gets a list of the contents of a javadoc jar")
     .input[GroupArtifactVersion]
 
-  val getClassesServerTool = getClassesTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker & Redis, X]]: (input, _) =>
+  val getClassesServerTool = getClassesTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker & Redis & HerokuInference, X]]: (input, _) =>
     ZIO.scoped:
       defer:
         App.indexJavadocContents(input).run
@@ -58,7 +59,7 @@ object MCP:
     .input[JavadocSymbol]
 
   // todo: should this convert the html to markdown?
-  val getSymbolContentsServerTool = getSymbolContentsTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker & Redis, X]]: (input, _) =>
+  val getSymbolContentsServerTool = getSymbolContentsTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker & Redis & HerokuInference, X]]: (input, _) =>
     val groupArtifactVersion = GroupArtifactVersion(input.groupId, input.artifactId, input.version)
     ZIO.scoped:
       Extractor.javadocSymbolContents(groupArtifactVersion, input.link).mapError(_.toString).either
@@ -68,7 +69,7 @@ object MCP:
     .description("Gets the group and artifact for a given symbol/class/package")
     .input[Symbol]
 
-  val symbolToArtifactServerTool = symbolToArtifactTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker & Redis, X]]: (input, _) =>
+  val symbolToArtifactServerTool = symbolToArtifactTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker & Redis & HerokuInference, X]]: (input, _) =>
     ZIO.scoped:
       SymbolSearch.search(input.query).mapBoth(_.getMessage, _.asJson.toString).either
 

@@ -16,4 +16,5 @@ object AppTest extends ZIOAppDefault:
       EmbeddedRedis.layer,
       Redis.singleNode,
       ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
+      SymbolSearch.herokuInferenceLayer,
     )

@@ -22,15 +22,17 @@ scalaVersion := "3.7.4"
 val zioVersion = "2.1.24"
 
 libraryDependencies ++= Seq(
-  "dev.zio" %% "zio"                 % zioVersion,
-  "dev.zio" %% "zio-concurrent"      % zioVersion,
-  "dev.zio" %% "zio-cache"           % "0.2.7",
-  "dev.zio" %% "zio-logging"         % "2.5.2",
-  "dev.zio" %% "zio-direct"          % "1.0.0-RC7",
-  "dev.zio" %% "zio-direct-streams"  % "1.0.0-RC7",
-  "dev.zio" %% "zio-http"            % "3.7.4",
-  "dev.zio" %% "zio-redis"           % "1.1.12",
-  "dev.zio" %% "zio-schema-protobuf" % "1.7.6",
+  "dev.zio" %% "zio"                   % zioVersion,
+  "dev.zio" %% "zio-concurrent"        % zioVersion,
+  "dev.zio" %% "zio-cache"             % "0.2.7",
+  "dev.zio" %% "zio-logging"           % "2.5.2",
+  "dev.zio" %% "zio-direct"            % "1.0.0-RC7",
+  "dev.zio" %% "zio-direct-streams"    % "1.0.0-RC7",
+  "dev.zio" %% "zio-http"              % "3.7.4",
+  "dev.zio" %% "zio-redis"             % "1.1.12",
+  "dev.zio" %% "zio-schema-protobuf"   % "1.7.6",
+  "dev.zio" %% "zio-schema-json"       % "1.7.6",
+  "dev.zio" %% "zio-schema-derivation" % "1.7.6",
 
   "org.slf4j" % "slf4j-simple" % "2.0.17",
 
@@ -63,3 +65,19 @@ javaOptions += "-Djava.net.preferIPv4Stack=true"
 
 reStart / mainClass := Some("AppTest")
 reStart / fullClasspath := (Test / fullClasspath).value
+
+/*
+reStart / envVars := sys.env
+
+test / envVars := sys.env
+
+val showEnvVars = taskKey[Unit]("Display all environment variables")
+showEnvVars := {
+  println("Environment Variables:")
+  sys.env.toSeq.sortBy(_._1).foreach { case (key, value) =>
+    println(s"$key = $value")
+  }
+}
+
+ */
+

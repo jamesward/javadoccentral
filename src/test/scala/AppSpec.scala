@@ -55,4 +55,5 @@ object AppSpec extends ZIOSpecDefault:
     EmbeddedRedis.layer,
     Redis.singleNode,
     ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
-  )
+    SymbolSearch.herokuInferenceLayer,
+  ) @@ TestAspect.withLiveSystem

@@ -1,3 +1,4 @@
+import SymbolSearch.HerokuInference
 import com.jamesward.zio_mavencentral.MavenCentral
 import sttp.tapir.server.ziohttp.ZioHttpInterpreter
 import zio.*
@@ -131,13 +132,14 @@ object App extends ZIOAppDefault:
       withFile(groupId, artifactId, version, path, request)
   }
 
-  def index(request: Request): Handler[Redis, Nothing, Request, Response] =
+  def index(request: Request): Handler[Redis & HerokuInference & Client & Extractor.JavadocCache & Extractor.FetchBlocker, Nothing, Request, Response] =
     request.queryParameters.map.keys.headOption.fold(Handler.template("javadocs.dev")(UI.index)):
       query =>
         Handler.fromZIO:
-          SymbolSearch.search(query).tapError:
-            e =>
-              ZIO.logError(e.getMessage)
+          ZIO.scoped:
+            SymbolSearch.search(query).tapError:
+              e =>
+                ZIO.logError(e.getMessage)
         .flatMap:
           results =>
             Handler.template("javadocs.dev")(UI.symbolSearchResults(query, results))
@@ -146,10 +148,10 @@ object App extends ZIOAppDefault:
             // todo: convey error
             Handler.template("javadocs.dev")(UI.symbolSearchResults(query, Set.empty))
 
-  val app: Routes[Extractor.LatestCache & Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.TmpDir & Client & Redis, Response] =
+  val app: Routes[Extractor.LatestCache & Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.TmpDir & Client & Redis & HerokuInference, Response] =
     val mcpRoutes = ZioHttpInterpreter().toHttp(MCP.mcpServerEndpoint)
 
-    val appRoutes = Routes[Extractor.LatestCache & Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.TmpDir & Client & Redis, Nothing](
+    val appRoutes = Routes[Extractor.LatestCache & Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.TmpDir & Client & Redis & HerokuInference, Nothing](
       Method.GET / "" -> Handler.fromFunctionHandler[Request](index),
       Method.GET / "favicon.ico" -> Handler.notFound,
       Method.GET / "robots.txt" -> Handler.notFound,
@@ -177,7 +179,7 @@ object App extends ZIOAppDefault:
         response
     )(Response.redirect(_, true))
 
-  val appWithMiddleware: Routes[Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.LatestCache & Extractor.TmpDir & Client & Redis, Response] =
+  val appWithMiddleware: Routes[Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.LatestCache & Extractor.TmpDir & Client & Redis & HerokuInference, Response] =
     app @@ redirectQueryParams @@ Middleware.requestLogging()
 
   // todo: i think there is a better way
@@ -242,4 +244,5 @@ object App extends ZIOAppDefault:
       redisConfigLayer,
       redisAuthLayer,
       ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
+      SymbolSearch.herokuInferenceLayer,
     )

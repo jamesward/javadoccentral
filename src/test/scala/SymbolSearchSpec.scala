@@ -1,3 +1,4 @@
+import com.jamesward.zio_mavencentral.MavenCentral
 import com.jamesward.zio_mavencentral.MavenCentral.*
 import zio.*
 import zio.cache.Cache
@@ -33,6 +34,29 @@ object SymbolSearchSpec extends ZIOSpecDefault:
           sufMatch == Set(springai.noVersion),
         )
     },
+    test("inference") {
+      defer:
+        val herokuInference = ZIO.service[SymbolSearch.HerokuInference].run
+
+        val response = herokuInference.req("say hello").run
+
+        val body = response.body.asJson[SymbolSearch.MessageResponse].run
+
+        assertTrue(
+          response.status.isSuccess,
+          body.choices.head.message.content.toLowerCase.contains("hello"),
+        )
+    },
+    test("aiSearch") {
+      defer:
+        val knowResults = SymbolSearch.aiSearch("zio.cache.Cache").debug.run
+        val ambigResults = SymbolSearch.aiSearch("zxcvzxcv").debug.run
+
+        assertTrue(
+          knowResults.contains(MavenCentral.GroupArtifact(GroupId("dev.zio"), ArtifactId("zio-cache_3"))),
+          ambigResults.isEmpty
+        )
+    }
   ).provide(
     Scope.default,
     Client.default,
@@ -42,4 +66,5 @@ object SymbolSearchSpec extends ZIOSpecDefault:
     EmbeddedRedis.layer,
     Redis.singleNode,
     ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
-  )
+    SymbolSearch.herokuInferenceLayer,
+  ) @@ TestAspect.withLiveSystem
