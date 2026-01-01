@@ -40,7 +40,7 @@ libraryDependencies ++= Seq(
   "com.softwaremill.sttp.tapir" %% "tapir-zio" % "1.13.4",
   "com.softwaremill.sttp.tapir" %% "tapir-zio-http-server" % "1.13.4",
 
-  "org.jsoup" % "jsoup" % "1.21.2",
+  "org.jsoup" % "jsoup" % "1.22.1",
 
   "dev.zio" %% "zio-test"           % zioVersion % Test,
   "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,
