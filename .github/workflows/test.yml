@@ -12,7 +12,11 @@ jobs:
         java-version: 17
         cache: 'sbt'
 
-    - run: |
+    - env:
+        INFERENCE_KEY: ${{ secrets.INFERENCE_KEY }}
+        INFERENCE_MODEL_ID: ${{ secrets.INFERENCE_MODEL_ID }}
+        INFERENCE_URL: ${{ secrets.INFERENCE_URL }}
+      run: |
         ./sbt test
         ./sbt clean
 
