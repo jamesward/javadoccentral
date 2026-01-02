@@ -8,7 +8,8 @@ import zio.direct.*
 import zio.http.*
 import zio.http.codec.PathCodec
 import zio.http.template.Template
-import zio.redis.{CodecSupplier, Redis, RedisConfig}
+import zio.redis.internal.RedisExecutor
+import zio.redis.{CodecSupplier, Redis, RedisConfig, RedisError}
 
 import java.net.URI
 import java.nio.file.Files
@@ -230,7 +231,19 @@ object App extends ZIOAppDefault:
             val uri = redisUri.run
             val redis = env.get[Redis]
             val password = uri.getUserInfo.drop(1) // REDIS_URL has an empty username
-            redis.auth(password).as(redis).run
+
+            val authIfNeeded =
+              redis.ping().debug.catchAll:
+                case e: RedisError if e.getMessage.contains("NOAUTH") =>
+                  ZIO.logInfo("Redis NOAUTH detected, authenticating...") *> redis.auth(password)
+                case e =>
+                  ZIO.fail(e)
+
+            redis.auth(password).run
+
+            authIfNeeded.repeat(Schedule.spaced(5.seconds)).forkDaemon.run
+
+            redis
 
   def run =
     // todo: log filtering so they don't show up in tests / runtime config

@@ -63,8 +63,8 @@ javaOptions += "-Djava.net.preferIPv4Stack=true"
 //run / javaOptions += s"-agentlib:native-image-agent=config-output-dir=src/main/resources/META-INF/native-image"
 //javaOptions += s"-agentlib:native-image-agent=trace-output=${(target in GraalVMNativeImage).value}/trace-output.json"
 
-reStart / mainClass := Some("AppTest")
-reStart / fullClasspath := (Test / fullClasspath).value
+//reStart / mainClass := Some("AppTest")
+//reStart / fullClasspath := (Test / fullClasspath).value
 
 /*
 reStart / envVars := sys.env
