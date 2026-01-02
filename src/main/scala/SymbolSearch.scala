@@ -103,10 +103,11 @@ object SymbolSearch:
           case (nextCursor, keys) =>
             val next = if (nextCursor == 0L) None else Some(nextCursor)
             (keys, next)
-      .runCollect.run.flatten
+      .runCollect.debug.run.flatten
 
       val cacheResults = ZIO.foreachPar(allKeys): key =>
         redis.sMembers(key).returning[MavenCentral.GroupArtifact]
+      .debug
       .run
       .flatten
       .toSet
