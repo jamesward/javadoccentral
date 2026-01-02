@@ -18,9 +18,3 @@ jobs:
         INFERENCE_URL: ${{ secrets.INFERENCE_URL }}
       run: |
         ./sbt test
-        ./sbt clean
-
-    - uses: buildpacks/github-actions/setup-pack@v5.0.0
-
-    - run: |
-        pack build --builder=paketobuildpacks/builder-jammy-base javadoccentral
