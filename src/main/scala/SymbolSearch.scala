@@ -1,6 +1,6 @@
 import com.jamesward.zio_mavencentral.MavenCentral
 import zio.*
-import zio.redis.{CodecSupplier, Redis}
+import zio.redis.{CodecSupplier, Count, Redis}
 import zio.direct.*
 import zio.http.*
 import zio.http.Header.Authorization
@@ -79,6 +79,7 @@ object SymbolSearch:
       val herokuInference = ZIO.service[HerokuInference].run
       val prompt =
         s"""List the most probable maven central artifacts that contain the symbol: `$symbol`
+          |If you don't know the maven group id or artifact id, just return an empty list.
           |The response must be JSON structured in this format:
           |[
           |  {
@@ -99,7 +100,7 @@ object SymbolSearch:
       val pattern = "*" + symbol + "*"
 
       val allKeys = ZStream.paginateZIO(0L): cursor =>
-        redis.scan(cursor, Some(pattern)).returning[String].map:
+        redis.scan(cursor, Some(pattern), Some(Count(1000L))).returning[String].map:
           case (nextCursor, keys) =>
             val next = if (nextCursor == 0L) None else Some(nextCursor)
             (keys, next)
