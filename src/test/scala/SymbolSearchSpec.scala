@@ -67,4 +67,4 @@ object SymbolSearchSpec extends ZIOSpecDefault:
     Redis.singleNode,
     ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
     SymbolSearch.herokuInferenceLayer,
-  ) @@ TestAspect.withLiveSystem
+  ) @@ TestAspect.withLiveSystem @@ TestAspect.sequential
