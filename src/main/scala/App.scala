@@ -133,9 +133,11 @@ object App extends ZIOAppDefault:
       withFile(groupId, artifactId, version, path, request)
   }
 
+
   def index(request: Request): Handler[Redis & HerokuInference & Client & Extractor.JavadocCache & Extractor.FetchBlocker, Nothing, Request, Response] =
-    request.queryParameters.map.keys.headOption.fold(Handler.template("javadocs.dev")(UI.index)):
+    request.queryParameters.map.keys.filterNot(_ == "groupId").headOption.fold(Handler.template("javadocs.dev")(UI.index)):
       query =>
+        // todo: rate limit
         Handler.fromZIO:
           ZIO.scoped:
             SymbolSearch.search(query).tapError:

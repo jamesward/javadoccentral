@@ -63,21 +63,19 @@ javaOptions += "-Djava.net.preferIPv4Stack=true"
 //run / javaOptions += s"-agentlib:native-image-agent=config-output-dir=src/main/resources/META-INF/native-image"
 //javaOptions += s"-agentlib:native-image-agent=trace-output=${(target in GraalVMNativeImage).value}/trace-output.json"
 
-//reStart / mainClass := Some("AppTest")
-//reStart / fullClasspath := (Test / fullClasspath).value
+lazy val reStartTest =
+  inputKey[spray.revolver.AppProcess]("re-start, but test")
 
-/*
-reStart / envVars := sys.env
-
-test / envVars := sys.env
-
-val showEnvVars = taskKey[Unit]("Display all environment variables")
-showEnvVars := {
-  println("Environment Variables:")
-  sys.env.toSeq.sortBy(_._1).foreach { case (key, value) =>
-    println(s"$key = $value")
-  }
-}
-
- */
-
+reStartTest :=
+  Def.inputTask {
+    spray.revolver.Actions.restartApp(
+      streams.value,
+      reLogTag.value,
+      thisProjectRef.value,
+      reForkOptions.value,
+      Some("AppTest"),
+      (Test / fullClasspath).value,
+      reStartArgs.value,
+      spray.revolver.Actions.startArgsParser.parsed
+    )
+  }.dependsOn(Compile / products).evaluated

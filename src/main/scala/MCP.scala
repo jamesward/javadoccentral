@@ -71,6 +71,7 @@ object MCP:
 
   val symbolToArtifactServerTool = symbolToArtifactTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker & Redis & HerokuInference, X]]: (input, _) =>
     ZIO.scoped:
+      // todo: rate limit
       SymbolSearch.search(input.query).mapBoth(_.getMessage, _.asJson.toString).either
 
 
