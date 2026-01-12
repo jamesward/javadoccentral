@@ -155,7 +155,7 @@ object App extends ZIOAppDefault:
     val mcpRoutes = ZioHttpInterpreter().toHttp(MCP.mcpServerEndpoint)
 
     val appRoutes = Routes[Extractor.LatestCache & Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.TmpDir & Client & Redis & HerokuInference, Nothing](
-      Method.GET / "" -> Handler.fromFunctionHandler[Request](index),
+      Method.GET / Root -> Handler.fromFunctionHandler[Request](index),
       Method.GET / "favicon.ico" -> Handler.notFound,
       Method.GET / "robots.txt" -> Handler.notFound,
       Method.GET / ".well-known" / trailing -> Handler.notFound,
@@ -176,14 +176,14 @@ object App extends ZIOAppDefault:
       request.url.queryParam("version").map: version =>
         request.url.path(request.path / version).setQueryParams()
     .fold(
-      if request.url.path.hasTrailingSlash then
+      if request.url.path.hasTrailingSlash && request.url.path != Path.root then
         Response.redirect(request.url.dropTrailingSlash)
       else
         response
     )(Response.redirect(_, true))
 
-  private def getForwardedFor(request: Request): List[String] =
-    request.headers.get(Header.Forwarded).fold(List.empty)(_.forValues)
+  private def getForwardedFor(request: Request): Option[BadActor.IP] =
+    request.headers.get("X-Forwarded-For").flatMap(_.split(",").lastOption).orElse(request.remoteAddress.map(_.getHostAddress))
 
   val gibberishStream: ZStream[Any, Nothing, Byte] =
     ZStream
@@ -195,18 +195,19 @@ object App extends ZIOAppDefault:
     HandlerAspect.interceptIncomingHandler:
       Handler.fromFunctionZIO:
         request =>
-          defer:
-            val ips = getForwardedFor(request)
-            val isSuspect = request.path.toString.endsWith(".php")
-            val clock = ZIO.clock.run
-            val now = clock.instant.run
-            BadActor.checkReq(ips, now, isSuspect).debug(ips.mkString).run match
-              case BadActor.Status.Allowed =>
-                ZIO.succeed(request -> ()).run
-              case BadActor.Status.Banned =>
-                ZIO.logWarning(s"Bad actor detected: ${ips.mkString}").run
-                val gibberishResponse = Response(status = Status.TooManyRequests, body = Body.fromStreamChunked(gibberishStream))
-                ZIO.fail(gibberishResponse).run
+          getForwardedFor(request).fold(ZIO.fail(Response.badRequest("Failed to get forwarded IP"))):
+            ip =>
+              defer:
+                val isSuspect = request.path.toString.endsWith(".php")
+                val clock = ZIO.clock.run
+                val now = clock.instant.run
+                BadActor.checkReq(ip, now, isSuspect).debug(ip).run match
+                  case BadActor.Status.Allowed =>
+                    ZIO.succeed(request -> ()).run
+                  case BadActor.Status.Banned =>
+                    ZIO.logWarning(s"Bad actor detected: $ip").run
+                    val gibberishResponse = Response(status = Status.TooManyRequests, body = Body.fromStreamChunked(gibberishStream))
+                    ZIO.fail(gibberishResponse).run
 
   val appWithMiddleware: Routes[BadActor.Store & Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.LatestCache & Extractor.TmpDir & Client & Redis & HerokuInference, Response] =
     app @@ badActorMiddleware @@ redirectQueryParams @@ Middleware.requestLogging()

@@ -9,11 +9,11 @@ object BadActor:
   private val banWindow: Duration = 10.seconds
   private val banOnRequestCount = 5
 
-  type IPs = List[String]
-  type Store = ConcurrentMap[IPs, Ref[Chunk[Instant]]]
+  type IP = String
+  type Store = ConcurrentMap[IP, Ref[Chunk[Instant]]]
 
   val live: ZLayer[Any, Nothing, Store] = ZLayer.fromZIO:
-    ConcurrentMap.make[IPs, Ref[Chunk[Instant]]]()
+    ConcurrentMap.make[IP, Ref[Chunk[Instant]]]()
 
   enum Status:
     case Allowed
@@ -22,7 +22,7 @@ object BadActor:
   given CanEqual[Status, Status] = CanEqual.derived
 
   // a new request comes in. We need to check if the user has been banned because they made too many suspect requests
-  def checkReq(ip: IPs, instant: Instant, suspect: Boolean): ZIO[Store, Nothing, Status] =
+  def checkReq(ip: IP, instant: Instant, suspect: Boolean): ZIO[Store, Nothing, Status] =
 
     // Append to chunk, dropping oldest if at capacity
     def append(chunk: Chunk[Instant], item: Instant): Chunk[Instant] =

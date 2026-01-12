@@ -21,6 +21,8 @@ Or just the `GROUP_ID`, like:
 You can also specify `latest` for the version, like:  
 `https://javadocs.dev/org.webjars/webjars-locator/latest`
 
+You can search for symbols with a query parameter, like:
+`https://www.javadocs.dev/?WebJarAssetLocator`
 
 ## MCP Server
 
@@ -29,7 +31,12 @@ Point your MCP client to `https://www.javadocs.dev/mcp` (Streamable HTTP)
 
 ## Dev Info
 
-Run with restart:
+Run with restart, embedded Redis & optionally mock inference:
+```
+./sbt ~reStartTest
+```
+
+Run with restart, prod config:
 ```
 ./sbt ~reStart
 ```

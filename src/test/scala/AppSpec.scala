@@ -12,23 +12,25 @@ object AppSpec extends ZIOSpecDefault:
 
   def spec = suite("App")(
     test("routing"):
+      val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
+
       defer:
-        val groupIdResp = App.appWithMiddleware.runZIO(Request.get(URL(Path.root, queryParams = QueryParams("groupId" -> "com.jamesward")))).run
-        val artifactIdResp = App.appWithMiddleware.runZIO(Request.get(URL(Path.root / "com.jamesward", queryParams = QueryParams("artifactId" -> "travis-central-test")))).run
-        val versionResp = App.appWithMiddleware.runZIO(Request.get(URL(Path.root / "com.jamesward" / "travis-central-test", queryParams = QueryParams("version" -> "0.0.15")))).run
-        val latest = App.appWithMiddleware.runZIO(Request.get(URL(Path.root / "org.webjars" / "jquery" / "latest"))).run
+        val groupIdResp = App.appWithMiddleware.runZIO(Request.get(URL(Path.root, queryParams = QueryParams("groupId" -> "com.jamesward"))).addHeader(forwardedForHeader)).run
+        val artifactIdResp = App.appWithMiddleware.runZIO(Request.get(URL(Path.root / "com.jamesward", queryParams = QueryParams("artifactId" -> "travis-central-test"))).addHeader(forwardedForHeader)).run
+        val versionResp = App.appWithMiddleware.runZIO(Request.get(URL(Path.root / "com.jamesward" / "travis-central-test", queryParams = QueryParams("version" -> "0.0.15"))).addHeader(forwardedForHeader)).run
+        val latest = App.appWithMiddleware.runZIO(Request.get(URL(Path.root / "org.webjars" / "jquery" / "latest")).addHeader(forwardedForHeader)).run
 
-        val groupIdRedir = App.appWithMiddleware.runZIO(Request.get(URL((Path.root / "com.jamesward").addTrailingSlash))).run
-        val artifactIdRedir = App.appWithMiddleware.runZIO(Request.get(URL((Path.root / "com.jamesward" / "travis-central-test").addTrailingSlash))).run
+        val groupIdRedir = App.appWithMiddleware.runZIO(Request.get(URL((Path.root / "com.jamesward").addTrailingSlash)).addHeader(forwardedForHeader)).run
+        val artifactIdRedir = App.appWithMiddleware.runZIO(Request.get(URL((Path.root / "com.jamesward" / "travis-central-test").addTrailingSlash)).addHeader(forwardedForHeader)).run
 
-        val indexPath = App.appWithMiddleware.runZIO(Request.get(URL(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "index.html"))).run
-        val filePath = App.appWithMiddleware.runZIO(Request.get(URL(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "org" / "webjars" / "package-summary.html"))).run
-        val notFoundFilePath = App.appWithMiddleware.runZIO(Request.get(URL(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "asdf"))).run
-        val notFoundGroupId = App.appWithMiddleware.runZIO(Request.get(URL(Path.root / "asdfqwerzzxcv"))).run
+        val indexPath = App.appWithMiddleware.runZIO(Request.get(URL(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "index.html")).addHeader(forwardedForHeader)).run
+        val filePath = App.appWithMiddleware.runZIO(Request.get(URL(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "org" / "webjars" / "package-summary.html")).addHeader(forwardedForHeader)).run
+        val notFoundFilePath = App.appWithMiddleware.runZIO(Request.get(URL(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "asdf")).addHeader(forwardedForHeader)).run
+        val notFoundGroupId = App.appWithMiddleware.runZIO(Request.get(URL(Path.root / "asdfqwerzzxcv")).addHeader(forwardedForHeader)).run
 
         assertTrue(
-          App.appWithMiddleware.runZIO(Request.get(URL(Path.empty))).run.status.isSuccess,
-          App.appWithMiddleware.runZIO(Request.get(URL(Path.root))).run.status.isRedirection,
+          App.appWithMiddleware.runZIO(Request.get(URL(Path.empty)).addHeader(forwardedForHeader)).run.status.isSuccess,
+          App.appWithMiddleware.runZIO(Request.get(URL(Path.root)).addHeader(forwardedForHeader)).run.status.isSuccess,
           groupIdResp.status.isRedirection,
           groupIdResp.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward")),
           artifactIdResp.status.isRedirection,
@@ -48,17 +50,18 @@ object AppSpec extends ZIOSpecDefault:
         )
     , test("rate limit bad actors"):
       defer:
-        val badActorIps = List("192.168.1.100")
-        val forwardedHeader = Header.Forwarded(forValues = badActorIps)
+        val forwardedBadActorHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
 
         // Make 5 requests ending in .php - these should return not found
         val phpResponses = ZIO.foreach(1 to 5): i =>
-          val request = Request.get(URL(Path.root / s"test$i.php")).addHeader(forwardedHeader)
+          val request = Request.get(URL(Path.root / s"test$i.php")).addHeader(forwardedBadActorHeader)
+          println(request.headers)
           App.appWithMiddleware.runZIO(request)
         .run
 
         // The 6th request should trigger the slow gibberish response
-        val slowRequest = Request.get(URL(Path.root / "trigger.php")).addHeader(forwardedHeader)
+        val forwardedBadActorMultipleHeader = Header.Custom("X-Forwarded-For", "192.168.1.101,192.168.1.100")
+        val slowRequest = Request.get(URL(Path.root / "trigger.php")).addHeader(forwardedBadActorMultipleHeader)
 
         val slowResponse = App.appWithMiddleware.runZIO(slowRequest).debug.run
 
@@ -69,11 +72,18 @@ object AppSpec extends ZIOSpecDefault:
 
         val (duration, body) = bodyFork.join.run
 
+        val forwardedGoodActorHeader = Header.Custom("X-Forwarded-For", "192.168.1.101")
+        val goodActorRequest = Request.get(URL(Path.root)).addHeader(forwardedGoodActorHeader)
+        println(goodActorRequest)
+        val goodActorResponse = App.appWithMiddleware.runZIO(goodActorRequest).debug.run
+        println(goodActorResponse.headers.get(Header.Location))
+
         assertTrue(
           phpResponses.forall(_.status == Status.NotFound),
           slowResponse.status == Status.TooManyRequests,
           duration.toSeconds >= 25,
           body.nonEmpty,
+          goodActorResponse.status == Status.Ok,
         )
     , test("gibberish"):
       defer:
@@ -99,4 +109,4 @@ object AppSpec extends ZIOSpecDefault:
     ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
     SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
     BadActor.live,
-  ) @@ TestAspect.withLiveRandom @@ TestAspect.withLiveSystem
+  ) @@ TestAspect.withLiveRandom @@ TestAspect.withLiveSystem @@ TestAspect.sequential
