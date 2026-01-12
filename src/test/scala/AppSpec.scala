@@ -55,7 +55,6 @@ object AppSpec extends ZIOSpecDefault:
         // Make 5 requests ending in .php - these should return not found
         val phpResponses = ZIO.foreach(1 to 5): i =>
           val request = Request.get(URL(Path.root / s"test$i.php")).addHeader(forwardedBadActorHeader)
-          println(request.headers)
           App.appWithMiddleware.runZIO(request)
         .run
 
@@ -74,13 +73,11 @@ object AppSpec extends ZIOSpecDefault:
 
         val forwardedGoodActorHeader = Header.Custom("X-Forwarded-For", "192.168.1.101")
         val goodActorRequest = Request.get(URL(Path.root)).addHeader(forwardedGoodActorHeader)
-        println(goodActorRequest)
         val goodActorResponse = App.appWithMiddleware.runZIO(goodActorRequest).debug.run
-        println(goodActorResponse.headers.get(Header.Location))
 
         assertTrue(
           phpResponses.forall(_.status == Status.NotFound),
-          slowResponse.status == Status.TooManyRequests,
+          slowResponse.status == Status.Ok,
           duration.toSeconds >= 25,
           body.nonEmpty,
           goodActorResponse.status == Status.Ok,

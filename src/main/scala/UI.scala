@@ -33,6 +33,32 @@ object UI:
     )
   )
 
+  def page(heading: String, element: Html): Html =
+    html(
+      head(
+        title(heading),
+        link(relAttr := "icon", hrefAttr := "/favicon.ico", sizesAttr := "any"),
+        link(relAttr := "icon", hrefAttr := "/favicon.png", typeAttr := "image/png"),
+        link(relAttr := "apple-touch-icon", hrefAttr := "/favicon.png", typeAttr := "image/png"),
+        style(
+          """
+            | body {
+            |   font-family: monospace;
+            |   font-size: 16px;
+            |   background-color: #edede0;
+            | }
+            |""".stripMargin),
+      ),
+      body(
+        div(
+          styles := "margin: auto; padding: 2em 4em; max-width: 80%",
+          h1(heading),
+          element,
+        ),
+        pageFooter,
+      ),
+    )
+
   val index: Html =
     form(actionAttr := "/", methodAttr := "get",
       label("GroupId (i.e. ", a(href := "/org.springframework", "org.springframework"), "): ",
@@ -40,7 +66,7 @@ object UI:
       ),
       " ",
       input(valueAttr := "Go!", typeAttr := "submit"),
-    ) ++ pageFooter
+    )
 
   def invalidGroupId(groupId: MavenCentral.GroupId): Html =
     form(actionAttr := "/", methodAttr := "get",
@@ -57,7 +83,7 @@ object UI:
       ),
       " ",
       input(valueAttr := "Go!", typeAttr := "submit"),
-    ) ++ pageFooter
+    )
 
   def needArtifactId(groupId: MavenCentral.GroupId, artifactIds: Seq[MavenCentral.ArtifactId]): Html =
     form(actionAttr := s"/$groupId", methodAttr := "get",
@@ -80,7 +106,7 @@ object UI:
       ),
       " ",
       input(valueAttr := "Go!", typeAttr := "submit"),
-    ) ++ pageFooter
+    )
 
   def needVersion(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, versions: Seq[MavenCentral.Version]): Html =
     form(actionAttr := s"/$groupId/$artifactId", methodAttr := "get",
@@ -105,7 +131,7 @@ object UI:
       ),
       " ",
       input(valueAttr := "Go!", typeAttr := "submit")
-    ) ++ pageFooter
+    )
 
   def noJavadoc(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, versions: Seq[MavenCentral.Version], version: MavenCentral.Version): Html =
     div(
@@ -124,4 +150,4 @@ object UI:
             groupArtifact =>
               li(a(href := groupArtifact.toPath.toString, s"${groupArtifact.groupId}:${groupArtifact.artifactId}"))
         )
-    ) ++ pageFooter
+    )

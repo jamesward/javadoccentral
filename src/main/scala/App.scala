@@ -7,7 +7,6 @@ import zio.concurrent.ConcurrentMap
 import zio.direct.*
 import zio.http.*
 import zio.http.codec.PathCodec
-import zio.http.template.Template
 import zio.redis.{CodecSupplier, Redis, RedisConfig, RedisError}
 import zio.stream.ZStream
 
@@ -25,9 +24,9 @@ object App extends ZIOAppDefault:
       ZIO.scoped:
         MavenCentral.searchArtifacts(groupId)
     .flatMap: artifacts =>
-      Handler.template("javadocs.dev")(UI.needArtifactId(groupId, artifacts))
+      Response.html(UI.page("javadocs.dev", UI.needArtifactId(groupId, artifacts))).toHandler
     .catchAll: _ =>
-      Handler.template("javadocs.dev")(UI.invalidGroupId(groupId)).map(_.status(Status.NotFound))
+      Response.html(UI.page("javadocs.dev", UI.invalidGroupId(groupId)), Status.NotFound).toHandler
 
   def withArtifactId(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, @unused request: Request): Handler[Client, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, Request), Response] =
     Handler.fromZIO:
@@ -41,14 +40,14 @@ object App extends ZIOAppDefault:
         // if not an artifact, append to the groupId
         Response.redirect(URL(Path.root / (groupId.toString + "." + artifactId.toString))).toHandler
       .apply: versions =>
-        Handler.template("javadocs.dev")(UI.needVersion(groupId, artifactId, versions))
+        Response.html(UI.page("javadocs.dev", UI.needVersion(groupId, artifactId, versions))).toHandler
     .catchAll: e =>
       // invalid groupId or artifactId
       Handler.fromZIO:
         ZIO.scoped:
           MavenCentral.searchArtifacts(groupId)
       .flatMap: artifactIds =>
-        Response.html(Template.container("javadocs.dev")(UI.needArtifactId(groupId, artifactIds)), Status.NotFound).toHandler // todo: message
+        Response.html(UI.page("javadocs.dev", UI.needArtifactId(groupId, artifactIds)), Status.NotFound).toHandler // todo: message
       .orElse:
         Response.redirect(URL(Path.root / groupId.toString)).toHandler  // todo: message
 
@@ -84,7 +83,7 @@ object App extends ZIOAppDefault:
           ZIO.scoped:
             MavenCentral.searchVersions(groupId, artifactId)
         .flatMap: versions =>
-          Response.html(Template.container("javadocs.dev")(UI.noJavadoc(groupId, artifactId, versions, version)), Status.NotFound).toHandler // todo: message
+          Response.html(UI.page("javadocs.dev", UI.noJavadoc(groupId, artifactId, versions, version)), Status.NotFound).toHandler // todo: message
         .orElse:
           Response.redirect(URL(groupId / artifactId)).toHandler // todo: message
 
@@ -151,13 +150,51 @@ object App extends ZIOAppDefault:
             // todo: convey error
             Handler.template("javadocs.dev")(UI.symbolSearchResults(query, Set.empty))
 
+  val robots = Response.text:
+    """User-agent: *
+      |Allow: /
+      |Sitemap: https://www.javadocs.dev/sitemap.xml
+      |""".stripMargin
+
+  // todo: stream
+  val sitemap: Handler[Redis & HerokuInference & Client & Extractor.JavadocCache & Extractor.FetchBlocker, Nothing, Request, Response] =
+    Handler.fromZIO:
+      ZIO.scoped:
+        SymbolSearch.search("").orDie.map:
+          groupArtifacts =>
+            <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+              {
+                groupArtifacts.map:
+                  ga =>
+                    <url>
+                      <loc>{"https://www.javadocs.dev/" + ga.groupId}</loc>
+                    </url>
+                    <url>
+                      <loc>{"https://www.javadocs.dev" + ga.toPath}</loc>
+                    </url>
+                    <url>
+                      <loc>{"https://www.javadocs.dev" + ga / MavenCentral.Version.latest}</loc>
+                    </url>
+              }
+              </urlset>
+    .map:
+      xmlResponse =>
+        Response(
+          status = Status.Ok,
+          body = Body.fromString(xmlResponse.toString),
+          headers = Headers(Header.ContentType(MediaType.text.xml))
+        )
+
+
   val app: Routes[Extractor.LatestCache & Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.TmpDir & Client & Redis & HerokuInference, Response] =
     val mcpRoutes = ZioHttpInterpreter().toHttp(MCP.mcpServerEndpoint)
 
     val appRoutes = Routes[Extractor.LatestCache & Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.TmpDir & Client & Redis & HerokuInference, Nothing](
       Method.GET / Root -> Handler.fromFunctionHandler[Request](index),
-      Method.GET / "favicon.ico" -> Handler.notFound,
-      Method.GET / "robots.txt" -> Handler.notFound,
+      Method.GET / "favicon.ico" -> Handler.fromResource("favicon.ico").orDie,
+      Method.GET / "favicon.png" -> Handler.fromResource("favicon.png").orDie,
+      Method.GET / "robots.txt" -> robots.toHandler,
+      Method.GET / "sitemap.xml" -> sitemap,
       Method.GET / ".well-known" / trailing -> Handler.notFound,
       Method.GET / groupId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, Request)](withGroupId),
       Method.GET / groupId / artifactId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, Request)](withArtifactId),
