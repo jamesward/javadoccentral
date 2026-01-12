@@ -191,6 +191,10 @@ object App extends ZIOAppDefault:
       .flattenChunks
       .interruptAfter(30.seconds)
 
+  private def suspect(req: Request): Boolean =
+    val s = req.path.toString
+    s.endsWith(".php") || s.contains("wp-includes") || s.contains("wp-admin") || s.contains("wp-content")
+
   private val badActorMiddleware: HandlerAspect[BadActor.Store, Unit] =
     HandlerAspect.interceptIncomingHandler:
       Handler.fromFunctionZIO:
@@ -198,7 +202,7 @@ object App extends ZIOAppDefault:
           getForwardedFor(request).fold(ZIO.fail(Response.badRequest("Failed to get forwarded IP"))):
             ip =>
               defer:
-                val isSuspect = request.path.toString.endsWith(".php")
+                val isSuspect = suspect(request)
                 val clock = ZIO.clock.run
                 val now = clock.instant.run
                 BadActor.checkReq(ip, now, isSuspect).debug(ip).run match
@@ -206,7 +210,11 @@ object App extends ZIOAppDefault:
                     ZIO.succeed(request -> ()).run
                   case BadActor.Status.Banned =>
                     ZIO.logWarning(s"Bad actor detected: $ip").run
-                    val gibberishResponse = Response(status = Status.TooManyRequests, body = Body.fromStreamChunked(gibberishStream))
+                    val gibberishResponse = Response(
+                      status = Status.Ok, // so that the client will read the body
+                      body = Body.fromStreamChunked(gibberishStream),
+                      headers = Headers(Header.ContentType(MediaType.application.json))
+                    )
                     ZIO.fail(gibberishResponse).run
 
   val appWithMiddleware: Routes[BadActor.Store & Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.LatestCache & Extractor.TmpDir & Client & Redis & HerokuInference, Response] =
