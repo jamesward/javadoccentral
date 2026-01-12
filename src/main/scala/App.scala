@@ -242,7 +242,7 @@ object App extends ZIOAppDefault:
                 val isSuspect = suspect(request)
                 val clock = ZIO.clock.run
                 val now = clock.instant.run
-                BadActor.checkReq(ip, now, isSuspect).debug(ip).run match
+                BadActor.checkReq(ip, now, isSuspect).run match
                   case BadActor.Status.Allowed =>
                     ZIO.succeed(request -> ()).run
                   case BadActor.Status.Banned =>
@@ -307,7 +307,7 @@ object App extends ZIOAppDefault:
             val password = uri.getUserInfo.drop(1) // REDIS_URL has an empty username
 
             val authIfNeeded =
-              redis.ping().debug.catchAll:
+              redis.ping().catchAll:
                 case e: RedisError if e.getMessage.contains("NOAUTH") =>
                   ZIO.logInfo("Redis NOAUTH detected, authenticating...") *> redis.auth(password)
                 case e =>
