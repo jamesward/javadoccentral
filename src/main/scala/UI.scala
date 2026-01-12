@@ -1,5 +1,5 @@
-import zio.http.template.*
 import com.jamesward.zio_mavencentral.MavenCentral
+import zio.http.template.*
 import zio.http.template.Html.fromDomElement
 
 object UI:

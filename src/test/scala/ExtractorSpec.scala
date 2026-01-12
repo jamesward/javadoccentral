@@ -1,3 +1,4 @@
+import Extractor.gav
 import com.jamesward.zio_mavencentral.MavenCentral.*
 import zio.cache.Cache
 import zio.concurrent.ConcurrentMap
@@ -6,7 +7,6 @@ import zio.http.Client
 import zio.test.*
 import zio.test.Assertion.failsWithA
 import zio.{Exit, Scope, ZLayer}
-import Extractor.gav
 
 object ExtractorSpec extends ZIOSpecDefault:
 

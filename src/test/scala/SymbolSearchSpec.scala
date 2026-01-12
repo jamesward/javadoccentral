@@ -1,14 +1,13 @@
 import com.jamesward.zio_mavencentral.MavenCentral
 import com.jamesward.zio_mavencentral.MavenCentral.*
-import zio.*
 import zio.cache.Cache
 import zio.concurrent.ConcurrentMap
 import zio.direct.*
 import zio.http.Client
-import zio.redis.{CodecSupplier, Redis}
 import zio.redis.embedded.EmbeddedRedis
+import zio.redis.{CodecSupplier, Redis}
 import zio.test.*
-import zio.{Scope, ZLayer}
+import zio.*
 
 object SymbolSearchSpec extends ZIOSpecDefault:
 
@@ -66,5 +65,5 @@ object SymbolSearchSpec extends ZIOSpecDefault:
     EmbeddedRedis.layer,
     Redis.singleNode,
     ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
-    SymbolSearch.herokuInferenceLayer,
+    SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
   ) @@ TestAspect.withLiveSystem @@ TestAspect.sequential

@@ -1,15 +1,15 @@
 import SymbolSearch.HerokuInference
 import chimp.{mcpEndpoint, tool}
 import com.jamesward.zio_mavencentral.MavenCentral.*
-import io.circe.syntax.*
 import io.circe.generic.semiauto.{deriveCodec, deriveEncoder}
+import io.circe.syntax.*
 import io.circe.{Codec, Decoder, Encoder}
 import sttp.tapir.Schema
 import sttp.tapir.generic.auto.*
+import zio.direct.*
 import zio.http.Client
 import zio.redis.Redis
 import zio.{RIO, ZIO}
-import zio.direct.*
 
 object MCP:
 

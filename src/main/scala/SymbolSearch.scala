@@ -1,10 +1,10 @@
 import com.jamesward.zio_mavencentral.MavenCentral
 import zio.*
-import zio.redis.{CodecSupplier, Count, Redis}
 import zio.direct.*
 import zio.http.*
 import zio.http.Header.Authorization
 import zio.json.{DecoderOps, JsonCodec}
+import zio.redis.{CodecSupplier, Count, Redis}
 import zio.schema.*
 import zio.schema.annotation.*
 import zio.schema.codec.{BinaryCodec, ProtobufCodec}
@@ -55,14 +55,18 @@ object SymbolSearch:
     usage: MessageUsage
   ) derives Schema
 
-  case class HerokuInference(inferenceUrl: String, inferenceKey: String, inferenceModelId: String):
-    private val url = URL.decode(inferenceUrl).getOrElse(throw new RuntimeException("invalid inference url"))
+  trait HerokuInference:
+    def req(prompt: String): ZIO[Client & Scope, Throwable, Response]
 
-    def req(prompt: String): ZIO[Client & Scope, Throwable, Response] =
-      defer:
-        val client = ZIO.serviceWith[Client](_.addHeader(Authorization.Bearer(token = inferenceKey)).url(url)).run
-        val inferenceRequest = InferenceRequest(inferenceModelId, List(Message(content = prompt)))
-        client.post("/v1/chat/completions")(Body.json(inferenceRequest)).run
+  object HerokuInference:
+    case class Live(inferenceUrl: String, inferenceKey: String, inferenceModelId: String) extends HerokuInference:
+      private val url = URL.decode(inferenceUrl).getOrElse(throw new RuntimeException("invalid inference url"))
+
+      def req(prompt: String): ZIO[Client & Scope, Throwable, Response] =
+        defer:
+          val client = ZIO.serviceWith[Client](_.addHeader(Authorization.Bearer(token = inferenceKey)).url(url)).run
+          val inferenceRequest = InferenceRequest(inferenceModelId, List(Message(content = prompt)))
+          client.post("/v1/chat/completions")(Body.json(inferenceRequest)).run
 
   val herokuInferenceLayer: ZLayer[Any, Throwable, HerokuInference] =
     ZLayer.fromZIO:
@@ -71,7 +75,7 @@ object SymbolSearch:
         val inferenceUrl = system.env("INFERENCE_URL").someOrFail(new RuntimeException("INFERENCE_URL env var not set")).run
         val inferenceKey = system.env("INFERENCE_KEY").someOrFail(new RuntimeException("INFERENCE_KEY env var not set")).run
         val inferenceModelId = system.env("INFERENCE_MODEL_ID").someOrFail(new RuntimeException("INFERENCE_MODEL_ID env var not set")).run
-        HerokuInference(inferenceUrl, inferenceKey, inferenceModelId)
+        HerokuInference.Live(inferenceUrl, inferenceKey, inferenceModelId)
 
   // todo: heroku inference structured output??
   def aiSearch(symbol: String): ZIO[HerokuInference & Client & Scope, Throwable, Set[MavenCentral.GroupArtifact]] =

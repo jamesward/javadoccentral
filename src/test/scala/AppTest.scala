@@ -1,7 +1,7 @@
 import zio.*
 import zio.http.*
-import zio.redis.{CodecSupplier, Redis}
 import zio.redis.embedded.EmbeddedRedis
+import zio.redis.{CodecSupplier, Redis}
 
 object AppTest extends ZIOAppDefault:
 
@@ -16,5 +16,6 @@ object AppTest extends ZIOAppDefault:
       EmbeddedRedis.layer,
       Redis.singleNode,
       ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
-      SymbolSearch.herokuInferenceLayer,
+      SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
+      BadActor.live,
     )

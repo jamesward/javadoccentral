@@ -8,8 +8,8 @@ import zio.direct.*
 import zio.http.*
 import zio.http.codec.PathCodec
 import zio.http.template.Template
-import zio.redis.internal.RedisExecutor
 import zio.redis.{CodecSupplier, Redis, RedisConfig, RedisError}
+import zio.stream.ZStream
 
 import java.net.URI
 import java.nio.file.Files
@@ -27,7 +27,7 @@ object App extends ZIOAppDefault:
     .flatMap: artifacts =>
       Handler.template("javadocs.dev")(UI.needArtifactId(groupId, artifacts))
     .catchAll: _ =>
-      Handler.template("javadocs.dev")(UI.invalidGroupId(groupId))
+      Handler.template("javadocs.dev")(UI.invalidGroupId(groupId)).map(_.status(Status.NotFound))
 
   def withArtifactId(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, @unused request: Request): Handler[Client, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, Request), Response] =
     Handler.fromZIO:
@@ -182,8 +182,34 @@ object App extends ZIOAppDefault:
         response
     )(Response.redirect(_, true))
 
-  val appWithMiddleware: Routes[Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.LatestCache & Extractor.TmpDir & Client & Redis & HerokuInference, Response] =
-    app @@ redirectQueryParams @@ Middleware.requestLogging()
+  private def getForwardedFor(request: Request): List[String] =
+    request.headers.get(Header.Forwarded).fold(List.empty)(_.forValues)
+
+  val gibberishStream: ZStream[Any, Nothing, Byte] =
+    ZStream
+      .repeatZIOWithSchedule(Random.nextBytes(1024), Schedule.fixed(100.millis))
+      .flattenChunks
+      .interruptAfter(30.seconds)
+
+  private val badActorMiddleware: HandlerAspect[BadActor.Store, Unit] =
+    HandlerAspect.interceptIncomingHandler:
+      Handler.fromFunctionZIO:
+        request =>
+          defer:
+            val ips = getForwardedFor(request)
+            val isSuspect = request.path.toString.endsWith(".php")
+            val clock = ZIO.clock.run
+            val now = clock.instant.run
+            BadActor.checkReq(ips, now, isSuspect).debug(ips.mkString).run match
+              case BadActor.Status.Allowed =>
+                ZIO.succeed(request -> ()).run
+              case BadActor.Status.Banned =>
+                ZIO.logWarning(s"Bad actor detected: ${ips.mkString}").run
+                val gibberishResponse = Response(status = Status.TooManyRequests, body = Body.fromStreamChunked(gibberishStream))
+                ZIO.fail(gibberishResponse).run
+
+  val appWithMiddleware: Routes[BadActor.Store & Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.LatestCache & Extractor.TmpDir & Client & Redis & HerokuInference, Response] =
+    app @@ badActorMiddleware @@ redirectQueryParams @@ Middleware.requestLogging()
 
   // todo: i think there is a better way
   val server =
@@ -260,4 +286,5 @@ object App extends ZIOAppDefault:
       redisAuthLayer,
       ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
       SymbolSearch.herokuInferenceLayer,
+      BadActor.live,
     )
