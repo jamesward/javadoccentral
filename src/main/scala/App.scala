@@ -134,7 +134,7 @@ object App extends ZIOAppDefault:
 
 
   def index(request: Request): Handler[Redis & HerokuInference & Client & Extractor.JavadocCache & Extractor.FetchBlocker, Nothing, Request, Response] =
-    request.queryParameters.map.keys.filterNot(_ == "groupId").headOption.fold(Handler.template("javadocs.dev")(UI.index)):
+    request.queryParameters.map.keys.filterNot(_ == "groupId").headOption.fold(Response.html(UI.page("javadocs.dev", UI.index)).toHandler):
       query =>
         // todo: rate limit
         Handler.fromZIO:
@@ -144,11 +144,11 @@ object App extends ZIOAppDefault:
                 ZIO.logError(e.getMessage)
         .flatMap:
           results =>
-            Handler.template("javadocs.dev")(UI.symbolSearchResults(query, results))
+            Response.html(UI.page("javadocs.dev", UI.symbolSearchResults(query, results))).toHandler
         .catchAll:
           _ =>
             // todo: convey error
-            Handler.template("javadocs.dev")(UI.symbolSearchResults(query, Set.empty))
+            Response.html(UI.page("javadocs.dev", UI.symbolSearchResults(query, Set.empty))).toHandler
 
   val robots = Response.text:
     """User-agent: *
