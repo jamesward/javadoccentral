@@ -1,2 +1,2 @@
-addSbtPlugin("com.github.sbt" % "sbt-native-packager" % "1.11.4")
+addSbtPlugin("com.github.sbt" % "sbt-native-packager" % "1.11.7")
 addSbtPlugin("io.spray" % "sbt-revolver" % "0.10.0")
