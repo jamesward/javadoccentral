@@ -72,9 +72,9 @@ object SymbolSearch:
     ZLayer.fromZIO:
       defer:
         val system = ZIO.system.run
-        val inferenceUrl = system.env("INFERENCE_URL").someOrFail(new RuntimeException("INFERENCE_URL env var not set")).run
-        val inferenceKey = system.env("INFERENCE_KEY").someOrFail(new RuntimeException("INFERENCE_KEY env var not set")).run
-        val inferenceModelId = system.env("INFERENCE_MODEL_ID").someOrFail(new RuntimeException("INFERENCE_MODEL_ID env var not set")).run
+        val inferenceUrl = system.env("INFERENCE_URL").map(_.filter(_.nonEmpty)).someOrFail(new RuntimeException("INFERENCE_URL env var not set")).run
+        val inferenceKey = system.env("INFERENCE_KEY").map(_.filter(_.nonEmpty)).someOrFail(new RuntimeException("INFERENCE_KEY env var not set")).run
+        val inferenceModelId = system.env("INFERENCE_MODEL_ID").map(_.filter(_.nonEmpty)).someOrFail(new RuntimeException("INFERENCE_MODEL_ID env var not set")).run
         HerokuInference.Live(inferenceUrl, inferenceKey, inferenceModelId)
 
   // todo: heroku inference structured output??
