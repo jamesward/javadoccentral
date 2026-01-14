@@ -46,7 +46,6 @@ object Extractor:
         case javadocNotFoundError: JavadocNotFoundError => ZIO.fail(javadocNotFoundError)
 
       defer:
-        val javadocUrl = javadocUriOrDie.run
         val blocker = ZIO.service[FetchBlocker].run
         val tmpDir = ZIO.service[TmpDir].run
         val javadocDir = File(tmpDir.dir, groupArtifactVersion.toString)
@@ -61,6 +60,7 @@ object Extractor:
             case _ =>
               val promise = Promise.make[Nothing, Unit].run
               blocker.put(groupArtifactVersion, promise).run
+              val javadocUrl = javadocUriOrDie.run
               MavenCentral.downloadAndExtractZip(javadocUrl, javadocDir).orDie.run
               promise.succeed(()).run
 
