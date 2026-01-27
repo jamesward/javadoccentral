@@ -24,7 +24,7 @@ object Extractor:
   case class Content(link: String, external: Boolean, fqn: String, `type`: String, kind: String, extra: String)
 
   type LatestCache = Cache[GroupArtifact, GroupIdOrArtifactIdNotFoundError | LatestNotFound, Version]
-  type JavadocCache = Cache[GroupArtifactVersion, JavadocNotFoundError, File]
+  type JavadocCache = Cache[GroupArtifactVersion, NotFoundError, File]
   type FetchBlocker = ConcurrentMap[GroupArtifactVersion, Promise[Nothing, Unit]]
 
   def gav(groupId: String, artifactId: String, version: String) =
@@ -39,11 +39,11 @@ object Extractor:
         .someOrFail(LatestNotFound(groupArtifact))
 
   def javadoc(groupArtifactVersion: GroupArtifactVersion):
-      ZIO[Client & FetchBlocker & TmpDir, JavadocNotFoundError, File] =
+      ZIO[Client & FetchBlocker & TmpDir, NotFoundError, File] =
     ZIO.scoped:
-      val javadocUriOrDie: ZIO[Client & Scope, JavadocNotFoundError, URL] = MavenCentral.javadocUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version).catchAll:
+      val javadocUriOrDie: ZIO[Client & Scope, NotFoundError, URL] = MavenCentral.javadocUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version).catchAll:
         case t: Throwable => ZIO.die(t)
-        case javadocNotFoundError: JavadocNotFoundError => ZIO.fail(javadocNotFoundError)
+        case javadocNotFoundError: NotFoundError => ZIO.fail(javadocNotFoundError)
 
       defer:
         val blocker = ZIO.service[FetchBlocker].run
@@ -178,7 +178,7 @@ object Extractor:
     )
 
   def javadocContents(groupArtifactVersion: GroupArtifactVersion):
-      ZIO[JavadocCache & Client & FetchBlocker & Scope, JavadocNotFoundError, Set[Content]] =
+      ZIO[JavadocCache & Client & FetchBlocker & Scope, MavenCentral.NotFoundError, Set[Content]] =
     defer:
       val javadocCache = ZIO.service[JavadocCache].run
       val javadocDir = javadocCache.get(groupArtifactVersion).run
@@ -189,7 +189,7 @@ object Extractor:
         .catchAll:
           case _: JavadocFormatFailure =>
             ZIO.succeed(bruteForce(javadocDir))
-          case e: JavadocNotFoundError =>
+          case e: NotFoundError =>
             ZIO.fail(e)
         .run
 
@@ -204,7 +204,7 @@ object Extractor:
     clean.wholeText().replaceAll("\n{3,}", "\n\n---\n\n")
 
   def javadocSymbolContents(groupArtifactVersion: GroupArtifactVersion, path: String):
-      ZIO[JavadocCache & Client & FetchBlocker & Scope, JavadocNotFoundError | JavadocFileNotFound, String] =
+      ZIO[JavadocCache & Client & FetchBlocker & Scope, NotFoundError | JavadocFileNotFound, String] =
     defer:
       val javadocCache = ZIO.service[JavadocCache].run
       val javadocDir = javadocCache.get(groupArtifactVersion).run

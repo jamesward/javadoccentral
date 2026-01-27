@@ -2,6 +2,7 @@ import com.jamesward.zio_mavencentral.MavenCentral
 import zio.http.template.*
 import zio.http.template.Html.fromDomElement
 
+// todo: switch to template2: https://ziohttp.com/reference/template
 object UI:
 
   val pageFooter = footer(

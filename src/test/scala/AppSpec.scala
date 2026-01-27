@@ -62,7 +62,7 @@ object AppSpec extends ZIOSpecDefault:
         val forwardedBadActorMultipleHeader = Header.Custom("X-Forwarded-For", "192.168.1.101,192.168.1.100")
         val slowRequest = Request.get(URL(Path.root / "trigger.php")).addHeader(forwardedBadActorMultipleHeader)
 
-        val slowResponse = App.appWithMiddleware.runZIO(slowRequest).debug.run
+        val slowResponse = App.appWithMiddleware.runZIO(slowRequest).run
 
         val bodyFork = slowResponse.body.asString.timed.fork.run
 
@@ -73,7 +73,7 @@ object AppSpec extends ZIOSpecDefault:
 
         val forwardedGoodActorHeader = Header.Custom("X-Forwarded-For", "192.168.1.101")
         val goodActorRequest = Request.get(URL(Path.root)).addHeader(forwardedGoodActorHeader)
-        val goodActorResponse = App.appWithMiddleware.runZIO(goodActorRequest).debug.run
+        val goodActorResponse = App.appWithMiddleware.runZIO(goodActorRequest).run
 
         assertTrue(
           phpResponses.forall(_.status == Status.NotFound),

@@ -40,12 +40,12 @@ object ExtractorSpec extends ZIOSpecDefault:
     },
     test("artifact does not exist") {
       assertZIO(Extractor.javadocContents(gav("com.jamesward", "zio-mavencentral_3", "0.0.0")).exit)(
-        failsWithA[JavadocNotFoundError]
+        failsWithA[NotFoundError]
       )
     },
     test("javadoc does not exist") {
       assertZIO(Extractor.javadoc(gav("com.jamesward", "zio-mavencentral_3", "0.0.0")).exit)(
-        failsWithA[JavadocNotFoundError]
+        failsWithA[NotFoundError]
       )
     },
     test("javadoc file not found") {
@@ -123,5 +123,5 @@ object ExtractorSpec extends ZIOSpecDefault:
     Client.default,
     App.javadocCacheLayer,
     App.blockerLayer,
-    App.tmpDirLayer.debug,
+    App.tmpDirLayer,
   )

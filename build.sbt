@@ -17,7 +17,7 @@ scalacOptions ++= Seq(
   // "-Xfatal-warnings", // doesn't seem to work anymore
 )
 
-scalaVersion := "3.7.4"
+scalaVersion := "3.8.1"
 
 val zioVersion = "2.1.24"
 
@@ -28,7 +28,7 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-logging"           % "2.5.3",
   "dev.zio" %% "zio-direct"            % "1.0.0-RC7",
   "dev.zio" %% "zio-direct-streams"    % "1.0.0-RC7",
-  "dev.zio" %% "zio-http"              % "3.7.4",
+  "dev.zio" %% "zio-http"              % "3.8.0",
   "dev.zio" %% "zio-redis"             % "1.1.12",
   "dev.zio" %% "zio-schema-protobuf"   % "1.7.6",
   "dev.zio" %% "zio-schema-json"       % "1.7.6",
@@ -36,11 +36,11 @@ libraryDependencies ++= Seq(
 
   "org.slf4j" % "slf4j-simple" % "2.0.17",
 
-  "com.jamesward" %% "zio-mavencentral" % "0.0.25",
+  "com.jamesward" %% "zio-mavencentral" % "0.5.0",
 
   "com.softwaremill.chimp" %% "core" % "0.1.6",
-  "com.softwaremill.sttp.tapir" %% "tapir-zio" % "1.13.5",
-  "com.softwaremill.sttp.tapir" %% "tapir-zio-http-server" % "1.13.5",
+  "com.softwaremill.sttp.tapir" %% "tapir-zio" % "1.13.6",
+  "com.softwaremill.sttp.tapir" %% "tapir-zio-http-server" % "1.13.6",
 
   "org.jsoup" % "jsoup" % "1.22.1",
 

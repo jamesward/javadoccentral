@@ -48,8 +48,8 @@ object SymbolSearchSpec extends ZIOSpecDefault:
     },
     test("aiSearch") {
       defer:
-        val knowResults = SymbolSearch.aiSearch("zio.cache.Cache").debug.run
-        val ambigResults = SymbolSearch.aiSearch("zxcvzxcv").debug.run
+        val knowResults = SymbolSearch.aiSearch("zio.cache.Cache").run
+        val ambigResults = SymbolSearch.aiSearch("zxcvzxcv").run
 
         assertTrue(
           knowResults.contains(MavenCentral.GroupArtifact(GroupId("dev.zio"), ArtifactId("zio-cache_3"))),

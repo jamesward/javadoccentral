@@ -14,7 +14,7 @@ import java.net.URI
 import java.nio.file.Files
 import scala.annotation.unused
 
-
+// todo: add caching support (etag, lastmodified)
 object App extends ZIOAppDefault:
   given CanEqual[Path, Path] = CanEqual.derived
   given CanEqual[Method, Method] = CanEqual.derived
@@ -24,7 +24,7 @@ object App extends ZIOAppDefault:
       ZIO.scoped:
         MavenCentral.searchArtifacts(groupId)
     .flatMap: artifacts =>
-      Response.html(UI.page("javadocs.dev", UI.needArtifactId(groupId, artifacts))).toHandler
+      Response.html(UI.page("javadocs.dev", UI.needArtifactId(groupId, artifacts.value))).toHandler
     .catchAll: _ =>
       Response.html(UI.page("javadocs.dev", UI.invalidGroupId(groupId)), Status.NotFound).toHandler
 
@@ -33,21 +33,22 @@ object App extends ZIOAppDefault:
       ZIO.scoped:
         defer:
           val isArtifact = MavenCentral.isArtifact(groupId, artifactId).run
-          Option.when(isArtifact):
-            MavenCentral.searchVersions(groupId, artifactId).run
+          ZIO.when(isArtifact):
+            MavenCentral.searchVersions(groupId, artifactId)
+          .run
     .flatMap: maybeVersions =>
       maybeVersions.fold:
         // if not an artifact, append to the groupId
         Response.redirect(URL(Path.root / (groupId.toString + "." + artifactId.toString))).toHandler
       .apply: versions =>
-        Response.html(UI.page("javadocs.dev", UI.needVersion(groupId, artifactId, versions))).toHandler
+        Response.html(UI.page("javadocs.dev", UI.needVersion(groupId, artifactId, versions.value))).toHandler
     .catchAll: e =>
       // invalid groupId or artifactId
       Handler.fromZIO:
         ZIO.scoped:
           MavenCentral.searchArtifacts(groupId)
       .flatMap: artifactIds =>
-        Response.html(UI.page("javadocs.dev", UI.needArtifactId(groupId, artifactIds)), Status.NotFound).toHandler // todo: message
+        Response.html(UI.page("javadocs.dev", UI.needArtifactId(groupId, artifactIds.value)), Status.NotFound).toHandler // todo: message
       .orElse:
         Response.redirect(URL(Path.root / groupId.toString)).toHandler  // todo: message
 
@@ -78,17 +79,17 @@ object App extends ZIOAppDefault:
             Extractor.javadocFile(groupArtifactVersion, javadocDir, "index.html").run
             Response.redirect(URL(groupArtifactVersion.toPath / "index.html"))
     .catchAll:
-      case _: MavenCentral.JavadocNotFoundError | _: Extractor.JavadocFileNotFound =>
+      case _: MavenCentral.NotFoundError | _: Extractor.JavadocFileNotFound =>
         Handler.fromZIO:
           ZIO.scoped:
             MavenCentral.searchVersions(groupId, artifactId)
         .flatMap: versions =>
-          Response.html(UI.page("javadocs.dev", UI.noJavadoc(groupId, artifactId, versions, version)), Status.NotFound).toHandler // todo: message
+          Response.html(UI.page("javadocs.dev", UI.noJavadoc(groupId, artifactId, versions.value, version)), Status.NotFound).toHandler // todo: message
         .orElse:
           Response.redirect(URL(groupId / artifactId)).toHandler // todo: message
 
   // have to convert the failures to an exception for fromFileZIO
-  case class JavadocException(error: MavenCentral.JavadocNotFoundError | Extractor.JavadocFileNotFound) extends Exception
+  case class JavadocException(error: MavenCentral.NotFoundError | Extractor.JavadocFileNotFound) extends Exception
 
   def withFile(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, file: Path, @unused request: Request):
       Handler[Extractor.FetchBlocker & Client & Extractor.TmpDir & Redis & Extractor.JavadocCache, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
@@ -101,8 +102,9 @@ object App extends ZIOAppDefault:
           ZIO.when(file.toString == "index.html")(indexJavadocContents(groupArtifactVersion)).run
           Extractor.javadocFile(groupArtifactVersion, javadocDir, file.toString).run
         .catchAll(e => ZIO.fail(JavadocException(e)))
+    .contramap[(MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request)](_._5) // not sure why fromFileZIO doesn't have an IN param anymore
     .catchAll:
-      case JavadocException(e: MavenCentral.JavadocNotFoundError) =>
+      case JavadocException(e: MavenCentral.NotFoundError) =>
         Response.redirect(URL(groupArtifactVersion.toPath)).toHandler
       case JavadocException(e: Extractor.JavadocFileNotFound) =>
         Response.notFound((groupArtifactVersion.toPath ++ file).toString).toHandler
