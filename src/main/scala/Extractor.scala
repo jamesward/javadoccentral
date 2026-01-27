@@ -11,7 +11,7 @@ import zio.prelude.data.Optional.AllValuesAreNullable
 import zio.{Promise, Scope, ZIO}
 
 import java.io.File
-import java.nio.file.Files
+import java.nio.file.{Files, Path}
 import scala.jdk.CollectionConverters.*
 
 object Extractor:
@@ -23,9 +23,11 @@ object Extractor:
 
   case class Content(link: String, external: Boolean, fqn: String, `type`: String, kind: String, extra: String)
 
-  type LatestCache = Cache[GroupArtifact, GroupIdOrArtifactIdNotFoundError | LatestNotFound, Version]
-  type JavadocCache = Cache[GroupArtifactVersion, NotFoundError, File]
-  type FetchBlocker = ConcurrentMap[GroupArtifactVersion, Promise[Nothing, Unit]]
+  case class LatestCache(cache: Cache[GroupArtifact, GroupIdOrArtifactIdNotFoundError | LatestNotFound, Version])
+  case class JavadocCache(cache: Cache[GroupArtifactVersion, NotFoundError, File])
+  case class SourcesCache(cache: Cache[GroupArtifactVersion, NotFoundError, File])
+  case class FetchBlocker(blocker: ConcurrentMap[GroupArtifactVersion, Promise[Nothing, Unit]])
+  case class FetchSourcesBlocker(blocker: ConcurrentMap[GroupArtifactVersion, Promise[Nothing, Unit]])
 
   def gav(groupId: String, artifactId: String, version: String) =
     GroupArtifactVersion(GroupId(groupId), ArtifactId(artifactId), Version(version))
@@ -46,7 +48,7 @@ object Extractor:
         case javadocNotFoundError: NotFoundError => ZIO.fail(javadocNotFoundError)
 
       defer:
-        val blocker = ZIO.service[FetchBlocker].run
+        val blocker = ZIO.service[FetchBlocker].run.blocker
         val tmpDir = ZIO.service[TmpDir].run
         val javadocDir = File(tmpDir.dir, groupArtifactVersion.toString)
 
@@ -65,6 +67,32 @@ object Extractor:
               promise.succeed(()).run
 
         javadocDir
+
+  def sources(groupArtifactVersion: GroupArtifactVersion):
+      ZIO[Client & FetchSourcesBlocker & TmpDir, NotFoundError, File] =
+    ZIO.scoped:
+      val sourcesUriOrDie: ZIO[Client & Scope, NotFoundError, URL] = MavenCentral.sourcesUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version).catchAll:
+        case t: Throwable => ZIO.die(t)
+        case sourcesNotFoundError: NotFoundError => ZIO.fail(sourcesNotFoundError)
+
+      defer:
+        val blocker = ZIO.service[FetchSourcesBlocker].run.blocker
+        val tmpDir = ZIO.service[TmpDir].run
+        val sourcesDir = File(tmpDir.dir, s"${groupArtifactVersion.toString}-sources")
+
+        if !sourcesDir.exists() then
+          val maybeBlock = blocker.get(groupArtifactVersion).run
+          maybeBlock match
+            case Some(promise) =>
+              promise.await.run
+            case _ =>
+              val promise = Promise.make[Nothing, Unit].run
+              blocker.put(groupArtifactVersion, promise).run
+              val sourcesUrl = sourcesUriOrDie.run
+              MavenCentral.downloadAndExtractZip(sourcesUrl, sourcesDir).orDie.run
+              promise.succeed(()).run
+
+        sourcesDir
 
   def javadocFile(groupArtifactVersion: GroupArtifactVersion, javadocDir: File, path: String):
       ZIO[Any, JavadocFileNotFound, File] =
@@ -180,7 +208,7 @@ object Extractor:
   def javadocContents(groupArtifactVersion: GroupArtifactVersion):
       ZIO[JavadocCache & Client & FetchBlocker & Scope, MavenCentral.NotFoundError, Set[Content]] =
     defer:
-      val javadocCache = ZIO.service[JavadocCache].run
+      val javadocCache = ZIO.service[JavadocCache].run.cache
       val javadocDir = javadocCache.get(groupArtifactVersion).run
 
       javadocScalaFormat(groupArtifactVersion, javadocDir)
@@ -192,6 +220,20 @@ object Extractor:
           case e: NotFoundError =>
             ZIO.fail(e)
         .run
+
+  def fileList(path: Path): Set[String] =
+    Files.walk(path).iterator().asScala
+      .filter(_.toFile.isFile)
+      .map(path.relativize(_).toString)
+      .toSet
+
+  def sourceContents(groupArtifactVersion: GroupArtifactVersion):
+      ZIO[SourcesCache & Client & FetchSourcesBlocker & Scope, MavenCentral.NotFoundError, Set[String]] =
+    defer:
+      val sourcesCache = ZIO.service[SourcesCache].run.cache
+      val sourcesDir = sourcesCache.get(groupArtifactVersion).run
+      fileList(sourcesDir.toPath)
+
 
   def textSymbolContents(contents: String, path: String): String =
     val document = Jsoup.parse(contents)
@@ -206,7 +248,7 @@ object Extractor:
   def javadocSymbolContents(groupArtifactVersion: GroupArtifactVersion, path: String):
       ZIO[JavadocCache & Client & FetchBlocker & Scope, NotFoundError | JavadocFileNotFound, String] =
     defer:
-      val javadocCache = ZIO.service[JavadocCache].run
+      val javadocCache = ZIO.service[JavadocCache].run.cache
       val javadocDir = javadocCache.get(groupArtifactVersion).run
 
       javadocFile(groupArtifactVersion, javadocDir, path)
@@ -216,4 +258,15 @@ object Extractor:
             textSymbolContents(contents, path)
           else
             contents
+        .run
+
+  def sourceFileContents(groupArtifactVersion: GroupArtifactVersion, path: String):
+      ZIO[SourcesCache & Client & FetchSourcesBlocker & Scope, NotFoundError | JavadocFileNotFound, String] =
+    defer:
+      val sourcesCache = ZIO.service[SourcesCache].run.cache
+      val sourcesDir = sourcesCache.get(groupArtifactVersion).run
+
+      javadocFile(groupArtifactVersion, sourcesDir, path)
+        .map: file =>
+          Files.readString(file.toPath)
         .run

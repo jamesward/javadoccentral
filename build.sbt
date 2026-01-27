@@ -36,7 +36,7 @@ libraryDependencies ++= Seq(
 
   "org.slf4j" % "slf4j-simple" % "2.0.17",
 
-  "com.jamesward" %% "zio-mavencentral" % "0.5.0",
+  "com.jamesward" %% "zio-mavencentral" % "0.5.1",
 
   "com.softwaremill.chimp" %% "core" % "0.1.6",
   "com.softwaremill.sttp.tapir" %% "tapir-zio" % "1.13.6",

@@ -69,13 +69,13 @@ object App extends ZIOAppDefault:
     Handler.fromZIO:
       ZIO.scoped:
         if groupArtifactVersion.version == MavenCentral.Version.latest then
-          ZIO.serviceWithZIO[Extractor.LatestCache](_.get(groupArtifactVersion.noVersion)).map: latest =>
+          ZIO.serviceWithZIO[Extractor.LatestCache](_.cache.get(groupArtifactVersion.noVersion)).map: latest =>
             groupArtifactVersion.noVersion / latest
           .orElseSucceed(groupArtifactVersion.noVersion.toPath).map: path =>
             Response.redirect(URL(path))
         else
           defer:
-            val javadocDir = ZIO.serviceWithZIO[Extractor.JavadocCache](_.get(groupArtifactVersion)).run
+            val javadocDir = ZIO.serviceWithZIO[Extractor.JavadocCache](_.cache.get(groupArtifactVersion)).run
             Extractor.javadocFile(groupArtifactVersion, javadocDir, "index.html").run
             Response.redirect(URL(groupArtifactVersion.toPath / "index.html"))
     .catchAll:
@@ -127,7 +127,7 @@ object App extends ZIOAppDefault:
     string("version").transformOrFailLeft(versionExtractor)(_.toString)
 
   def withVersionAndFile(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, path: Path, request: Request):
-      Handler[Extractor.FetchBlocker & Client & Extractor.LatestCache & Extractor.JavadocCache & Extractor.TmpDir & Redis, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] = {
+      Handler[BadActor.Store & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Extractor.TmpDir & Client & Redis & HerokuInference, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] = {
     if (path.isEmpty)
       withVersion(groupId, artifactId, version, request)
     else
@@ -135,7 +135,7 @@ object App extends ZIOAppDefault:
   }
 
 
-  def index(request: Request): Handler[Redis & HerokuInference & Client & Extractor.JavadocCache & Extractor.FetchBlocker, Nothing, Request, Response] =
+  def index(request: Request): Handler[Redis & HerokuInference & Client & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker, Nothing, Request, Response] =
     request.queryParameters.map.keys.filterNot(_ == "groupId").headOption.fold(Response.html(UI.page("javadocs.dev", UI.index)).toHandler):
       query =>
         // todo: rate limit
@@ -188,10 +188,10 @@ object App extends ZIOAppDefault:
         )
 
 
-  val app: Routes[Extractor.LatestCache & Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.TmpDir & Client & Redis & HerokuInference, Response] =
+  val app: Routes[BadActor.Store & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Extractor.TmpDir & Client & Redis & HerokuInference, Response] =
     val mcpRoutes = ZioHttpInterpreter().toHttp(MCP.mcpServerEndpoint)
 
-    val appRoutes = Routes[Extractor.LatestCache & Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.TmpDir & Client & Redis & HerokuInference, Nothing](
+    val appRoutes = Routes[BadActor.Store & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Extractor.TmpDir & Client & Redis & HerokuInference, Nothing](
       Method.GET / Root -> Handler.fromFunctionHandler[Request](index),
       Method.GET / "favicon.ico" -> Handler.fromResource("favicon.ico").orDie,
       Method.GET / "favicon.png" -> Handler.fromResource("favicon.png").orDie,
@@ -256,7 +256,7 @@ object App extends ZIOAppDefault:
                     )
                     ZIO.fail(gibberishResponse).run
 
-  val appWithMiddleware: Routes[BadActor.Store & Extractor.JavadocCache & Extractor.FetchBlocker & Extractor.LatestCache & Extractor.TmpDir & Client & Redis & HerokuInference, Response] =
+  val appWithMiddleware: Routes[BadActor.Store & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Extractor.LatestCache & Extractor.TmpDir & Client & Redis & HerokuInference, Response] =
     app @@ badActorMiddleware @@ redirectQueryParams @@ Middleware.requestLogging()
 
   // todo: i think there is a better way
@@ -269,17 +269,28 @@ object App extends ZIOAppDefault:
     .flatten
 
   val blockerLayer: ZLayer[Any, Nothing, Extractor.FetchBlocker] =
-    ZLayer.fromZIO(ConcurrentMap.empty[MavenCentral.GroupArtifactVersion, Promise[Nothing, Unit]])
+    ZLayer.fromZIO(ConcurrentMap.empty[MavenCentral.GroupArtifactVersion, Promise[Nothing, Unit]].map(Extractor.FetchBlocker(_)))
+
+  val sourcesBlockerLayer: ZLayer[Any, Nothing, Extractor.FetchSourcesBlocker] =
+    ZLayer.fromZIO(ConcurrentMap.empty[MavenCentral.GroupArtifactVersion, Promise[Nothing, Unit]].map(Extractor.FetchSourcesBlocker(_)))
 
   val latestCacheLayer: ZLayer[Client, Nothing, Extractor.LatestCache] = ZLayer.fromZIO:
     Cache.makeWith(1_000, Lookup(Extractor.latest)):
       case Exit.Success(_) => 1.hour
       case Exit.Failure(_) => Duration.Zero
+    .map(Extractor.LatestCache(_))
 
   val javadocCacheLayer: ZLayer[Client & Extractor.FetchBlocker & Extractor.TmpDir, Nothing, Extractor.JavadocCache] = ZLayer.fromZIO:
     Cache.makeWith(1_000, Lookup(Extractor.javadoc)):
       case Exit.Success(_) => Duration.Infinity
       case Exit.Failure(_) => Duration.Zero
+    .map(Extractor.JavadocCache(_))
+
+  val sourcesCacheLayer: ZLayer[Client & Extractor.FetchSourcesBlocker & Extractor.TmpDir, Nothing, Extractor.SourcesCache] = ZLayer.fromZIO:
+    Cache.makeWith(1_000, Lookup(Extractor.sources)):
+      case Exit.Success(_) => Duration.Infinity
+      case Exit.Failure(_) => Duration.Zero
+    .map(Extractor.SourcesCache(_))
 
   val tmpDirLayer = ZLayer.succeed(Extractor.TmpDir(Files.createTempDirectory("jars").nn.toFile))
 
@@ -327,8 +338,10 @@ object App extends ZIOAppDefault:
       server,
       Client.default,
       blockerLayer,
+      sourcesBlockerLayer,
       latestCacheLayer,
       javadocCacheLayer,
+      sourcesCacheLayer,
       tmpDirLayer,
       redisConfigLayer,
       redisAuthLayer,

@@ -1,6 +1,5 @@
 import com.jamesward.zio_mavencentral.MavenCentral.given
 import zio.*
-import zio.cache.Cache
 import zio.concurrent.ConcurrentMap
 import zio.direct.*
 import zio.http.*
@@ -96,7 +95,9 @@ object AppSpec extends ZIOSpecDefault:
 
   ).provide(
     App.blockerLayer,
+    App.sourcesBlockerLayer,
     App.javadocCacheLayer,
+    App.sourcesCacheLayer,
     App.latestCacheLayer,
     App.tmpDirLayer,
     Client.default,

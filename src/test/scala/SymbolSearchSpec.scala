@@ -1,5 +1,6 @@
 import com.jamesward.zio_mavencentral.MavenCentral
 import com.jamesward.zio_mavencentral.MavenCentral.*
+import zio.*
 import zio.cache.Cache
 import zio.concurrent.ConcurrentMap
 import zio.direct.*
@@ -7,7 +8,6 @@ import zio.http.Client
 import zio.redis.embedded.EmbeddedRedis
 import zio.redis.{CodecSupplier, Redis}
 import zio.test.*
-import zio.*
 
 object SymbolSearchSpec extends ZIOSpecDefault:
 

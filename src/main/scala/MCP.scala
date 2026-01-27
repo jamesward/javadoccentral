@@ -36,7 +36,7 @@ object MCP:
     .description("Gets the latest version of a given artifact")
     .input[GroupArtifact]
 
-  val getLatestServerTool = getLatestTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker & Redis & HerokuInference, X]]: (input, _) =>
+  val getLatestServerTool = getLatestTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Extractor.SourcesCache & Client & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Redis & HerokuInference, X]]: (input, _) =>
     ZIO.scoped:
       Extractor.latest(input).mapBoth(_.toString, _.toString).either
 
@@ -45,7 +45,7 @@ object MCP:
     .description("Gets a list of the contents of a javadoc jar")
     .input[GroupArtifactVersion]
 
-  val getClassesServerTool = getClassesTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker & Redis & HerokuInference, X]]: (input, _) =>
+  val getClassesServerTool = getClassesTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Extractor.SourcesCache & Client & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Redis & HerokuInference, X]]: (input, _) =>
     ZIO.scoped:
       defer:
         App.indexJavadocContents(input).run
@@ -59,24 +59,40 @@ object MCP:
     .input[JavadocSymbol]
 
   // todo: should this convert the html to markdown?
-  val getSymbolContentsServerTool = getSymbolContentsTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker & Redis & HerokuInference, X]]: (input, _) =>
+  val getSymbolContentsServerTool = getSymbolContentsTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Extractor.SourcesCache & Client & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Redis & HerokuInference, X]]: (input, _) =>
     val groupArtifactVersion = GroupArtifactVersion(input.groupId, input.artifactId, input.version)
     ZIO.scoped:
       Extractor.javadocSymbolContents(groupArtifactVersion, input.link).mapError(_.toString).either
 
+  val listSourceTool = tool("list_source_contents")
+    .description("Gets a list of the contents of a source jar")
+    .input[GroupArtifactVersion]
+
+  val listSourceServerTool = listSourceTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Extractor.SourcesCache & Client & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Redis & HerokuInference, X]]: (input, _) =>
+    ZIO.scoped:
+      Extractor.sourceContents(input).mapBoth(_.toString, _.asJson.toString).either
+
+  val getSourceTool = tool("get_source_contents")
+    .description(s"Gets the contents of a source file. Get the list of files from the ${listSourceTool.name} tool.")
+    .input[JavadocSymbol]
+
+  val getSourceServerTool = getSourceTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Extractor.SourcesCache & Client & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Redis & HerokuInference, X]]: (input, _) =>
+    val groupArtifactVersion = GroupArtifactVersion(input.groupId, input.artifactId, input.version)
+    ZIO.scoped:
+      Extractor.sourceFileContents(groupArtifactVersion, input.link).mapError(_.toString).either
 
   val symbolToArtifactTool = tool("symbol_to_artifact")
     .description("Gets the group and artifact for a given symbol/class/package")
     .input[Symbol]
 
-  val symbolToArtifactServerTool = symbolToArtifactTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Client & Extractor.FetchBlocker & Redis & HerokuInference, X]]: (input, _) =>
+  val symbolToArtifactServerTool = symbolToArtifactTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Extractor.SourcesCache & Client & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Redis & HerokuInference, X]]: (input, _) =>
     ZIO.scoped:
       // todo: rate limit
       SymbolSearch.search(input.query).mapBoth(_.getMessage, _.asJson.toString).either
 
 
   val mcpServerEndpoint = mcpEndpoint(
-    List(getLatestServerTool, getClassesServerTool, getSymbolContentsServerTool, symbolToArtifactServerTool),
+    List(getLatestServerTool, getClassesServerTool, getSymbolContentsServerTool, getSourceServerTool, listSourceServerTool, symbolToArtifactServerTool),
     List("mcp"),
     "javadocs.dev",
     "0.0.2",

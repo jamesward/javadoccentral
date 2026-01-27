@@ -1,7 +1,5 @@
 import Extractor.gav
 import com.jamesward.zio_mavencentral.MavenCentral.*
-import zio.cache.Cache
-import zio.concurrent.ConcurrentMap
 import zio.direct.*
 import zio.http.Client
 import zio.test.*
@@ -45,6 +43,11 @@ object ExtractorSpec extends ZIOSpecDefault:
     },
     test("javadoc does not exist") {
       assertZIO(Extractor.javadoc(gav("com.jamesward", "zio-mavencentral_3", "0.0.0")).exit)(
+        failsWithA[NotFoundError]
+      )
+    },
+    test("sources do not exist") {
+      assertZIO(Extractor.sources(gav("com.jamesward", "zio-mavencentral_3", "0.0.0")).exit)(
         failsWithA[NotFoundError]
       )
     },
@@ -117,11 +120,28 @@ object ExtractorSpec extends ZIOSpecDefault:
           contents.contains("This method is inherited from HasOrderedComponents"),
           contents.lines().count() > 1000,
         )
+    },
+    test("sourceContents - zio-mavencentral_3") {
+      defer:
+        val contents = Extractor.sourceFileContents(gav("com.jamesward", "zio-mavencentral_3", "0.0.21"), "com/jamesward/zio_mavencentral/MavenCentral.scala").run
+        assertTrue(
+          contents.contains("object MavenCentral:")
+        )
+    },
+    test("listSourceContents - zio-mavencentral_3") {
+      defer:
+        val contents = Extractor.sourceContents(gav("com.jamesward", "zio-mavencentral_3", "0.0.21")).run
+        assertTrue(
+          contents.size == 2,
+          contents.contains("com/jamesward/zio_mavencentral/MavenCentral.scala")
+        )
     }
   ).provide(
     Scope.default,
     Client.default,
     App.javadocCacheLayer,
+    App.sourcesCacheLayer,
     App.blockerLayer,
+    App.sourcesBlockerLayer,
     App.tmpDirLayer,
   )
