@@ -54,6 +54,7 @@ object Extractor:
 
         // could be less racey
         if !javadocDir.exists() then
+          val javadocUrl = javadocUriOrDie.run
           val maybeBlock = blocker.get(groupArtifactVersion).run
           // note: fold doesn't work with defer here
           maybeBlock match
@@ -62,7 +63,6 @@ object Extractor:
             case _ =>
               val promise = Promise.make[Nothing, Unit].run
               blocker.put(groupArtifactVersion, promise).run
-              val javadocUrl = javadocUriOrDie.run
               MavenCentral.downloadAndExtractZip(javadocUrl, javadocDir).orDie.run
               promise.succeed(()).run
 
