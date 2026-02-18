@@ -93,7 +93,13 @@ object SymbolSearch:
           |]
           |""".stripMargin
       val resp = herokuInference.req(prompt).run
-      val body = resp.body.asJson[MessageResponse].debug.run
+      if !resp.status.isSuccess then
+        val errorBody = resp.body.asString.run
+        ZIO.fail(new RuntimeException(s"Inference request failed with status ${resp.status}: $errorBody")).run
+
+      val body = resp.body.asJson[MessageResponse].tapError: e =>
+        ZIO.logError(s"Failed to parse inference response: ${e.getMessage}")
+      .run
       val choice = ZIO.fromOption(body.choices.headOption).orElseFail(Exception("no llm messages found in response")).run
       val workaroundForMarkdownContent = choice.message.content.replace("```json", "").replace("```", "").trim
       workaroundForMarkdownContent.fromJson[Set[MavenCentral.GroupArtifact]].getOrElse(Set.empty)
@@ -117,7 +123,9 @@ object SymbolSearch:
       .toSet
 
       if cacheResults.isEmpty then
-        val aiResults = aiSearch(symbol).run
+        val aiResults = aiSearch(symbol).tapError: e =>
+          ZIO.logError(s"aiSearch failed for symbol: $symbol: ${e.getMessage}")
+        .run
         val indexLoad = aiResults.map:
           groupArtifact =>
             Extractor.latest(groupArtifact).flatMap:

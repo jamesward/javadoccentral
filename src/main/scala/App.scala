@@ -143,7 +143,7 @@ object App extends ZIOAppDefault:
           ZIO.scoped:
             SymbolSearch.search(query).tapError:
               e =>
-                ZIO.logError(e.getMessage)
+                ZIO.logErrorCause(s"SymbolSearch.search failed for query: $query", Cause.fail(e))
         .flatMap:
           results =>
             Response.html(UI.page("javadocs.dev", UI.symbolSearchResults(query, results))).toHandler
