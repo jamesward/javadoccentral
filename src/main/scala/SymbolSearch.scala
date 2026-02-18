@@ -110,14 +110,18 @@ object SymbolSearch:
       val pattern = "*" + symbol + "*"
 
       val allKeys = ZStream.paginateZIO(0L): cursor =>
-        redis.scan(cursor, Some(pattern), Some(Count(1000L))).returning[String].map:
+        redis.scan(cursor, Some(pattern), Some(Count(10_000L))).returning[String].map:
           case (nextCursor, keys) =>
             val next = if (nextCursor == 0L) None else Some(nextCursor)
             (keys, next)
       .runCollect.run.flatten
 
       val cacheResults = ZIO.foreachPar(allKeys): key =>
-        redis.sMembers(key).returning[MavenCentral.GroupArtifact]
+        redis.sMembers(key).returning[MavenCentral.GroupArtifact].catchAll: e =>
+          defer:
+            ZIO.logError(e.toString).run
+            redis.del(key).run // unparsable keys shouldn't be in there
+            Chunk.empty
       .run
       .flatten
       .toSet
