@@ -6,6 +6,7 @@ import zio.cache.{Cache, Lookup}
 import zio.concurrent.ConcurrentMap
 import zio.direct.*
 import zio.http.*
+import zio.http.Header.Accept
 import zio.http.codec.PathCodec
 import zio.redis.{CodecSupplier, Redis, RedisConfig, RedisError}
 import zio.stream.ZStream
@@ -52,6 +53,9 @@ object App extends ZIOAppDefault:
       .orElse:
         Response.redirect(URL(Path.root / groupId.toString)).toHandler  // todo: message
 
+  // we only want to trigger symbol cache loading when the index page is loaded
+  // this is a lazy way to populate the cache
+  // todo: we probably only want to do this periodically so maybe we maintain a Ref that we can check before we actually do this
   def indexJavadocContents(groupArtifactVersion: MavenCentral.GroupArtifactVersion):
     ZIO[Client & Extractor.FetchBlocker & Extractor.JavadocCache & Redis & Scope, Nothing, Unit] =
 
@@ -91,23 +95,38 @@ object App extends ZIOAppDefault:
   // have to convert the failures to an exception for fromFileZIO
   case class JavadocException(error: MavenCentral.NotFoundError | Extractor.JavadocFileNotFound) extends Exception
 
-  def withFile(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, file: Path, @unused request: Request):
+  def withFile(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, file: Path, request: Request):
       Handler[Extractor.FetchBlocker & Client & Extractor.TmpDir & Redis & Extractor.JavadocCache, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
     val groupArtifactVersion = MavenCentral.GroupArtifactVersion(groupId, artifactId, version)
 
-    Handler.fromFileZIO:
-      ZIO.scoped:
-        defer:
-          val javadocDir = Extractor.javadoc(groupArtifactVersion).run
-          ZIO.when(file.toString == "index.html")(indexJavadocContents(groupArtifactVersion)).run
-          Extractor.javadocFile(groupArtifactVersion, javadocDir, file.toString).run
-        .catchAll(e => ZIO.fail(JavadocException(e)))
-    .contramap[(MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request)](_._5) // not sure why fromFileZIO doesn't have an IN param anymore
-    .catchAll:
-      case JavadocException(e: MavenCentral.NotFoundError) =>
-        Response.redirect(URL(groupArtifactVersion.toPath)).toHandler
-      case JavadocException(e: Extractor.JavadocFileNotFound) =>
-        Response.notFound((groupArtifactVersion.toPath ++ file).toString).toHandler
+    // todo: reduce duplication on error handling
+    if request.header(Accept).exists(_.mimeTypes.exists(_.mediaType.matches(MediaType.text.markdown))) then
+      Handler.fromResponseZIO:
+        ZIO.scoped:
+          defer:
+            val content = Extractor.javadocSymbolContents(groupArtifactVersion, file.toString).debug.run
+            Response.text(content).contentType(MediaType.text.markdown)
+          .catchAll:
+            case _: MavenCentral.NotFoundError =>
+              ZIO.succeed:
+                Response.redirect(URL(groupArtifactVersion.toPath))
+            case _: Extractor.JavadocFileNotFound =>
+              ZIO.succeed:
+                Response.notFound((groupArtifactVersion.toPath ++ file).toString)
+    else
+      Handler.fromFileZIO:
+        ZIO.scoped:
+          defer:
+            val javadocDir = Extractor.javadoc(groupArtifactVersion).run
+            ZIO.when(file.toString == "index.html")(indexJavadocContents(groupArtifactVersion)).run // update the cache
+            Extractor.javadocFile(groupArtifactVersion, javadocDir, file.toString).run
+          .catchAll(e => ZIO.fail(JavadocException(e)))
+      .contramap[(MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request)](_._5) // not sure why fromFileZIO doesn't have an IN param anymore
+      .catchAll:
+        case JavadocException(e: MavenCentral.NotFoundError) =>
+          Response.redirect(URL(groupArtifactVersion.toPath)).toHandler
+        case JavadocException(e: Extractor.JavadocFileNotFound) =>
+          Response.notFound((groupArtifactVersion.toPath ++ file).toString).toHandler
 
   private def groupIdExtractor(groupId: String): Either[String, MavenCentral.GroupId] =
     if groupId == "mcp" then
