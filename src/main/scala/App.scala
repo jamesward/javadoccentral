@@ -104,7 +104,7 @@ object App extends ZIOAppDefault:
       Handler.fromResponseZIO:
         ZIO.scoped:
           defer:
-            val content = Extractor.javadocSymbolContents(groupArtifactVersion, file.toString).debug.run
+            val content = Extractor.javadocSymbolContents(groupArtifactVersion, file.toString).run
             Response.text(content).contentType(MediaType.text.markdown)
           .catchAll:
             case _: MavenCentral.NotFoundError =>
