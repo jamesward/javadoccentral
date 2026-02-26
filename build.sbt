@@ -17,7 +17,7 @@ scalacOptions ++= Seq(
   // "-Xfatal-warnings", // doesn't seem to work anymore
 )
 
-scalaVersion := "3.8.1"
+scalaVersion := "3.8.2"
 
 val zioVersion = "2.1.24"
 
