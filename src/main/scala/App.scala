@@ -66,31 +66,45 @@ object App extends ZIOAppDefault:
 
     getContentsAndUpdateIndex.forkDaemon.unit
 
-  def withVersion(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, @unused request: Request):
+  given zio.json.JsonEncoder[Extractor.Content] = zio.json.DeriveJsonEncoder.gen[Extractor.Content]
+
+  def withVersion(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, request: Request):
       Handler[Extractor.LatestCache & Client & Extractor.JavadocCache & Redis & Extractor.FetchBlocker & Extractor.TmpDir, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
     val groupArtifactVersion = MavenCentral.GroupArtifactVersion(groupId, artifactId, version)
 
-    Handler.fromZIO:
-      ZIO.scoped:
-        if groupArtifactVersion.version == MavenCentral.Version.latest then
-          ZIO.serviceWithZIO[Extractor.LatestCache](_.cache.get(groupArtifactVersion.noVersion)).map: latest =>
-            groupArtifactVersion.noVersion / latest
-          .orElseSucceed(groupArtifactVersion.noVersion.toPath).map: path =>
-            Response.redirect(URL(path))
-        else
+    if request.header(Accept).exists(_.mimeTypes.exists(_.mediaType.matches(MediaType.application.json))) then
+      Handler.fromResponseZIO:
+        ZIO.scoped:
           defer:
-            val javadocDir = ZIO.serviceWithZIO[Extractor.JavadocCache](_.cache.get(groupArtifactVersion)).run
-            Extractor.javadocFile(groupArtifactVersion, javadocDir, "index.html").run
-            Response.redirect(URL(groupArtifactVersion.toPath / "index.html"))
-    .catchAll:
-      case _: MavenCentral.NotFoundError | _: Extractor.JavadocFileNotFound =>
-        Handler.fromZIO:
-          ZIO.scoped:
-            MavenCentral.searchVersions(groupId, artifactId)
-        .flatMap: versions =>
-          Response.html(UI.page("javadocs.dev", UI.noJavadoc(groupId, artifactId, versions.value, version)), Status.NotFound).toHandler // todo: message
-        .orElse:
-          Response.redirect(URL(groupId / artifactId)).toHandler // todo: message
+            val contents = Extractor.javadocContents(groupArtifactVersion).run
+            import zio.json.*
+            Response.json(contents.toJson)
+        .catchAll:
+          case _: MavenCentral.NotFoundError =>
+            ZIO.succeed:
+              Response.notFound(groupArtifactVersion.toPath.toString)
+    else
+      Handler.fromZIO:
+        ZIO.scoped:
+          if groupArtifactVersion.version == MavenCentral.Version.latest then
+            ZIO.serviceWithZIO[Extractor.LatestCache](_.cache.get(groupArtifactVersion.noVersion)).map: latest =>
+              groupArtifactVersion.noVersion / latest
+            .orElseSucceed(groupArtifactVersion.noVersion.toPath).map: path =>
+              Response.redirect(URL(path))
+          else
+            defer:
+              val javadocDir = ZIO.serviceWithZIO[Extractor.JavadocCache](_.cache.get(groupArtifactVersion)).run
+              Extractor.javadocFile(groupArtifactVersion, javadocDir, "index.html").run
+              Response.redirect(URL(groupArtifactVersion.toPath / "index.html"))
+      .catchAll:
+        case _: MavenCentral.NotFoundError | _: Extractor.JavadocFileNotFound =>
+          Handler.fromZIO:
+            ZIO.scoped:
+              MavenCentral.searchVersions(groupId, artifactId)
+          .flatMap: versions =>
+            Response.html(UI.page("javadocs.dev", UI.noJavadoc(groupId, artifactId, versions.value, version)), Status.NotFound).toHandler // todo: message
+          .orElse:
+            Response.redirect(URL(groupId / artifactId)).toHandler // todo: message
 
   // have to convert the failures to an exception for fromFileZIO
   case class JavadocException(error: MavenCentral.NotFoundError | Extractor.JavadocFileNotFound) extends Exception
