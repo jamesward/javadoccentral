@@ -29,9 +29,9 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-direct"            % "1.0.0-RC7",
   "dev.zio" %% "zio-direct-streams"    % "1.0.0-RC7",
   "dev.zio" %% "zio-http"              % "3.10.1",
-  "dev.zio" %% "zio-redis"             % "1.2.0",
+  "dev.zio" %% "zio-redis"             % "1.2.1",
   "dev.zio" %% "zio-http"              % "3.10.1",
-  "dev.zio" %% "zio-redis"             % "1.2.0",
+  "dev.zio" %% "zio-redis"             % "1.2.1",
   "dev.zio" %% "zio-schema-protobuf"   % "1.8.3",
   "dev.zio" %% "zio-schema-json"       % "1.8.3",
   "dev.zio" %% "zio-schema-derivation" % "1.8.3",
@@ -49,7 +49,7 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-test"           % zioVersion % Test,
   "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,
   "dev.zio" %% "zio-test-magnolia"  % zioVersion % Test,
-  "dev.zio" %% "zio-redis-embedded" % "1.2.0" % Test,
+  "dev.zio" %% "zio-redis-embedded" % "1.2.1" % Test,
 )
 
 testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework")
