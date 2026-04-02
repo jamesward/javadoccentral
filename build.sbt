@@ -11,10 +11,14 @@ name := "javadoccentral"
 // so we don't have to wait on Maven Central sync
 //resolvers += "OSS Staging" at "https://oss.sonatype.org/content/groups/staging"
 
+// todo: production builds with opt
 scalacOptions ++= Seq(
   //"-Yexplicit-nulls", // doesn't seem to work anymore
   "-language:strictEquality",
   // "-Xfatal-warnings", // doesn't seem to work anymore
+  "-opt",
+  "-opt-inline:**",
+//  "-Wopt:all",
 )
 
 scalaVersion := "3.8.3"
