@@ -64,7 +64,14 @@ Compile / doc / sources := Seq.empty
 
 fork := true
 
-javaOptions += "-Djava.net.preferIPv4Stack=true"
+javaOptions ++= Seq(
+  "-Djava.net.preferIPv4Stack=true",
+  "-Xmx256m",
+  "-XX:MaxDirectMemorySize=128m",
+  "-XX:MaxMetaspaceSize=128m",
+  "-XX:ReservedCodeCacheSize=64m",
+  "-XX:CICompilerCount=2",
+)
 
 //run / javaOptions += s"-agentlib:native-image-agent=config-output-dir=src/main/resources/META-INF/native-image"
 //javaOptions += s"-agentlib:native-image-agent=trace-output=${(target in GraalVMNativeImage).value}/trace-output.json"
