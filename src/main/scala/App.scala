@@ -292,8 +292,8 @@ object App extends ZIOAppDefault:
   private val mcpMethodNotAllowed: HandlerAspect[Any, Unit] =
     HandlerAspect.interceptIncomingHandler:
       Handler.fromFunctionZIO: (request: Request) =>
-        if request.path == Path.root / "mcp" && (request.method == Method.GET || request.method == Method.DELETE) then
-          ZIO.fail(Response(status = Status.MethodNotAllowed))
+        if request.path == Path.root / "mcp" && request.method != Method.POST then
+          ZIO.fail(Response(status = Status.MethodNotAllowed, headers = Headers(Header.Allow(NonEmptyChunk(Method.POST)))))
         else
           ZIO.succeed(request -> ())
 
