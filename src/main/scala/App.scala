@@ -289,8 +289,16 @@ object App extends ZIOAppDefault:
                     )
                     ZIO.fail(gibberishResponse).run
 
+  private val mcpMethodNotAllowed: HandlerAspect[Any, Unit] =
+    HandlerAspect.interceptIncomingHandler:
+      Handler.fromFunctionZIO: (request: Request) =>
+        if request.path == Path.root / "mcp" && (request.method == Method.GET || request.method == Method.DELETE) then
+          ZIO.fail(Response(status = Status.MethodNotAllowed))
+        else
+          ZIO.succeed(request -> ())
+
   val appWithMiddleware: Routes[BadActor.Store & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Extractor.LatestCache & Extractor.TmpDir & Client & Redis & HerokuInference, Response] =
-    app @@ badActorMiddleware @@ redirectQueryParams @@ Middleware.requestLogging()
+    app @@ mcpMethodNotAllowed @@ badActorMiddleware @@ redirectQueryParams @@ Middleware.requestLogging()
 
   // todo: i think there is a better way
   val server =

@@ -69,6 +69,10 @@ javaOptions += "-Djava.net.preferIPv4Stack=true"
 //run / javaOptions += s"-agentlib:native-image-agent=config-output-dir=src/main/resources/META-INF/native-image"
 //javaOptions += s"-agentlib:native-image-agent=trace-output=${(target in GraalVMNativeImage).value}/trace-output.json"
 
+lazy val runTest = taskKey[Unit]("run AppTest")
+
+runTest := (Test / runMain).toTask(" AppTest").value
+
 lazy val reStartTest =
   inputKey[spray.revolver.AppProcess]("re-start, but test")
 
