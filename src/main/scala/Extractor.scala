@@ -106,40 +106,17 @@ object Extractor:
     else
       ZIO.fail(JavadocFileNotFound(groupArtifactVersion, path))
 
-  def parseScaladoc(contents: String): Either[io.circe.Error, Set[Content]] =
-    import io.circe.Decoder
-    import io.circe.parser.decode
+  def parseScaladoc(contents: String): Either[String, Set[Content]] =
+    import zio.json.*
 
-    given Decoder[Content] = Decoder.instance { c =>
-      for
-        link <- c.downField("l").as[String]
-        external <- c.downField("e").as[Boolean]
-        info <- c.downField("i").as[String]
-        name <- c.downField("n").as[String]
-        tpe <- c.downField("t").as[String]
-        decl <- c.downField("d").as[String]
-        kind <- c.downField("k").as[String]
-        extra <- c.downField("x").as[String]
-      yield Content(link, external, s"$decl.$name", tpe, kind, extra)
-    }
+    case class ScaladocEntry(l: String, e: Boolean, i: String, n: String, t: String, d: String, k: String, x: String) derives JsonDecoder
+    contents.fromJson[Set[ScaladocEntry]].map(_.map(e => Content(e.l, e.e, s"${e.d}.${e.n}", e.t, e.k, e.x)))
 
-    decode[Set[Content]](contents)
+  def parseKotlindoc(contents: String): Either[String, Set[Content]] =
+    import zio.json.*
 
-  def parseKotlindoc(contents: String): Either[io.circe.Error, Set[Content]] =
-    import io.circe.Decoder
-    import io.circe.parser.decode
-
-    given Decoder[Content] = Decoder.instance { c =>
-      for
-        name <- c.downField("name").as[String]
-        description <- c.downField("description").as[String]
-        location <- c.downField("location").as[String]
-        // searchKeys <- c.downField("searchKeys").as[List[String]]
-        // todo: extract kind i.e. abstract class SingleInstancePool<T : Any> : ObjectPool<T>
-      yield Content(location, false, description, name.trim, "", "")
-    }
-
-    decode[Set[Content]](contents)
+    case class KotlindocEntry(name: String, description: String, location: String) derives JsonDecoder
+    contents.fromJson[Set[KotlindocEntry]].map(_.map(e => Content(e.location, false, e.description, e.name.trim, "", "")))
 
   def bruteForce(baseDir: File): Set[Content] =
     // todo: handle index.html & zio/stm/index.html
@@ -182,28 +159,41 @@ object Extractor:
   // could be better based on index-all.html
   def javadocJavaFormat(groupArtifactVersion: GroupArtifactVersion, javadocDir: File):
       ZIO[Any, JavadocFormatFailure, Set[Content]] =
-    javadocFile(groupArtifactVersion, javadocDir, "element-list").mapBoth(
-      _ => JavadocFormatFailure(),
-      file =>
-        val elements = Files.readAllLines(file.toPath).asScala
-        elements.flatMap: element =>
-          val elementDir = File(javadocDir, element.replace('.', '/'))
-          val files = Files.walk(elementDir.toPath).iterator().asScala
-          files
-            .map:
-              javadocDir.toPath.relativize
-            .filter:
-              file =>
-                file.toString.endsWith(".html") &&
-                  !file.getFileName.toString.startsWith("package-") &&
-                  !file.toString.contains("class-use")
-            .map:
-              file =>
-                val fqn = file.toString.stripSuffix(".html").replace('/', '.')
-                Content(file.toString, false, fqn, "", "", "")
-        .flatten
-        .toSet
-    )
+    javadocFile(groupArtifactVersion, javadocDir, "element-list")
+      .mapError(_ => JavadocFormatFailure())
+      .flatMap: file =>
+        ZIO.attempt:
+          val lines = Files.readAllLines(file.toPath).asScala
+          // extract module directories (lines like "module:org.webjars.locator_lite")
+          val moduleDirs = lines.collect:
+            case line if line.startsWith("module:") => line.stripPrefix("module:")
+          // package entries are lines without "module:" prefix
+          val packages = lines.filterNot(_.startsWith("module:")).filter(_.nonEmpty)
+
+          def walkPackageDir(baseDir: File, pkg: String): Seq[Content] =
+            val pkgDir = File(baseDir, pkg.replace('.', '/'))
+            if pkgDir.isDirectory then
+              val files = Files.walk(pkgDir.toPath).iterator().asScala
+              files
+                .map(javadocDir.toPath.relativize) // always relative to javadoc root
+                .filter: file =>
+                  file.toString.endsWith(".html") &&
+                    !file.getFileName.toString.startsWith("package-") &&
+                    !file.toString.contains("class-use")
+                .map: file =>
+                  val fqn = file.toString.stripSuffix(".html").replace('/', '.')
+                  Content(file.toString, false, fqn, "", "", "")
+                .toSeq
+            else
+              Seq.empty
+
+          packages.flatMap: pkg =>
+            // try root first, then under each module directory
+            val fromRoot = walkPackageDir(javadocDir, pkg)
+            if fromRoot.nonEmpty then fromRoot
+            else moduleDirs.flatMap(mod => walkPackageDir(File(javadocDir, mod), pkg))
+          .toSet
+        .mapError(_ => JavadocFormatFailure())
 
   def javadocContents(groupArtifactVersion: GroupArtifactVersion):
       ZIO[JavadocCache & Client & FetchBlocker & Scope, MavenCentral.NotFoundError, Set[Content]] =

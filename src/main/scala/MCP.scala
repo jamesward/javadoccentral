@@ -1,100 +1,88 @@
-import SymbolSearch.HerokuInference
-import chimp.{mcpEndpoint, tool}
+import SymbolSearch.SearchError
+import com.jamesward.ziohttp.mcp.*
 import com.jamesward.zio_mavencentral.MavenCentral.*
-import io.circe.generic.semiauto.{deriveCodec, deriveEncoder}
-import io.circe.syntax.*
-import io.circe.{Codec, Decoder, Encoder}
-import sttp.tapir.Schema
-import sttp.tapir.generic.auto.*
+import zio.*
 import zio.direct.*
-import zio.http.Client
-import zio.redis.Redis
-import zio.{RIO, ZIO}
+import zio.schema.{DeriveSchema, Schema, derived}
+import com.jamesward.ziohttp.mcp.OptBool.*
 
 object MCP:
 
-  given Schema[GroupId] = Schema.string.description("Maven Central Group ID")
-  given Schema[ArtifactId] = Schema.string.description("Maven Central Artifact ID")
-  given Schema[Version] = Schema.string.description("Maven Central Version")
+  // Schema instances for MavenCentral opaque types (for MCP tool input deserialization)
+  given Schema[GroupId] = Schema.primitive[String].transform(GroupId(_), _.toString)
+  given Schema[ArtifactId] = Schema.primitive[String].transform(ArtifactId(_), _.toString)
+  given Schema[Version] = Schema.primitive[String].transform(Version(_), _.toString)
+  given Schema[GroupArtifact] = DeriveSchema.gen[GroupArtifact]
+  given Schema[GroupArtifactVersion] = DeriveSchema.gen[GroupArtifactVersion]
+  given Schema[Extractor.Content] = DeriveSchema.gen[Extractor.Content]
 
-  given Codec[GroupId] = Codec.from(Decoder.decodeString.map(GroupId(_)), Encoder.encodeString.contramap(_.asInstanceOf[String]))
-  given Codec[ArtifactId] = Codec.from(Decoder.decodeString.map(ArtifactId(_)), Encoder.encodeString.contramap(_.asInstanceOf[String]))
-  given Codec[Version] = Codec.from(Decoder.decodeString.map(Version(_)), Encoder.encodeString.contramap(_.asInstanceOf[String]))
+  case class Symbol(query: String) derives Schema
+  case class JavadocSymbol(groupId: GroupId, artifactId: ArtifactId, version: Version, link: String) derives Schema
 
-  case class Symbol(query: String) derives io.circe.Codec, Schema
+  // McpError instances for domain error types
+  given latestError: McpError[GroupIdOrArtifactIdNotFoundError | Extractor.LatestNotFound] with
+    def message(e: GroupIdOrArtifactIdNotFoundError | Extractor.LatestNotFound): String = e.toString
 
-  given Codec[GroupArtifactVersion] = deriveCodec
-  given Schema[GroupArtifactVersion] = Schema.derived
+  given notFoundError: McpError[NotFoundError] with
+    def message(e: NotFoundError): String = e.toString
 
-  given Codec[GroupArtifact] = deriveCodec
-  given Schema[GroupArtifact] = Schema.derived
+  given fileNotFoundError: McpError[NotFoundError | Extractor.JavadocFileNotFound] with
+    def message(e: NotFoundError | Extractor.JavadocFileNotFound): String = e.toString
 
-  given Encoder[Extractor.Content] = deriveEncoder
-  given Encoder[Set[Extractor.Content]] = Encoder.encodeSet[Extractor.Content]
+  given searchError: McpError[SearchError] with
+    def message(e: SearchError): String = e.message
 
-  val getLatestTool = tool("get_latest_version")
+  val getLatestTool = McpTool("get_latest_version")
     .description("Gets the latest version of a given artifact")
-    .input[GroupArtifact]
+    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
+    .handle: (input: GroupArtifact) =>
+      ZIO.scoped:
+        Extractor.latest(input)
 
-  val getLatestServerTool = getLatestTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Extractor.SourcesCache & Client & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Redis & HerokuInference, X]]: (input, _) =>
-    ZIO.scoped:
-      Extractor.latest(input).mapBoth(_.toString, _.toString).either
-
-
-  val getClassesTool = tool("get_javadoc_content_list")
+  val getClassesTool = McpTool("get_javadoc_content_list")
     .description("Gets a list of the contents of a javadoc jar")
-    .input[GroupArtifactVersion]
+    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
+    .handle: (input: GroupArtifactVersion) =>
+      ZIO.scoped:
+        defer:
+          App.indexJavadocContents(input).run
+          Extractor.javadocContents(input).run
 
-  val getClassesServerTool = getClassesTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Extractor.SourcesCache & Client & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Redis & HerokuInference, X]]: (input, _) =>
-    ZIO.scoped:
-      defer:
-        App.indexJavadocContents(input).run
-        Extractor.javadocContents(input).mapBoth(_.toString, _.asJson.toString).either.run
+  val getSymbolContentsTool = McpTool("get_javadoc_symbol_contents")
+    .description("Gets the contents of a javadoc symbol. Get the symbol link from the get_javadoc_content_list tool.")
+    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
+    .handle: (input: JavadocSymbol) =>
+      val groupArtifactVersion = GroupArtifactVersion(input.groupId, input.artifactId, input.version)
+      ZIO.scoped:
+        Extractor.javadocSymbolContents(groupArtifactVersion, input.link)
 
-
-  case class JavadocSymbol(groupId: GroupId, artifactId: ArtifactId, version: Version, link: String) derives io.circe.Codec, Schema
-
-  val getSymbolContentsTool = tool("get_javadoc_symbol_contents")
-    .description(s"Gets the contents of a javadoc symbol. Get the symbol link from the ${getClassesTool.name} tool.")
-    .input[JavadocSymbol]
-
-  // todo: should this convert the html to markdown?
-  val getSymbolContentsServerTool = getSymbolContentsTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Extractor.SourcesCache & Client & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Redis & HerokuInference, X]]: (input, _) =>
-    val groupArtifactVersion = GroupArtifactVersion(input.groupId, input.artifactId, input.version)
-    ZIO.scoped:
-      Extractor.javadocSymbolContents(groupArtifactVersion, input.link).mapError(_.toString).either
-
-  val listSourceTool = tool("list_source_contents")
+  val listSourceTool = McpTool("list_source_contents")
     .description("Gets a list of the contents of a source jar")
-    .input[GroupArtifactVersion]
+    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
+    .handle: (input: GroupArtifactVersion) =>
+      ZIO.scoped:
+        Extractor.sourceContents(input)
 
-  val listSourceServerTool = listSourceTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Extractor.SourcesCache & Client & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Redis & HerokuInference, X]]: (input, _) =>
-    ZIO.scoped:
-      Extractor.sourceContents(input).mapBoth(_.toString, _.asJson.toString).either
+  val getSourceTool = McpTool("get_source_contents")
+    .description("Gets the contents of a source file. Get the list of files from the list_source_contents tool.")
+    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
+    .handle: (input: JavadocSymbol) =>
+      val groupArtifactVersion = GroupArtifactVersion(input.groupId, input.artifactId, input.version)
+      ZIO.scoped:
+        Extractor.sourceFileContents(groupArtifactVersion, input.link)
 
-  val getSourceTool = tool("get_source_contents")
-    .description(s"Gets the contents of a source file. Get the list of files from the ${listSourceTool.name} tool.")
-    .input[JavadocSymbol]
-
-  val getSourceServerTool = getSourceTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Extractor.SourcesCache & Client & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Redis & HerokuInference, X]]: (input, _) =>
-    val groupArtifactVersion = GroupArtifactVersion(input.groupId, input.artifactId, input.version)
-    ZIO.scoped:
-      Extractor.sourceFileContents(groupArtifactVersion, input.link).mapError(_.toString).either
-
-  val symbolToArtifactTool = tool("symbol_to_artifact")
+  val symbolToArtifactTool = McpTool("symbol_to_artifact")
     .description("Gets the group and artifact for a given symbol/class/package")
-    .input[Symbol]
+    .annotations(readOnly = True, destructive = False, idempotent = False, openWorld = True)
+    .handle: (input: Symbol) =>
+      ZIO.scoped:
+        // todo: rate limit
+        SymbolSearch.search(input.query)
 
-  val symbolToArtifactServerTool = symbolToArtifactTool.serverLogic[[X] =>> RIO[Extractor.JavadocCache & Extractor.SourcesCache & Client & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Redis & HerokuInference, X]]: (input, _) =>
-    ZIO.scoped:
-      // todo: rate limit
-      SymbolSearch.search(input.query).mapBoth(_.getMessage, _.asJson.toString).either
-
-
-  val mcpServerEndpoint = mcpEndpoint(
-    List(getLatestServerTool, getClassesServerTool, getSymbolContentsServerTool, getSourceServerTool, listSourceServerTool, symbolToArtifactServerTool),
-    List("mcp"),
-    "javadocs.dev",
-    "0.0.2",
-    false
-  )
+  val mcpServer = McpServer("javadocs.dev", "0.0.2")
+    .tool(getLatestTool)
+    .tool(getClassesTool)
+    .tool(getSymbolContentsTool)
+    .tool(getSourceTool)
+    .tool(listSourceTool)
+    .tool(symbolToArtifactTool)

@@ -1,6 +1,5 @@
 import SymbolSearch.HerokuInference
 import com.jamesward.zio_mavencentral.MavenCentral
-import sttp.tapir.server.ziohttp.ZioHttpInterpreter
 import zio.*
 import zio.cache.{Cache, Lookup}
 import zio.concurrent.ConcurrentMap
@@ -195,34 +194,36 @@ object App extends ZIOAppDefault:
   val sitemap: Handler[Redis & HerokuInference & Client & Extractor.JavadocCache & Extractor.FetchBlocker, Nothing, Request, Response] =
     Handler.fromZIO:
       ZIO.scoped:
-        SymbolSearch.search("").orDie.map:
+        SymbolSearch.search("").fold(
+          error =>
+            Response(status = Status.InternalServerError, body = Body.fromString(error.message)),
           groupArtifacts =>
-            <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-              {
-                groupArtifacts.map:
-                  ga =>
-                    <url>
-                      <loc>{"https://www.javadocs.dev/" + ga.groupId}</loc>
-                    </url>
-                    <url>
-                      <loc>{"https://www.javadocs.dev" + ga.toPath}</loc>
-                    </url>
-                    <url>
-                      <loc>{"https://www.javadocs.dev" + ga / MavenCentral.Version.latest}</loc>
-                    </url>
-              }
-              </urlset>
-    .map:
-      xmlResponse =>
-        Response(
-          status = Status.Ok,
-          body = Body.fromString(xmlResponse.toString),
-          headers = Headers(Header.ContentType(MediaType.text.xml))
+            val xml =
+              <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+                {
+                  groupArtifacts.map:
+                    ga =>
+                      <url>
+                        <loc>{"https://www.javadocs.dev/" + ga.groupId}</loc>
+                      </url>
+                      <url>
+                        <loc>{"https://www.javadocs.dev" + ga.toPath}</loc>
+                      </url>
+                      <url>
+                        <loc>{"https://www.javadocs.dev" + ga / MavenCentral.Version.latest}</loc>
+                      </url>
+                }
+                </urlset>
+            Response(
+              status = Status.Ok,
+              body = Body.fromString(xml.toString),
+              headers = Headers(Header.ContentType(MediaType.text.xml))
+            )
         )
 
 
   val app: Routes[BadActor.Store & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Extractor.TmpDir & Client & Redis & HerokuInference, Response] =
-    val mcpRoutes = ZioHttpInterpreter().toHttp(MCP.mcpServerEndpoint)
+    val mcpRoutes = MCP.mcpServer.routes
 
     val appRoutes = Routes[BadActor.Store & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Extractor.TmpDir & Client & Redis & HerokuInference, Nothing](
       Method.GET / Root -> Handler.fromFunctionHandler[Request](index),
@@ -289,16 +290,8 @@ object App extends ZIOAppDefault:
                     )
                     ZIO.fail(gibberishResponse).run
 
-  private val mcpMethodNotAllowed: HandlerAspect[Any, Unit] =
-    HandlerAspect.interceptIncomingHandler:
-      Handler.fromFunctionZIO: (request: Request) =>
-        if request.path == Path.root / "mcp" && request.method != Method.POST then
-          ZIO.fail(Response(status = Status.MethodNotAllowed, headers = Headers(Header.Allow(NonEmptyChunk(Method.POST)))))
-        else
-          ZIO.succeed(request -> ())
-
   val appWithMiddleware: Routes[BadActor.Store & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Extractor.LatestCache & Extractor.TmpDir & Client & Redis & HerokuInference, Response] =
-    app @@ mcpMethodNotAllowed @@ badActorMiddleware @@ redirectQueryParams @@ Middleware.requestLogging()
+    app @@ badActorMiddleware @@ redirectQueryParams @@ Middleware.requestLogging()
 
   // todo: i think there is a better way
   val server =

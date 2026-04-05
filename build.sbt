@@ -1,4 +1,12 @@
-enablePlugins(LauncherJarPlugin)
+val zioHttpMcpDir = file("../zio-http-mcp")
+
+lazy val root = {
+  val base = (project in file(".")).enablePlugins(LauncherJarPlugin)
+  if (zioHttpMcpDir.exists()) base.dependsOn(RootProject(zioHttpMcpDir))
+  else base
+}
+
+val zioVersion = "2.1.24"
 
 // Hack Alert: This is the default when not in buildpacks (i.e. `default`)
 // In buildpacks it is javadoccentral which puts it alphabetically after dev.zio.zio-constraintless_3-0.3.1.jar
@@ -23,8 +31,6 @@ scalacOptions ++= Seq(
 
 scalaVersion := "3.8.3"
 
-val zioVersion = "2.1.24"
-
 libraryDependencies ++= Seq(
   "dev.zio" %% "zio"                   % zioVersion,
   "dev.zio" %% "zio-concurrent"        % zioVersion,
@@ -32,8 +38,6 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-logging"           % "2.5.3",
   "dev.zio" %% "zio-direct"            % "1.0.0-RC7",
   "dev.zio" %% "zio-direct-streams"    % "1.0.0-RC7",
-  "dev.zio" %% "zio-http"              % "3.10.1",
-  "dev.zio" %% "zio-redis"             % "1.2.1",
   "dev.zio" %% "zio-http"              % "3.10.1",
   "dev.zio" %% "zio-redis"             % "1.2.1",
   "dev.zio" %% "zio-schema-protobuf"   % "1.8.3",
@@ -44,17 +48,21 @@ libraryDependencies ++= Seq(
 
   "com.jamesward" %% "zio-mavencentral" % "0.5.9",
 
-  "com.softwaremill.chimp" %% "core" % "0.1.7",
-  "com.softwaremill.sttp.tapir" %% "tapir-zio" % "1.13.14",
-  "com.softwaremill.sttp.tapir" %% "tapir-zio-http-server" % "1.13.14",
-
   "org.jsoup" % "jsoup" % "1.22.1",
 
   "dev.zio" %% "zio-test"           % zioVersion % Test,
   "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,
   "dev.zio" %% "zio-test-magnolia"  % zioVersion % Test,
   "dev.zio" %% "zio-redis-embedded" % "1.2.1" % Test,
+
+  "io.modelcontextprotocol.sdk" % "mcp-core"           % "1.1.1" % Test,
+  "io.modelcontextprotocol.sdk" % "mcp-json-jackson2"  % "1.1.1" % Test,
 )
+
+libraryDependencies ++= {
+  if (!zioHttpMcpDir.exists()) Seq("com.jamesward" %% "zio-http-mcp" % "0.0.1")
+  else Seq.empty
+}
 
 testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework")
 
@@ -72,9 +80,6 @@ javaOptions ++= Seq(
   "-XX:ReservedCodeCacheSize=64m",
   "-XX:CICompilerCount=2",
 )
-
-//run / javaOptions += s"-agentlib:native-image-agent=config-output-dir=src/main/resources/META-INF/native-image"
-//javaOptions += s"-agentlib:native-image-agent=trace-output=${(target in GraalVMNativeImage).value}/trace-output.json"
 
 lazy val runTest = taskKey[Unit]("run AppTest")
 

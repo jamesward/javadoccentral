@@ -12,6 +12,9 @@ import zio.stream.ZStream
 
 object SymbolSearch:
 
+  case class InferenceError(message: String)
+  case class SearchError(message: String)
+
   object ProtobufCodecSupplier extends CodecSupplier:
     def get[A: Schema]: BinaryCodec[A] = ProtobufCodec.protobufCodec
 
@@ -78,7 +81,7 @@ object SymbolSearch:
         HerokuInference.Live(inferenceUrl, inferenceKey, inferenceModelId)
 
   // todo: heroku inference structured output??
-  def aiSearch(symbol: String): ZIO[HerokuInference & Client & Scope, Throwable, Set[MavenCentral.GroupArtifact]] =
+  def aiSearch(symbol: String): ZIO[HerokuInference & Client & Scope, InferenceError, Set[MavenCentral.GroupArtifact]] =
     defer:
       val herokuInference = ZIO.service[HerokuInference].run
       val prompt =
@@ -92,19 +95,20 @@ object SymbolSearch:
           |  }
           |]
           |""".stripMargin
-      val resp = herokuInference.req(prompt).run
+      val resp = herokuInference.req(prompt).mapError(e => InferenceError(e.getMessage)).run
       if !resp.status.isSuccess then
-        val errorBody = resp.body.asString.run
-        ZIO.fail(new RuntimeException(s"Inference request failed with status ${resp.status}: $errorBody")).run
+        val errorBody = resp.body.asString.mapError(e => InferenceError(e.getMessage)).run
+        ZIO.fail(InferenceError(s"Inference request failed with status ${resp.status}: $errorBody")).run
 
       val body = resp.body.asJson[MessageResponse].tapError: e =>
         ZIO.logError(s"Failed to parse inference response: ${e.getMessage}")
+      .mapError(e => InferenceError(s"Failed to parse inference response: ${e.getMessage}"))
       .run
-      val choice = ZIO.fromOption(body.choices.headOption).orElseFail(Exception("no llm messages found in response")).run
+      val choice = ZIO.fromOption(body.choices.headOption).orElseFail(InferenceError("no llm messages found in response")).run
       val workaroundForMarkdownContent = choice.message.content.replace("```json", "").replace("```", "").trim
       workaroundForMarkdownContent.fromJson[Set[MavenCentral.GroupArtifact]].getOrElse(Set.empty)
 
-  def search(symbol: String): ZIO[Redis & HerokuInference & Scope & Client & Extractor.FetchBlocker & Extractor.JavadocCache, Throwable, Set[MavenCentral.GroupArtifact]] =
+  def search(symbol: String): ZIO[Redis & HerokuInference & Scope & Client & Extractor.FetchBlocker & Extractor.JavadocCache, SearchError, Set[MavenCentral.GroupArtifact]] =
     defer:
       val redis = ZIO.service[Redis].run
       val pattern = "*" + symbol + "*"
@@ -114,7 +118,7 @@ object SymbolSearch:
           case (nextCursor, keys) =>
             val next = if (nextCursor == 0L) None else Some(nextCursor)
             (keys, next)
-      .runCollect.run.flatten
+      .runCollect.mapError(e => SearchError(e.toString)).run.flatten
 
       val cacheResults = ZIO.foreachPar(allKeys): key =>
         redis.sMembers(key).returning[MavenCentral.GroupArtifact].catchAll: e =>
@@ -122,13 +126,14 @@ object SymbolSearch:
             ZIO.logError(e.toString).run
             redis.del(key).run // unparsable keys shouldn't be in there
             Chunk.empty
+      .mapError(e => SearchError(e.toString))
       .run
       .flatten
       .toSet
 
       if cacheResults.isEmpty then
-        val aiResults = aiSearch(symbol).tapError: e =>
-          ZIO.logError(s"aiSearch failed for symbol: $symbol: ${e.getMessage}")
+        val aiResults = aiSearch(symbol).mapError(e => SearchError(e.message)).tapError: e =>
+          ZIO.logError(s"aiSearch failed for symbol: $symbol: ${e.message}")
         .run
         val indexLoad = aiResults.map:
           groupArtifact =>
