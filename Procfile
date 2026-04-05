@@ -1,1 +1,1 @@
-web: target/universal/stage/bin/javadoccentral -J-XshowSettings:vm -J-Xmx256m -J-XX:MaxDirectMemorySize=128m -J-XX:MaxMetaspaceSize=128m -J-XX:ReservedCodeCacheSize=64m -J-XX:CICompilerCount=2
+web: target/universal/stage/bin/javadoccentral -J-XshowSettings:vm -J-XX:MaxDirectMemorySize=96m -J-XX:MaxMetaspaceSize=96m -J-XX:ReservedCodeCacheSize=48m -J-XX:CICompilerCount=2

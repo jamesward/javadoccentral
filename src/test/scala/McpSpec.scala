@@ -95,6 +95,30 @@ object McpSpec extends ZIOSpecDefault:
   override def spec =
     suite("MCP Integration")(
 
+      // --- tools/list validation ---
+      test("tools/list returns all tools with valid schemas"):
+        for
+          port   <- Server.install(App.appWithMiddleware)
+          tools  <- withClient(port): client =>
+            client.listTools().tools()
+        yield
+          import scala.jdk.CollectionConverters.*
+          val toolList = tools.asScala.toList
+          val toolNames = toolList.map(_.name()).toSet
+          // all tools present
+          assertTrue(
+            toolNames == Set("get_latest_version", "get_javadoc_content_list", "get_javadoc_symbol_contents",
+              "list_source_contents", "get_source_contents", "symbol_to_artifact"),
+          ) &&
+          // outputSchema, if present, must have type "object"
+          assertTrue(toolList.forall: tool =>
+            val schema = tool.outputSchema()
+            schema == null || schema.get("type").asInstanceOf[String] == "object"
+          ) &&
+          // inputSchema must have type "object"
+          assertTrue(toolList.forall(_.inputSchema().`type`() == "object"))
+      ,
+
       // --- get_latest_version ---
       test("get_latest_version returns a version"):
         for

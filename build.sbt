@@ -60,11 +60,9 @@ libraryDependencies ++= Seq(
 )
 
 libraryDependencies ++= {
-  if (!zioHttpMcpDir.exists()) Seq("com.jamesward" %% "zio-http-mcp" % "0.0.1")
+  if (!zioHttpMcpDir.exists()) Seq("com.jamesward" %% "zio-http-mcp" % "0.0.2")
   else Seq.empty
 }
-
-testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework")
 
 Compile / packageDoc / publishArtifact := false
 
@@ -74,10 +72,9 @@ fork := true
 
 javaOptions ++= Seq(
   "-Djava.net.preferIPv4Stack=true",
-  "-Xmx256m",
-  "-XX:MaxDirectMemorySize=128m",
-  "-XX:MaxMetaspaceSize=128m",
-  "-XX:ReservedCodeCacheSize=64m",
+  "-XX:MaxDirectMemorySize=96m",
+  "-XX:MaxMetaspaceSize=96m",
+  "-XX:ReservedCodeCacheSize=48m",
   "-XX:CICompilerCount=2",
 )
 
