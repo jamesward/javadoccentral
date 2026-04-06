@@ -1,8 +1,7 @@
 import com.jamesward.zio_mavencentral.MavenCentral
 import com.jamesward.zio_mavencentral.MavenCentral.*
+import dev.kreuzberg.htmltomarkdown.HtmlToMarkdown
 import org.jsoup.Jsoup
-import org.jsoup.nodes.Document
-import org.jsoup.safety.{Cleaner, Safelist}
 import zio.cache.Cache
 import zio.concurrent.ConcurrentMap
 import zio.direct.*
@@ -226,31 +225,13 @@ object Extractor:
 
 
   def javaDocTextSymbolContents(contents: String): String =
-    val document = Jsoup.parse(contents)
-    val cleaner = new Cleaner(Safelist.none())
+    HtmlToMarkdown.convert(contents).content()
 
-    val outputSettings = Document.OutputSettings()
-
-    val clean = cleaner.clean(document)
-    clean.outputSettings(outputSettings)
-    clean.wholeText().replaceAll("\n{3,}", "\n\n---\n\n")
-
-  // todo: seems like it could be better
   def scalaDocTextSymbolContents(contents: String): String =
     val document = Jsoup.parse(contents)
-
     val contentRoot = Option(document.selectFirst("#content > div"))
       .getOrElse(document.body())
-
-    val shell = Document.createShell(document.baseUri())
-    shell.outputSettings(document.outputSettings().clone())
-
-    shell.body().appendChild(contentRoot.clone())
-
-    val cleaner = new Cleaner(Safelist.none())
-    val clean = cleaner.clean(shell)
-
-    clean.wholeText().replaceAll("\n{3,}", "\n\n---\n\n")
+    HtmlToMarkdown.convert(contentRoot.outerHtml()).content()
 
   def javadocSymbolContents(groupArtifactVersion: GroupArtifactVersion, path: String):
       ZIO[JavadocCache & Client & FetchBlocker & Scope, NotFoundError | JavadocFileNotFound, String] =
