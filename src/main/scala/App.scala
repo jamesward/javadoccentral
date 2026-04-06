@@ -128,6 +128,13 @@ object App extends ZIOAppDefault:
               val javadocDir = ZIO.serviceWithZIO[Extractor.JavadocCache](_.cache.get(groupArtifactVersion)).run
               Extractor.javadocFile(groupArtifactVersion, javadocDir, "index.html").run
               Response.redirect(URL(groupArtifactVersion.toPath / "index.html"))
+            .catchSome:
+              case _: Extractor.JavadocFileNotFound =>
+                defer:
+                  val javadocDir = ZIO.serviceWithZIO[Extractor.JavadocCache](_.cache.get(groupArtifactVersion)).run
+                  val files = Extractor.fileList(javadocDir.toPath).toSeq.filter(_.endsWith(".html")).sorted
+                  val versions = ZIO.scoped(MavenCentral.searchVersions(groupId, artifactId)).map(_.value).orElseSucceed(Seq.empty).run
+                  Response.html(UI.page("javadocs.dev", UI.javadocFileList(groupId, artifactId, version, versions, files)))
       .catchAll:
         case _: MavenCentral.NotFoundError | _: Extractor.JavadocFileNotFound =>
           Handler.fromZIO:

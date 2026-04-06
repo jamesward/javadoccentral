@@ -47,6 +47,24 @@ object AppSpec extends ZIOSpecDefault:
           notFoundFilePath.status == Status.NotFound,
           notFoundGroupId.status == Status.NotFound,
         )
+    , test("version page for javadoc without index.html"):
+      val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
+      defer:
+        val versionPage = App.appWithMiddleware.runZIO(
+          Request.get(URL(Path.root / "tools.jackson.core" / "jackson-core" / "3.1.1"))
+            .addHeader(forwardedForHeader)
+            .addHeader(Header.Accept(MediaType.text.html))
+        ).run
+        val filePage = App.appWithMiddleware.runZIO(
+          Request.get(URL(Path.root / "tools.jackson.core" / "jackson-core" / "3.1.1" / "tools.jackson.core" / "tools" / "jackson" / "core" / "tree" / "ArrayTreeNode.html"))
+            .addHeader(forwardedForHeader)
+        ).run
+        val body = versionPage.body.asString.run
+        assertTrue(
+          versionPage.status.isSuccess,
+          body.contains("ArrayTreeNode.html"),
+          filePage.status.isSuccess,
+        )
     , test("rate limit bad actors"):
       defer:
         val forwardedBadActorHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")

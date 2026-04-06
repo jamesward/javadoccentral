@@ -140,6 +140,16 @@ object UI:
       needVersion(groupId, artifactId, versions),
     )
 
+  def javadocFileList(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, versions: Seq[MavenCentral.Version], files: Seq[String]): Html =
+    div(
+      needVersion(groupId, artifactId, if versions.isEmpty then Seq(version) else versions),
+      h3("Files"),
+      ul(
+        files.map: file =>
+          li(a(href := s"/$groupId/$artifactId/$version/$file", file))
+      )
+    )
+
   def symbolSearchResults(query: String, groupArtifacts: Set[MavenCentral.GroupArtifact]): Html =
     div(
       h3("Search results for: ", code(query)),
