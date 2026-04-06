@@ -19,16 +19,30 @@ object App extends ZIOAppDefault:
   given CanEqual[Path, Path] = CanEqual.derived
   given CanEqual[Method, Method] = CanEqual.derived
 
-  def withGroupId(groupId: MavenCentral.GroupId, @unused request: Request): Handler[Client, Nothing, (MavenCentral.GroupId, Request), Response] =
+  private def acceptsMarkdown(request: Request): Boolean =
+    request.header(Accept).exists(_.mimeTypes.exists(_.mediaType.matches(MediaType.text.markdown)))
+
+  private def markdownResponse(content: String): Response =
+    Response.text(content).contentType(MediaType.text.markdown)
+
+  def withGroupId(groupId: MavenCentral.GroupId, request: Request): Handler[Client, Nothing, (MavenCentral.GroupId, Request), Response] =
     Handler.fromZIO:
       ZIO.scoped:
         MavenCentral.searchArtifacts(groupId)
     .flatMap: artifacts =>
-      Response.html(UI.page("javadocs.dev", UI.needArtifactId(groupId, artifacts.value))).toHandler
+      if acceptsMarkdown(request) then
+        val md = s"# $groupId\n\n## Artifacts\n\n" +
+          artifacts.value.map(a => s"- [$a](https://www.javadocs.dev/$groupId/$a)").mkString("\n")
+        markdownResponse(md).toHandler
+      else
+        Response.html(UI.page("javadocs.dev", UI.needArtifactId(groupId, artifacts.value))).toHandler
     .catchAll: _ =>
-      Response.html(UI.page("javadocs.dev", UI.invalidGroupId(groupId)), Status.NotFound).toHandler
+      if acceptsMarkdown(request) then
+        markdownResponse(s"# $groupId\n\nGroupId not found.").toHandler
+      else
+        Response.html(UI.page("javadocs.dev", UI.invalidGroupId(groupId)), Status.NotFound).toHandler
 
-  def withArtifactId(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, @unused request: Request): Handler[Client, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, Request), Response] =
+  def withArtifactId(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, request: Request): Handler[Client, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, Request), Response] =
     Handler.fromZIO:
       ZIO.scoped:
         defer:
@@ -41,7 +55,12 @@ object App extends ZIOAppDefault:
         // if not an artifact, append to the groupId
         Response.redirect(URL(Path.root / (groupId.toString + "." + artifactId.toString))).toHandler
       .apply: versions =>
-        Response.html(UI.page("javadocs.dev", UI.needVersion(groupId, artifactId, versions.value))).toHandler
+        if acceptsMarkdown(request) then
+          val md = s"# $groupId:$artifactId\n\n## Versions\n\n" +
+            versions.value.map(v => s"- [$v](https://www.javadocs.dev/$groupId/$artifactId/$v)").mkString("\n")
+          markdownResponse(md).toHandler
+        else
+          Response.html(UI.page("javadocs.dev", UI.needVersion(groupId, artifactId, versions.value))).toHandler
     .catchAll: e =>
       // invalid groupId or artifactId
       Handler.fromZIO:
@@ -71,7 +90,21 @@ object App extends ZIOAppDefault:
       Handler[Extractor.LatestCache & Client & Extractor.JavadocCache & Redis & Extractor.FetchBlocker & Extractor.TmpDir, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
     val groupArtifactVersion = MavenCentral.GroupArtifactVersion(groupId, artifactId, version)
 
-    if request.header(Accept).exists(_.mimeTypes.exists(_.mediaType.matches(MediaType.application.json))) then
+    if acceptsMarkdown(request) then
+      Handler.fromResponseZIO:
+        ZIO.scoped:
+          defer:
+            val contents = Extractor.javadocContents(groupArtifactVersion).run
+            val md = s"# $groupId:$artifactId $version\n\n## Symbols\n\n" +
+              contents.toSeq.sortBy(_.fqn).map: c =>
+                s"- [${c.fqn}](https://www.javadocs.dev${groupArtifactVersion.toPath}/${c.link}) (${c.kind})"
+              .mkString("\n")
+            markdownResponse(md)
+        .catchAll:
+          case _: MavenCentral.NotFoundError =>
+            ZIO.succeed:
+              Response.notFound(groupArtifactVersion.toPath.toString)
+    else if request.header(Accept).exists(_.mimeTypes.exists(_.mediaType.matches(MediaType.application.json))) then
       Handler.fromResponseZIO:
         ZIO.scoped:
           defer:
@@ -113,12 +146,12 @@ object App extends ZIOAppDefault:
     val groupArtifactVersion = MavenCentral.GroupArtifactVersion(groupId, artifactId, version)
 
     // todo: reduce duplication on error handling
-    if request.header(Accept).exists(_.mimeTypes.exists(_.mediaType.matches(MediaType.text.markdown))) then
+    if acceptsMarkdown(request) then
       Handler.fromResponseZIO:
         ZIO.scoped:
           defer:
             val content = Extractor.javadocSymbolContents(groupArtifactVersion, file.toString).run
-            Response.text(content).contentType(MediaType.text.markdown)
+            markdownResponse(content)
           .catchAll:
             case _: MavenCentral.NotFoundError =>
               ZIO.succeed:
@@ -178,11 +211,20 @@ object App extends ZIOAppDefault:
                 ZIO.logErrorCause(s"SymbolSearch.search failed for query: $query", Cause.fail(e))
         .flatMap:
           results =>
-            Response.html(UI.page("javadocs.dev", UI.symbolSearchResults(query, results))).toHandler
+            if acceptsMarkdown(request) then
+              val md = s"# Search results for: $query\n\n" +
+                (if results.isEmpty then "No results found - but maybe the library just hasn't been indexed yet?"
+                else results.toSeq.map(ga => s"- [${ga.groupId}:${ga.artifactId}](https://www.javadocs.dev${ga.toPath})").mkString("\n"))
+              markdownResponse(md).toHandler
+            else
+              Response.html(UI.page("javadocs.dev", UI.symbolSearchResults(query, results))).toHandler
         .catchAll:
           _ =>
             // todo: convey error
-            Response.html(UI.page("javadocs.dev", UI.symbolSearchResults(query, Set.empty))).toHandler
+            if acceptsMarkdown(request) then
+              markdownResponse(s"# Search results for: $query\n\nNo results found.").toHandler
+            else
+              Response.html(UI.page("javadocs.dev", UI.symbolSearchResults(query, Set.empty))).toHandler
 
   val robots = Response.text:
     """User-agent: *
@@ -190,35 +232,158 @@ object App extends ZIOAppDefault:
       |Sitemap: https://www.javadocs.dev/sitemap.xml
       |""".stripMargin
 
-  // todo: stream
-  val sitemap: Handler[Redis & HerokuInference & Client & Extractor.JavadocCache & Extractor.FetchBlocker, Nothing, Request, Response] =
+  private val llmsHeader =
+    """# javadocs.dev
+      |
+      |> Javadoc browser for Maven Central artifacts. All pages return markdown when requested with `Accept: text/markdown`.
+      |
+      |## Usage
+      |
+      |All javadoc pages support markdown responses via the `Accept: text/markdown` header.
+      |
+      |### URL patterns
+      |
+      |- `/{groupId}` — list artifacts for a group
+      |- `/{groupId}/{artifactId}` — list versions for an artifact
+      |- `/{groupId}/{artifactId}/{version}` — list symbols/classes in a versioned artifact
+      |- `/{groupId}/{artifactId}/{version}/{path}` — view javadoc for a specific symbol
+      |
+      |Use `latest` as the version to resolve to the latest available version.
+      |
+      |### Example
+      |
+      |```
+      |curl -H "Accept: text/markdown" https://www.javadocs.dev/dev.zio/zio-schema_3/1.8.3/zio/schema/Schema.html
+      |```
+      |
+      |## Symbol search
+      |
+      |Search for symbols (classes, methods, etc.) across indexed artifacts. The query parameter key is the search term:
+      |
+      |```
+      |curl -H "Accept: text/markdown" "https://www.javadocs.dev/?Schema"
+      |```
+      |
+      |## MCP
+      |
+      |An MCP server (Streamable HTTP) is available at: `https://www.javadocs.dev/mcp`
+      |""".stripMargin
+
+  val llmsTxt: Handler[Redis & HerokuInference & Client & Extractor.JavadocCache & Extractor.FetchBlocker, Nothing, Request, Response] =
     Handler.fromZIO:
       ZIO.scoped:
         SymbolSearch.search("").fold(
           error =>
             Response(status = Status.InternalServerError, body = Body.fromString(error.message)),
           groupArtifacts =>
+            val groups = groupArtifacts.map(_.groupId).toSeq.sortBy(_.toString)
+            val md = llmsHeader + "\n## Groups\n\n" +
+              groups.map(g => s"- [$g](https://www.javadocs.dev/llms/$g)").mkString("\n") + "\n"
+            Response.text(md)
+        )
+
+  def llmsGroup(gId: MavenCentral.GroupId, @unused request: Request): Handler[Redis & HerokuInference & Client & Extractor.JavadocCache & Extractor.FetchBlocker, Nothing, (MavenCentral.GroupId, Request), Response] =
+    Handler.fromZIO:
+      ZIO.scoped:
+        SymbolSearch.search("").fold(
+          error =>
+            Response(status = Status.InternalServerError, body = Body.fromString(error.message)),
+          groupArtifacts =>
+            val filtered = groupArtifacts.filter(_.groupId == gId)
+            if filtered.isEmpty then
+              Response(status = Status.NotFound, body = Body.fromString(s"Group $gId not found"))
+            else
+              val md = s"# $gId\n\n## Artifacts\n\n" +
+                filtered.toSeq.sortBy(_.artifactId.toString).map: ga =>
+                  s"- [${ga.artifactId}](https://www.javadocs.dev/llms/$gId/${ga.artifactId})"
+                .mkString("\n") + "\n"
+              Response.text(md)
+        )
+
+  def llmsArtifact(gId: MavenCentral.GroupId, aId: MavenCentral.ArtifactId, @unused request: Request): Handler[Client, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, Request), Response] =
+    Handler.fromZIO:
+      ZIO.scoped:
+        MavenCentral.searchVersions(gId, aId)
+    .flatMap: versions =>
+      val md = s"# $gId:$aId\n\n## Versions\n\n" +
+        versions.value.map(v => s"- [$v](https://www.javadocs.dev/llms/$gId/$aId/$v)").mkString("\n") + "\n"
+      Response.text(md).toHandler
+    .catchAll: _ =>
+      Response(status = Status.NotFound, body = Body.fromString(s"Artifact $gId:$aId not found")).toHandler
+
+  def llmsVersion(gId: MavenCentral.GroupId, aId: MavenCentral.ArtifactId, ver: MavenCentral.Version, @unused request: Request): Handler[Extractor.FetchBlocker & Client & Extractor.JavadocCache & Redis, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Request), Response] =
+    val groupArtifactVersion = MavenCentral.GroupArtifactVersion(gId, aId, ver)
+    Handler.fromResponseZIO:
+      ZIO.scoped:
+        defer:
+          val contents = Extractor.javadocContents(groupArtifactVersion).run
+          val md = s"# $gId:$aId $ver\n\n## Symbols\n\n" +
+            contents.toSeq.sortBy(_.fqn).map: c =>
+              s"- [${c.fqn}](https://www.javadocs.dev${groupArtifactVersion.toPath}/${c.link}) (${c.kind})"
+            .mkString("\n") + "\n"
+          Response.text(md)
+      .catchAll:
+        case _: MavenCentral.NotFoundError =>
+          ZIO.succeed:
+            Response.notFound(groupArtifactVersion.toPath.toString)
+
+  val sitemapIndex: Handler[Redis & HerokuInference & Client & Extractor.JavadocCache & Extractor.FetchBlocker, Nothing, Request, Response] =
+    Handler.fromZIO:
+      ZIO.scoped:
+        SymbolSearch.search("").fold(
+          error =>
+            Response(status = Status.InternalServerError, body = Body.fromString(error.message)),
+          groupArtifacts =>
+            val groups = groupArtifacts.map(_.groupId).toSeq.sortBy(_.toString)
             val xml =
-              <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+              <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
                 {
-                  groupArtifacts.map:
-                    ga =>
-                      <url>
-                        <loc>{"https://www.javadocs.dev/" + ga.groupId}</loc>
-                      </url>
-                      <url>
-                        <loc>{"https://www.javadocs.dev" + ga.toPath}</loc>
-                      </url>
-                      <url>
-                        <loc>{"https://www.javadocs.dev" + ga / MavenCentral.Version.latest}</loc>
-                      </url>
+                  groups.map: g =>
+                    <sitemap>
+                      <loc>{"https://www.javadocs.dev/sitemap/" + g}</loc>
+                    </sitemap>
                 }
-                </urlset>
+              </sitemapindex>
             Response(
               status = Status.Ok,
               body = Body.fromString(xml.toString),
               headers = Headers(Header.ContentType(MediaType.text.xml))
             )
+        )
+
+  def sitemapGroup(gId: MavenCentral.GroupId, @unused request: Request): Handler[Redis & HerokuInference & Client & Extractor.JavadocCache & Extractor.FetchBlocker, Nothing, (MavenCentral.GroupId, Request), Response] =
+    Handler.fromZIO:
+      ZIO.scoped:
+        SymbolSearch.search("").fold(
+          error =>
+            Response(status = Status.InternalServerError, body = Body.fromString(error.message)),
+          groupArtifacts =>
+            val filtered = groupArtifacts.filter(_.groupId == gId)
+            if filtered.isEmpty then
+              Response(status = Status.NotFound, body = Body.fromString("Group not found"))
+            else
+              val xml =
+                <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+                  <url>
+                    <loc>{"https://www.javadocs.dev/" + gId}</loc>
+                  </url>
+                  {
+                    filtered.toSeq.sortBy(_.artifactId.toString).flatMap: ga =>
+                      Seq(
+                        <url>
+                          <loc>{"https://www.javadocs.dev" + ga.toPath}</loc>
+                        </url>,
+                        <url>
+                          <loc>{"https://www.javadocs.dev" + ga / MavenCentral.Version.latest}</loc>
+                        </url>
+                      )
+                  }
+                </urlset>
+              Response(
+                status = Status.Ok,
+                body = Body.fromString(xml.toString),
+                headers = Headers(Header.ContentType(MediaType.text.xml))
+              )
         )
 
 
@@ -230,7 +395,12 @@ object App extends ZIOAppDefault:
       Method.GET / "favicon.ico" -> Handler.fromResource("favicon.ico").orDie,
       Method.GET / "favicon.png" -> Handler.fromResource("favicon.png").orDie,
       Method.GET / "robots.txt" -> robots.toHandler,
-      Method.GET / "sitemap.xml" -> sitemap,
+      Method.GET / "llms.txt" -> llmsTxt,
+      Method.GET / "llms" / groupId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, Request)](llmsGroup),
+      Method.GET / "llms" / groupId / artifactId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, Request)](llmsArtifact),
+      Method.GET / "llms" / groupId / artifactId / version -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Request)](llmsVersion),
+      Method.GET / "sitemap.xml" -> sitemapIndex,
+      Method.GET / "sitemap" / groupId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, Request)](sitemapGroup),
       Method.GET / ".well-known" / trailing -> Handler.notFound,
       Method.GET / groupId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, Request)](withGroupId),
       Method.GET / groupId / artifactId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, Request)](withArtifactId),
