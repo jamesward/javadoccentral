@@ -153,31 +153,6 @@ object SymbolSearch:
       val redis = ZIO.service[Redis].run
       redis.sMembers(groupArtifactsKey).returning[MavenCentral.GroupArtifact].run.toSet
 
-  def backfillGroupArtifacts: ZIO[Redis, Throwable, Long] =
-    defer:
-      val redis = ZIO.service[Redis].run
-      val count = Ref.make(0L).run
-      ZStream.paginateZIO(0L): cursor =>
-        redis.scan(cursor, Some("*"), Some(Count(10_000L))).returning[String].map:
-          case (nextCursor, keys) =>
-            val next = if (nextCursor == 0L) None else Some(nextCursor)
-            (keys, next)
-      .mapZIO: keys =>
-        ZIO.foreach(keys.filter(_ != groupArtifactsKey)): key =>
-          redis.sMembers(key).returning[MavenCentral.GroupArtifact].catchAll: e =>
-            defer:
-              ZIO.logError(e.toString).run
-              redis.del(key).run
-              Chunk.empty
-          .flatMap: members =>
-            ZIO.foreachDiscard(members): ga =>
-              redis.sAdd(groupArtifactsKey, ga)
-            .as(members.size.toLong)
-      .mapZIO: counts =>
-        count.update(_ + counts.sum)
-      .runDrain.run
-      count.get.run
-
   def update(groupArtifact: MavenCentral.GroupArtifact, symbols: Set[Extractor.Content]): ZIO[Redis, Throwable, Unit] =
     defer:
       val redis = ZIO.service[Redis].run
