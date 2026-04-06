@@ -223,7 +223,7 @@ object App extends ZIOAppDefault:
 
 
   val app: Routes[BadActor.Store & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Extractor.TmpDir & Client & Redis & HerokuInference, Response] =
-    val mcpRoutes = MCP.mcpServer.routes
+    val mcpRoutes = MCP.mcpServer.statelessRoutes
 
     val appRoutes = Routes[BadActor.Store & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Extractor.TmpDir & Client & Redis & HerokuInference, Nothing](
       Method.GET / Root -> Handler.fromFunctionHandler[Request](index),

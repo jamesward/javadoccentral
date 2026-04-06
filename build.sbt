@@ -6,7 +6,7 @@ lazy val root = {
   else base
 }
 
-val zioVersion = "2.1.24"
+val zioVersion = "2.1.25"
 
 // Hack Alert: This is the default when not in buildpacks (i.e. `default`)
 // In buildpacks it is javadoccentral which puts it alphabetically after dev.zio.zio-constraintless_3-0.3.1.jar
@@ -60,7 +60,7 @@ libraryDependencies ++= Seq(
 )
 
 libraryDependencies ++= {
-  if (!zioHttpMcpDir.exists()) Seq("com.jamesward" %% "zio-http-mcp" % "0.0.2")
+  if (!zioHttpMcpDir.exists()) Seq("com.jamesward" %% "zio-http-mcp" % "0.0.3")
   else Seq.empty
 }
 
