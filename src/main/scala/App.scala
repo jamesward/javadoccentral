@@ -269,36 +269,34 @@ object App extends ZIOAppDefault:
       |An MCP server (Streamable HTTP) is available at: `https://www.javadocs.dev/mcp`
       |""".stripMargin
 
-  val llmsTxt: Handler[Redis & HerokuInference & Client & Extractor.JavadocCache & Extractor.FetchBlocker, Nothing, Request, Response] =
+  val llmsTxt: Handler[Redis, Nothing, Request, Response] =
     Handler.fromZIO:
-      ZIO.scoped:
-        SymbolSearch.search("").fold(
-          error =>
-            Response(status = Status.InternalServerError, body = Body.fromString(error.message)),
-          groupArtifacts =>
-            val groups = groupArtifacts.map(_.groupId).toSeq.sortBy(_.toString)
-            val md = llmsHeader + "\n## Groups\n\n" +
-              groups.map(g => s"- [$g](https://www.javadocs.dev/llms/$g)").mkString("\n") + "\n"
-            Response.text(md)
-        )
+      SymbolSearch.allGroupArtifacts.fold(
+        error =>
+          Response(status = Status.InternalServerError, body = Body.fromString(error.getMessage)),
+        groupArtifacts =>
+          val groups = groupArtifacts.map(_.groupId).toSeq.sortBy(_.toString)
+          val md = llmsHeader + "\n## Groups\n\n" +
+            groups.map(g => s"- [$g](https://www.javadocs.dev/llms/$g)").mkString("\n") + "\n"
+          Response.text(md)
+      )
 
-  def llmsGroup(gId: MavenCentral.GroupId, @unused request: Request): Handler[Redis & HerokuInference & Client & Extractor.JavadocCache & Extractor.FetchBlocker, Nothing, (MavenCentral.GroupId, Request), Response] =
+  def llmsGroup(gId: MavenCentral.GroupId, @unused request: Request): Handler[Redis, Nothing, (MavenCentral.GroupId, Request), Response] =
     Handler.fromZIO:
-      ZIO.scoped:
-        SymbolSearch.search("").fold(
-          error =>
-            Response(status = Status.InternalServerError, body = Body.fromString(error.message)),
-          groupArtifacts =>
-            val filtered = groupArtifacts.filter(_.groupId == gId)
-            if filtered.isEmpty then
-              Response(status = Status.NotFound, body = Body.fromString(s"Group $gId not found"))
-            else
-              val md = s"# $gId\n\n## Artifacts\n\n" +
-                filtered.toSeq.sortBy(_.artifactId.toString).map: ga =>
-                  s"- [${ga.artifactId}](https://www.javadocs.dev/llms/$gId/${ga.artifactId})"
-                .mkString("\n") + "\n"
-              Response.text(md)
-        )
+      SymbolSearch.allGroupArtifacts.fold(
+        error =>
+          Response(status = Status.InternalServerError, body = Body.fromString(error.getMessage)),
+        groupArtifacts =>
+          val filtered = groupArtifacts.filter(_.groupId == gId)
+          if filtered.isEmpty then
+            Response(status = Status.NotFound, body = Body.fromString(s"Group $gId not found"))
+          else
+            val md = s"# $gId\n\n## Artifacts\n\n" +
+              filtered.toSeq.sortBy(_.artifactId.toString).map: ga =>
+                s"- [${ga.artifactId}](https://www.javadocs.dev/llms/$gId/${ga.artifactId})"
+              .mkString("\n") + "\n"
+            Response.text(md)
+      )
 
   def llmsArtifact(gId: MavenCentral.GroupId, aId: MavenCentral.ArtifactId, @unused request: Request): Handler[Client, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, Request), Response] =
     Handler.fromZIO:
@@ -327,64 +325,62 @@ object App extends ZIOAppDefault:
           ZIO.succeed:
             Response.notFound(groupArtifactVersion.toPath.toString)
 
-  val sitemapIndex: Handler[Redis & HerokuInference & Client & Extractor.JavadocCache & Extractor.FetchBlocker, Nothing, Request, Response] =
+  val sitemapIndex: Handler[Redis, Nothing, Request, Response] =
     Handler.fromZIO:
-      ZIO.scoped:
-        SymbolSearch.search("").fold(
-          error =>
-            Response(status = Status.InternalServerError, body = Body.fromString(error.message)),
-          groupArtifacts =>
-            val groups = groupArtifacts.map(_.groupId).toSeq.sortBy(_.toString)
+      SymbolSearch.allGroupArtifacts.fold(
+        error =>
+          Response(status = Status.InternalServerError, body = Body.fromString(error.getMessage)),
+        groupArtifacts =>
+          val groups = groupArtifacts.map(_.groupId).toSeq.sortBy(_.toString)
+          val xml =
+            <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+              {
+                groups.map: g =>
+                  <sitemap>
+                    <loc>{"https://www.javadocs.dev/sitemap/" + g}</loc>
+                  </sitemap>
+              }
+            </sitemapindex>
+          Response(
+            status = Status.Ok,
+            body = Body.fromString(xml.toString),
+            headers = Headers(Header.ContentType(MediaType.text.xml))
+          )
+      )
+
+  def sitemapGroup(gId: MavenCentral.GroupId, @unused request: Request): Handler[Redis, Nothing, (MavenCentral.GroupId, Request), Response] =
+    Handler.fromZIO:
+      SymbolSearch.allGroupArtifacts.fold(
+        error =>
+          Response(status = Status.InternalServerError, body = Body.fromString(error.getMessage)),
+        groupArtifacts =>
+          val filtered = groupArtifacts.filter(_.groupId == gId)
+          if filtered.isEmpty then
+            Response(status = Status.NotFound, body = Body.fromString("Group not found"))
+          else
             val xml =
-              <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+              <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+                <url>
+                  <loc>{"https://www.javadocs.dev/" + gId}</loc>
+                </url>
                 {
-                  groups.map: g =>
-                    <sitemap>
-                      <loc>{"https://www.javadocs.dev/sitemap/" + g}</loc>
-                    </sitemap>
+                  filtered.toSeq.sortBy(_.artifactId.toString).flatMap: ga =>
+                    Seq(
+                      <url>
+                        <loc>{"https://www.javadocs.dev" + ga.toPath}</loc>
+                      </url>,
+                      <url>
+                        <loc>{"https://www.javadocs.dev" + ga / MavenCentral.Version.latest}</loc>
+                      </url>
+                    )
                 }
-              </sitemapindex>
+              </urlset>
             Response(
               status = Status.Ok,
               body = Body.fromString(xml.toString),
               headers = Headers(Header.ContentType(MediaType.text.xml))
             )
-        )
-
-  def sitemapGroup(gId: MavenCentral.GroupId, @unused request: Request): Handler[Redis & HerokuInference & Client & Extractor.JavadocCache & Extractor.FetchBlocker, Nothing, (MavenCentral.GroupId, Request), Response] =
-    Handler.fromZIO:
-      ZIO.scoped:
-        SymbolSearch.search("").fold(
-          error =>
-            Response(status = Status.InternalServerError, body = Body.fromString(error.message)),
-          groupArtifacts =>
-            val filtered = groupArtifacts.filter(_.groupId == gId)
-            if filtered.isEmpty then
-              Response(status = Status.NotFound, body = Body.fromString("Group not found"))
-            else
-              val xml =
-                <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-                  <url>
-                    <loc>{"https://www.javadocs.dev/" + gId}</loc>
-                  </url>
-                  {
-                    filtered.toSeq.sortBy(_.artifactId.toString).flatMap: ga =>
-                      Seq(
-                        <url>
-                          <loc>{"https://www.javadocs.dev" + ga.toPath}</loc>
-                        </url>,
-                        <url>
-                          <loc>{"https://www.javadocs.dev" + ga / MavenCentral.Version.latest}</loc>
-                        </url>
-                      )
-                  }
-                </urlset>
-              Response(
-                status = Status.Ok,
-                body = Body.fromString(xml.toString),
-                headers = Headers(Header.ContentType(MediaType.text.xml))
-              )
-        )
+      )
 
 
   val app: Routes[BadActor.Store & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Extractor.TmpDir & Client & Redis & HerokuInference, Response] =
@@ -401,6 +397,12 @@ object App extends ZIOAppDefault:
       Method.GET / "llms" / groupId / artifactId / version -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Request)](llmsVersion),
       Method.GET / "sitemap.xml" -> sitemapIndex,
       Method.GET / "sitemap" / groupId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, Request)](sitemapGroup),
+      Method.POST / "admin" / "backfill-group-artifacts" -> Handler.fromZIO(
+        SymbolSearch.backfillGroupArtifacts.fold(
+          error => Response(status = Status.InternalServerError, body = Body.fromString(error.getMessage)),
+          count => Response.text(s"Backfilled $count group artifacts")
+        )
+      ),
       Method.GET / ".well-known" / trailing -> Handler.notFound,
       Method.GET / groupId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, Request)](withGroupId),
       Method.GET / groupId / artifactId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, Request)](withArtifactId),

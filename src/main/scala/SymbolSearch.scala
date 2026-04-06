@@ -12,6 +12,8 @@ import zio.stream.ZStream
 
 object SymbolSearch:
 
+  val groupArtifactsKey = "_groupArtifacts"
+
   case class InferenceError(message: String)
   case class SearchError(message: String)
 
@@ -146,6 +148,35 @@ object SymbolSearch:
       else
         cacheResults
 
+  def allGroupArtifacts: ZIO[Redis, Throwable, Set[MavenCentral.GroupArtifact]] =
+    defer:
+      val redis = ZIO.service[Redis].run
+      redis.sMembers(groupArtifactsKey).returning[MavenCentral.GroupArtifact].run.toSet
+
+  def backfillGroupArtifacts: ZIO[Redis, Throwable, Long] =
+    defer:
+      val redis = ZIO.service[Redis].run
+      val allKeys = ZStream.paginateZIO(0L): cursor =>
+        redis.scan(cursor, Some("*"), Some(Count(10_000L))).returning[String].map:
+          case (nextCursor, keys) =>
+            val next = if (nextCursor == 0L) None else Some(nextCursor)
+            (keys, next)
+      .runCollect.run.flatten.filter(_ != groupArtifactsKey)
+
+      val allGroupArtifacts = ZIO.foreachPar(allKeys): key =>
+        redis.sMembers(key).returning[MavenCentral.GroupArtifact].catchAll: e =>
+          defer:
+            ZIO.logError(e.toString).run
+            redis.del(key).run
+            Chunk.empty
+      .run.flatten.toSet
+
+      ZIO.foreachDiscard(allGroupArtifacts): ga =>
+        redis.sAdd(groupArtifactsKey, ga)
+      .run
+
+      allGroupArtifacts.size.toLong
+
   def update(groupArtifact: MavenCentral.GroupArtifact, symbols: Set[Extractor.Content]): ZIO[Redis, Throwable, Unit] =
     defer:
       val redis = ZIO.service[Redis].run
@@ -154,3 +185,4 @@ object SymbolSearch:
           redis.sAdd(symbol.fqn, groupArtifact)
       .unit
       .run
+      redis.sAdd(groupArtifactsKey, groupArtifact).unit.run
