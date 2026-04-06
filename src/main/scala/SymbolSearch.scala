@@ -120,7 +120,7 @@ object SymbolSearch:
           case (nextCursor, keys) =>
             val next = if (nextCursor == 0L) None else Some(nextCursor)
             (keys, next)
-      .runCollect.mapError(e => SearchError(e.toString)).run.flatten
+      .runCollect.mapError(e => SearchError(e.toString)).run.flatten.filter(!_.startsWith("_"))
 
       val cacheResults = ZIO.foreachPar(allKeys): key =>
         redis.sMembers(key).returning[MavenCentral.GroupArtifact].catchAll: e =>
