@@ -1,3 +1,6 @@
+if (sys.props("java.specification.version").toInt < 25)
+  throw new MessageOnlyException(s"Java 25+ is required, but found ${sys.props("java.version")}")
+
 val zioHttpMcpDir = file("../zio-http-mcp")
 
 lazy val root = {
