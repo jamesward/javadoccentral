@@ -398,10 +398,12 @@ object App extends ZIOAppDefault:
       Method.GET / "sitemap.xml" -> sitemapIndex,
       Method.GET / "sitemap" / groupId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, Request)](sitemapGroup),
       Method.POST / "admin" / "backfill-group-artifacts" -> Handler.fromZIO(
-        SymbolSearch.backfillGroupArtifacts.fold(
-          error => Response(status = Status.InternalServerError, body = Body.fromString(error.getMessage)),
-          count => Response.text(s"Backfilled $count group artifacts")
-        )
+        SymbolSearch.backfillGroupArtifacts
+          .tapBoth(
+            e => ZIO.logError(s"Backfill failed: ${e.getMessage}"),
+            count => ZIO.log(s"Backfilled $count group artifacts")
+          )
+          .forkDaemon.as(Response.text("Backfill started"))
       ),
       Method.GET / ".well-known" / trailing -> Handler.notFound,
       Method.GET / groupId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, Request)](withGroupId),
