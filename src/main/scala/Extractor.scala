@@ -31,67 +31,68 @@ object Extractor:
   def gav(groupId: String, artifactId: String, version: String) =
     GroupArtifactVersion(GroupId(groupId), ArtifactId(artifactId), Version(version))
 
-  def latest(groupArtifact: GroupArtifact): ZIO[Client, GroupIdOrArtifactIdNotFoundError | LatestNotFound, Version] =
-    ZIO.scoped:
-      MavenCentral.latest(groupArtifact.groupId, groupArtifact.artifactId)
-        .catchAll:
-          case t: Throwable => ZIO.die(t)
-          case groupIdOrArtifactIdNotFoundError: GroupIdOrArtifactIdNotFoundError => ZIO.fail(groupIdOrArtifactIdNotFoundError)
-        .someOrFail(LatestNotFound(groupArtifact))
+  def latest(groupArtifact: GroupArtifact): ZIO[Client & Scope, GroupIdOrArtifactIdNotFoundError | LatestNotFound, Version] =
+    MavenCentral.latest(groupArtifact.groupId, groupArtifact.artifactId)
+      .catchAll:
+        case t: Throwable => ZIO.die(t)
+        case groupIdOrArtifactIdNotFoundError: GroupIdOrArtifactIdNotFoundError => ZIO.fail(groupIdOrArtifactIdNotFoundError)
+      .someOrFail(LatestNotFound(groupArtifact))
 
   def javadoc(groupArtifactVersion: GroupArtifactVersion):
-      ZIO[Client & FetchBlocker & TmpDir, NotFoundError, File] =
-    ZIO.scoped:
-      val javadocUriOrDie: ZIO[Client & Scope, NotFoundError, URL] = MavenCentral.javadocUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version).catchAll:
-        case t: Throwable => ZIO.die(t)
-        case javadocNotFoundError: NotFoundError => ZIO.fail(javadocNotFoundError)
+      ZIO[Client & FetchBlocker & TmpDir & Scope, NotFoundError, File] =
+    val javadocUriOrDie: ZIO[Client & Scope, NotFoundError, URL] = MavenCentral.javadocUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version).catchAll:
+      case t: Throwable => ZIO.die(t)
+      case javadocNotFoundError: NotFoundError => ZIO.fail(javadocNotFoundError)
 
-      defer:
-        val blocker = ZIO.service[FetchBlocker].run.blocker
-        val tmpDir = ZIO.service[TmpDir].run
-        val javadocDir = File(tmpDir.dir, groupArtifactVersion.toString)
+    defer:
+      val blocker = ZIO.service[FetchBlocker].run.blocker
+      val tmpDir = ZIO.service[TmpDir].run
+      val javadocDir = File(tmpDir.dir, groupArtifactVersion.toString)
 
-        // could be less racey
-        if !javadocDir.exists() then
-          val javadocUrl = javadocUriOrDie.run
-          val maybeBlock = blocker.get(groupArtifactVersion).run
-          // note: fold doesn't work with defer here
-          maybeBlock match
-            case Some(promise) =>
-              promise.await.run
-            case _ =>
-              val promise = Promise.make[Nothing, Unit].run
-              blocker.put(groupArtifactVersion, promise).run
-              MavenCentral.downloadAndExtractZip(javadocUrl, javadocDir).orDie.run
-              promise.succeed(()).run
+      // could be less racey
+      if !javadocDir.exists() then
+        val javadocUrl = javadocUriOrDie.run
+        val maybeBlock = blocker.get(groupArtifactVersion).run
+        // note: fold doesn't work with defer here
+        maybeBlock match
+          case Some(promise) =>
+            promise.await.run
+          case _ =>
+            val promise = Promise.make[Nothing, Unit].run
+            blocker.put(groupArtifactVersion, promise).run
+            MavenCentral.downloadAndExtractZip(javadocUrl, javadocDir).orDie.run
+            promise.succeed(()).run
 
-        javadocDir
+      javadocDir
+
+  def index(groupArtifactVersion: GroupArtifactVersion):
+      ZIO[Client & FetchBlocker & TmpDir & JavadocCache & Scope, NotFoundError | JavadocFileNotFound, String] =
+    javadocSymbolContents(groupArtifactVersion, "index.html")
 
   def sources(groupArtifactVersion: GroupArtifactVersion):
-      ZIO[Client & FetchSourcesBlocker & TmpDir, NotFoundError, File] =
-    ZIO.scoped:
-      val sourcesUriOrDie: ZIO[Client & Scope, NotFoundError, URL] = MavenCentral.sourcesUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version).catchAll:
-        case t: Throwable => ZIO.die(t)
-        case sourcesNotFoundError: NotFoundError => ZIO.fail(sourcesNotFoundError)
+      ZIO[Client & FetchSourcesBlocker & TmpDir & Scope, NotFoundError, File] =
+    val sourcesUriOrDie: ZIO[Client & Scope, NotFoundError, URL] = MavenCentral.sourcesUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version).catchAll:
+      case t: Throwable => ZIO.die(t)
+      case sourcesNotFoundError: NotFoundError => ZIO.fail(sourcesNotFoundError)
 
-      defer:
-        val blocker = ZIO.service[FetchSourcesBlocker].run.blocker
-        val tmpDir = ZIO.service[TmpDir].run
-        val sourcesDir = File(tmpDir.dir, s"${groupArtifactVersion.toString}-sources")
+    defer:
+      val blocker = ZIO.service[FetchSourcesBlocker].run.blocker
+      val tmpDir = ZIO.service[TmpDir].run
+      val sourcesDir = File(tmpDir.dir, s"${groupArtifactVersion.toString}-sources")
 
-        if !sourcesDir.exists() then
-          val maybeBlock = blocker.get(groupArtifactVersion).run
-          maybeBlock match
-            case Some(promise) =>
-              promise.await.run
-            case _ =>
-              val promise = Promise.make[Nothing, Unit].run
-              blocker.put(groupArtifactVersion, promise).run
-              val sourcesUrl = sourcesUriOrDie.run
-              MavenCentral.downloadAndExtractZip(sourcesUrl, sourcesDir).orDie.run
-              promise.succeed(()).run
+      if !sourcesDir.exists() then
+        val maybeBlock = blocker.get(groupArtifactVersion).run
+        maybeBlock match
+          case Some(promise) =>
+            promise.await.run
+          case _ =>
+            val promise = Promise.make[Nothing, Unit].run
+            blocker.put(groupArtifactVersion, promise).run
+            val sourcesUrl = sourcesUriOrDie.run
+            MavenCentral.downloadAndExtractZip(sourcesUrl, sourcesDir).orDie.run
+            promise.succeed(()).run
 
-        sourcesDir
+      sourcesDir
 
   def javadocFile(groupArtifactVersion: GroupArtifactVersion, javadocDir: File, path: String):
       ZIO[Any, JavadocFileNotFound, File] =

@@ -9,6 +9,7 @@ object AppTest extends ZIOAppDefault:
     Server.serve(App.appWithMiddleware).provide(
       App.server,
       Client.default,
+      Scope.default,
       App.blockerLayer,
       App.sourcesBlockerLayer,
       App.latestCacheLayer,

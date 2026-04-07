@@ -70,9 +70,8 @@ object McpSpec extends ZIOSpecDefault:
         port   <- Server.install(App.appWithMiddleware)
         result <- withClient(port): client =>
           val contentList = resultText(callTool(client, "get_javadoc_content_list", java.util.Map.of("groupId", gid, "artifactId", aid, "version", ver)))
-          val linkStart = contentList.indexOf("\"link\":\"") + 8
-          val linkEnd = contentList.indexOf("\"", linkStart)
-          val link = contentList.substring(linkStart, linkEnd)
+          val linkPattern = """"link"\s*:\s*"([^"]+)"""".r
+          val link = linkPattern.findFirstMatchIn(contentList).get.group(1)
           callTool(client, "get_javadoc_symbol_contents", java.util.Map.of("groupId", gid, "artifactId", aid, "version", ver, "link", link))
       yield
         val text = resultText(result)
@@ -107,7 +106,7 @@ object McpSpec extends ZIOSpecDefault:
           val toolNames = toolList.map(_.name()).toSet
           // all tools present
           assertTrue(
-            toolNames == Set("get_latest_version", "get_javadoc_content_list", "get_javadoc_symbol_contents",
+            toolNames == Set("get_latest_version", "get_index", "get_javadoc_content_list", "get_javadoc_symbol_contents",
               "list_source_contents", "get_source_contents", "search_artifacts", "symbol_to_artifact"),
           ) &&
           // outputSchema, if present, must have type "object"
@@ -194,6 +193,7 @@ object McpSpec extends ZIOSpecDefault:
     ).provide(
       Server.defaultWith(_.onAnyOpenPort),
       Client.default,
+      Scope.default,
       App.blockerLayer,
       App.sourcesBlockerLayer,
       App.latestCacheLayer,

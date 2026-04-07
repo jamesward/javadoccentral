@@ -497,19 +497,19 @@ object App extends ZIOAppDefault:
   val sourcesBlockerLayer: ZLayer[Any, Nothing, Extractor.FetchSourcesBlocker] =
     ZLayer.fromZIO(ConcurrentMap.empty[MavenCentral.GroupArtifactVersion, Promise[Nothing, Unit]].map(Extractor.FetchSourcesBlocker(_)))
 
-  val latestCacheLayer: ZLayer[Client, Nothing, Extractor.LatestCache] = ZLayer.fromZIO:
+  val latestCacheLayer: ZLayer[Client & Scope, Nothing, Extractor.LatestCache] = ZLayer.fromZIO:
     Cache.makeWith(1_000, Lookup(Extractor.latest)):
       case Exit.Success(_) => 1.hour
       case Exit.Failure(_) => Duration.Zero
     .map(Extractor.LatestCache(_))
 
-  val javadocCacheLayer: ZLayer[Client & Extractor.FetchBlocker & Extractor.TmpDir, Nothing, Extractor.JavadocCache] = ZLayer.fromZIO:
+  val javadocCacheLayer: ZLayer[Client & Extractor.FetchBlocker & Extractor.TmpDir & Scope, Nothing, Extractor.JavadocCache] = ZLayer.fromZIO:
     Cache.makeWith(1_000, Lookup(Extractor.javadoc)):
       case Exit.Success(_) => Duration.Infinity
       case Exit.Failure(_) => Duration.Zero
     .map(Extractor.JavadocCache(_))
 
-  val sourcesCacheLayer: ZLayer[Client & Extractor.FetchSourcesBlocker & Extractor.TmpDir, Nothing, Extractor.SourcesCache] = ZLayer.fromZIO:
+  val sourcesCacheLayer: ZLayer[Client & Extractor.FetchSourcesBlocker & Extractor.TmpDir & Scope, Nothing, Extractor.SourcesCache] = ZLayer.fromZIO:
     Cache.makeWith(1_000, Lookup(Extractor.sources)):
       case Exit.Success(_) => Duration.Infinity
       case Exit.Failure(_) => Duration.Zero
@@ -560,6 +560,7 @@ object App extends ZIOAppDefault:
     Server.serve(appWithMiddleware).provide(
       server,
       Client.default,
+      Scope.default,
       blockerLayer,
       sourcesBlockerLayer,
       latestCacheLayer,

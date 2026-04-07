@@ -42,6 +42,15 @@ object MCP:
       ZIO.scoped:
         Extractor.latest(input)
 
+  val getIndexTool = McpTool("get_index")
+    .description("Gets the index from the javadocs for a given Maven Central library artifact - often the index provides helpful reference documentation")
+    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
+    .handle: (input: GroupArtifactVersion) =>
+      ZIO.scoped:
+        defer:
+          App.indexJavadocContents(input).run
+          Extractor.index(input).run
+
   val getClassesTool = McpTool("get_javadoc_content_list")
     .description("Gets a list of the contents of a javadoc jar")
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
@@ -75,7 +84,7 @@ object MCP:
         Extractor.sourceFileContents(groupArtifactVersion, input.link)
 
   val searchArtifactsTool = McpTool("search_artifacts")
-    .description("Searches indexed artifacts by partial group id or artifact id (case insensitive)")
+    .description("Searches indexed Maven Central library artifacts by partial group id or artifact id (case insensitive)")
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: Symbol) =>
       SymbolSearch.searchGroupArtifacts(input.query)
@@ -90,6 +99,7 @@ object MCP:
 
   val mcpServer = McpServer("javadocs.dev", "0.0.2")
     .tool(getLatestTool)
+    .tool(getIndexTool)
     .tool(getClassesTool)
     .tool(getSymbolContentsTool)
     .tool(getSourceTool)
