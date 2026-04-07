@@ -32,6 +32,9 @@ object MCP:
   given searchError: McpError[SearchError] with
     def message(e: SearchError): String = e.message
 
+  given throwableError: McpError[Throwable] with
+    def message(e: Throwable): String = e.getMessage
+
   val getLatestTool = McpTool("get_latest_version")
     .description("Gets the latest version of a given artifact")
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
@@ -71,8 +74,14 @@ object MCP:
       ZIO.scoped:
         Extractor.sourceFileContents(groupArtifactVersion, input.link)
 
+  val searchArtifactsTool = McpTool("search_artifacts")
+    .description("Searches indexed artifacts by partial group id or artifact id (case insensitive)")
+    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
+    .handle: (input: Symbol) =>
+      SymbolSearch.searchGroupArtifacts(input.query)
+
   val symbolToArtifactTool = McpTool("symbol_to_artifact")
-    .description("Gets the group and artifact for a given symbol/class/package")
+    .description("Gets the group and artifact for a given symbol, class, or package. Symbol search is case sensitive.")
     .annotations(readOnly = True, destructive = False, idempotent = False, openWorld = True)
     .handle: (input: Symbol) =>
       ZIO.scoped:
@@ -85,4 +94,5 @@ object MCP:
     .tool(getSymbolContentsTool)
     .tool(getSourceTool)
     .tool(listSourceTool)
+    .tool(searchArtifactsTool)
     .tool(symbolToArtifactTool)

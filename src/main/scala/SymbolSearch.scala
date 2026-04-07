@@ -113,6 +113,9 @@ object SymbolSearch:
   def search(symbol: String): ZIO[Redis & HerokuInference & Scope & Client & Extractor.FetchBlocker & Extractor.JavadocCache, SearchError, Set[MavenCentral.GroupArtifact]] =
     defer:
       val redis = ZIO.service[Redis].run
+
+      val gaResults = searchGroupArtifacts(symbol).mapError(e => SearchError(e.toString)).run
+
       val pattern = "*" + symbol + "*"
 
       val allKeys = ZStream.paginateZIO(0L): cursor =>
@@ -122,7 +125,7 @@ object SymbolSearch:
             (keys, next)
       .runCollect.mapError(e => SearchError(e.toString)).run.flatten.filter(!_.startsWith("_"))
 
-      val cacheResults = ZIO.foreachPar(allKeys): key =>
+      val symbolResults = ZIO.foreachPar(allKeys): key =>
         redis.sMembers(key).returning[MavenCentral.GroupArtifact].catchAll: e =>
           defer:
             ZIO.logError(e.toString).run
@@ -133,20 +136,33 @@ object SymbolSearch:
       .flatten
       .toSet
 
+      val cacheResults = gaResults ++ symbolResults
+
       if cacheResults.isEmpty then
         val aiResults = aiSearch(symbol).mapError(e => SearchError(e.message)).tapError: e =>
           ZIO.logError(s"aiSearch failed for symbol: $symbol: ${e.message}")
         .run
-        val indexLoad = aiResults.map:
+        val validatedResults = ZIO.filterPar(aiResults): ga =>
+          MavenCentral.isArtifact(ga.groupId, ga.artifactId).orElseSucceed(false)
+        .run
+        .toSet
+        val indexLoad = validatedResults.map:
           groupArtifact =>
             Extractor.latest(groupArtifact).flatMap:
               latest =>
                 App.indexJavadocContents(MavenCentral.GroupArtifactVersion(groupArtifact.groupId, groupArtifact.artifactId, latest))
             .ignore
         ZIO.collectAllParDiscard(indexLoad).forkDaemon.run
-        aiResults
+        validatedResults
       else
         cacheResults
+
+  def searchGroupArtifacts(query: String): ZIO[Redis, Throwable, Set[MavenCentral.GroupArtifact]] =
+    defer:
+      val all = allGroupArtifacts.run
+      val lowerQuery = query.toLowerCase
+      all.filter: ga =>
+        ga.groupId.toString.toLowerCase.contains(lowerQuery) || ga.artifactId.toString.toLowerCase.contains(lowerQuery)
 
   def allGroupArtifacts: ZIO[Redis, Throwable, Set[MavenCentral.GroupArtifact]] =
     defer:

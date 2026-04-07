@@ -18,9 +18,12 @@ import scala.annotation.unused
 object App extends ZIOAppDefault:
   given CanEqual[Path, Path] = CanEqual.derived
   given CanEqual[Method, Method] = CanEqual.derived
+  given CanEqual[MediaType, MediaType] = CanEqual.derived
 
   private def acceptsMarkdown(request: Request): Boolean =
-    request.header(Accept).exists(_.mimeTypes.exists(_.mediaType.matches(MediaType.text.markdown)))
+    request.header(Accept).exists: accept =>
+      val types = accept.mimeTypes.map(_.mediaType)
+      types.exists(_ == MediaType.text.markdown) && !types.exists(mt => mt == MediaType.text.html || mt == MediaType.any)
 
   private def markdownResponse(content: String): Response =
     Response.text(content).contentType(MediaType.text.markdown)
@@ -52,8 +55,21 @@ object App extends ZIOAppDefault:
           .run
     .flatMap: maybeVersions =>
       maybeVersions.fold:
-        // if not an artifact, append to the groupId
-        Response.redirect(URL(Path.root / (groupId.toString + "." + artifactId.toString))).toHandler
+        // if not an artifact, try appending to the groupId if the combined groupId exists
+        val combinedGroupId = MavenCentral.GroupId(groupId.toString + "." + artifactId.toString)
+        Handler.fromZIO:
+          ZIO.scoped:
+            MavenCentral.searchArtifacts(combinedGroupId)
+        .flatMap: _ =>
+          Response.redirect(URL(Path.root / combinedGroupId.toString)).toHandler
+        .orElse:
+          Handler.fromZIO:
+            ZIO.scoped:
+              MavenCentral.searchArtifacts(groupId)
+          .flatMap: artifactIds =>
+            Response.html(UI.page("javadocs.dev", UI.needArtifactId(groupId, artifactIds.value, Some(artifactId))), Status.NotFound).toHandler
+          .orElse:
+            Response.html(UI.page("javadocs.dev", UI.invalidGroupArtifact(groupId, artifactId, groupIdValid = false)), Status.NotFound).toHandler
       .apply: versions =>
         if acceptsMarkdown(request) then
           val md = s"# $groupId:$artifactId\n\n## Versions\n\n" +
@@ -69,7 +85,7 @@ object App extends ZIOAppDefault:
       .flatMap: artifactIds =>
         Response.html(UI.page("javadocs.dev", UI.needArtifactId(groupId, artifactIds.value)), Status.NotFound).toHandler // todo: message
       .orElse:
-        Response.redirect(URL(Path.root / groupId.toString)).toHandler  // todo: message
+        Response.html(UI.page("javadocs.dev", UI.invalidGroupArtifact(groupId, artifactId, groupIdValid = false)), Status.NotFound).toHandler
 
   // we only want to trigger symbol cache loading when the index page is loaded
   // this is a lazy way to populate the cache
@@ -153,7 +169,7 @@ object App extends ZIOAppDefault:
     val groupArtifactVersion = MavenCentral.GroupArtifactVersion(groupId, artifactId, version)
 
     // todo: reduce duplication on error handling
-    if acceptsMarkdown(request) then
+    if acceptsMarkdown(request) && file.toString.endsWith(".html") then
       Handler.fromResponseZIO:
         ZIO.scoped:
           defer:

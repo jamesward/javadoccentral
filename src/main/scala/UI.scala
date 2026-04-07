@@ -86,8 +86,53 @@ object UI:
       input(valueAttr := "Go!", typeAttr := "submit"),
     )
 
-  def needArtifactId(groupId: MavenCentral.GroupId, artifactIds: Seq[MavenCentral.ArtifactId]): Html =
+  def invalidGroupArtifact(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, groupIdValid: Boolean): Html =
+    val groupIdInput =
+      if groupIdValid then
+        input(
+          nameAttr := "groupId",
+          valueAttr := groupId.toString,
+          autofocusAttr := "autofocus",
+          requiredAttr := true,
+        )
+      else
+        input(
+          nameAttr := "groupId",
+          valueAttr := groupId.toString,
+          onFocusAttr := "this.setCustomValidity('GroupID is invalid'); this.reportValidity();",
+          onInputAttr := "this.setCustomValidity(''); this.reportValidity()",
+          autofocusAttr := "autofocus",
+          requiredAttr := true,
+        )
+    val artifactIdInput =
+      if groupIdValid then
+        input(
+          idAttr := "artifactId",
+          valueAttr := artifactId.toString,
+          onFocusAttr := "this.setCustomValidity('ArtifactID is invalid'); this.reportValidity();",
+          onInputAttr := "this.setCustomValidity(''); this.reportValidity()",
+        )
+      else
+        input(
+          valueAttr := artifactId.toString,
+        )
+    val autoReport =
+      if groupIdValid then
+        script("document.getElementById('artifactId').setCustomValidity('ArtifactID is invalid'); document.getElementById('artifactId').reportValidity();")
+      else
+        script("document.querySelector('input[name=groupId]').setCustomValidity('GroupID is invalid'); document.querySelector('input[name=groupId]').reportValidity();")
+    form(actionAttr := "/", methodAttr := "get",
+      label("GroupId:", groupIdInput),
+      " ",
+      label("ArtifactId:", artifactIdInput),
+      " ",
+      input(valueAttr := "Go!", typeAttr := "submit"),
+      autoReport,
+    )
+
+  def needArtifactId(groupId: MavenCentral.GroupId, artifactIds: Seq[MavenCentral.ArtifactId], invalidArtifactId: Option[MavenCentral.ArtifactId] = None): Html =
     form(actionAttr := s"/$groupId", methodAttr := "get",
+      invalidArtifactId.fold(div())(id => p(s"ArtifactId '${id}' not found.")),
       label(
         a(
           href := "/",
