@@ -101,7 +101,7 @@ object Extractor:
 
     val javadocFile = File(javadocDir, normalizedPath)
 
-    if javadocFile.exists() then
+    if javadocFile.exists() && javadocFile.isFile then
       ZIO.succeed(javadocFile)
     else
       ZIO.fail(JavadocFileNotFound(groupArtifactVersion, path))
