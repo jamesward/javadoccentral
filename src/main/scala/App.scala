@@ -182,6 +182,9 @@ object App extends ZIOAppDefault:
             case _: Extractor.JavadocFileNotFound =>
               ZIO.succeed:
                 Response.notFound((groupArtifactVersion.toPath ++ file).toString)
+            case _: Extractor.JavadocContentError =>
+              ZIO.succeed:
+                Response.notFound((groupArtifactVersion.toPath ++ file).toString)
     else
       Handler.fromFileZIO:
         ZIO.scoped:

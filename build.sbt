@@ -64,7 +64,7 @@ libraryDependencies ++= Seq(
 )
 
 libraryDependencies ++= {
-  if (!zioHttpMcpDir.exists()) Seq("com.jamesward" %% "zio-http-mcp" % "0.0.5")
+  if (!zioHttpMcpDir.exists()) Seq("com.jamesward" %% "zio-http-mcp" % "0.0.6")
   else Seq.empty
 }
 

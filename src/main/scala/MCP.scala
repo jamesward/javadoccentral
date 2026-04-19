@@ -29,6 +29,9 @@ object MCP:
   given fileNotFoundError: McpError[NotFoundError | Extractor.JavadocFileNotFound] with
     def message(e: NotFoundError | Extractor.JavadocFileNotFound): String = e.toString
 
+  given fileNotFoundOrContentError: McpError[NotFoundError | Extractor.JavadocFileNotFound | Extractor.JavadocContentError] with
+    def message(e: NotFoundError | Extractor.JavadocFileNotFound | Extractor.JavadocContentError): String = e.toString
+
   given searchError: McpError[SearchError] with
     def message(e: SearchError): String = e.message
 
