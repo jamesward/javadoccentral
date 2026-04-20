@@ -50,9 +50,9 @@ libraryDependencies ++= Seq(
 
   "com.jamesward" %% "zio-mavencentral" % "0.5.9",
 
-  "org.jsoup" % "jsoup" % "1.22.1",
+  "org.jsoup" % "jsoup" % "1.22.2",
 
-  "dev.kreuzberg" % "html-to-markdown" % "3.1.0",
+  "dev.kreuzberg" % "html-to-markdown" % "3.1.0", // wait on 3.2.x for https://github.com/kreuzberg-dev/html-to-markdown/issues/315
 
   "dev.zio" %% "zio-test"           % zioVersion % Test,
   "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,

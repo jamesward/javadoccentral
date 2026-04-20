@@ -12,6 +12,7 @@ import zio.{Promise, Scope, ZIO}
 import java.io.File
 import java.nio.file.{Files, Path}
 import scala.jdk.CollectionConverters.*
+import scala.jdk.OptionConverters.*
 
 object Extractor:
   case class TmpDir(dir: File)
@@ -228,13 +229,13 @@ object Extractor:
 
 
   def javaDocTextSymbolContents(contents: String): Option[String] =
-    Option(HtmlToMarkdown.convert(contents).content())
+    Option(HtmlToMarkdown.convert(contents).content()) // .toScala
 
   def scalaDocTextSymbolContents(contents: String): Option[String] =
     val document = Jsoup.parse(contents)
     val contentRoot = Option(document.selectFirst("#content > div"))
       .getOrElse(document.body())
-    Option(HtmlToMarkdown.convert(contentRoot.outerHtml()).content())
+    Option(HtmlToMarkdown.convert(contentRoot.outerHtml()).content()) // .toScala
 
   def javadocSymbolContents(groupArtifactVersion: GroupArtifactVersion, path: String):
       ZIO[JavadocCache & Client & FetchBlocker & Scope, NotFoundError | JavadocFileNotFound | JavadocContentError, String] =

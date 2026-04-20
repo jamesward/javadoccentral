@@ -116,25 +116,27 @@ object SymbolSearch:
 
       val gaResults = searchGroupArtifacts(symbol).mapError(e => SearchError(e.toString)).run
 
-      val pattern = "*" + symbol + "*"
+      val symbolResults = if gaResults.nonEmpty then Set.empty[MavenCentral.GroupArtifact] else
+        val normalizedSymbol = symbol.replace(' ', '*')
+        val pattern = "*" + normalizedSymbol + "*"
 
-      val allKeys = ZStream.paginateZIO(0L): cursor =>
-        redis.scan(cursor, Some(pattern), Some(Count(10_000L))).returning[String].map:
-          case (nextCursor, keys) =>
-            val next = if (nextCursor == 0L) None else Some(nextCursor)
-            (keys, next)
-      .runCollect.mapError(e => SearchError(e.toString)).run.flatten.filter(!_.startsWith("_"))
+        val allKeys = ZStream.paginateZIO(0L): cursor =>
+          redis.scan(cursor, Some(pattern), Some(Count(10_000L))).returning[String].map:
+            case (nextCursor, keys) =>
+              val next = if (nextCursor == 0L) None else Some(nextCursor)
+              (keys, next)
+        .runCollect.mapError(e => SearchError(e.toString)).run.flatten.filter(!_.startsWith("_"))
 
-      val symbolResults = ZIO.foreachPar(allKeys): key =>
-        redis.sMembers(key).returning[MavenCentral.GroupArtifact].catchAll: e =>
-          defer:
-            ZIO.logError(e.toString).run
-            redis.del(key).run // unparsable keys shouldn't be in there
-            Chunk.empty
-      .mapError(e => SearchError(e.toString))
-      .run
-      .flatten
-      .toSet
+        ZIO.foreachPar(allKeys): key =>
+          redis.sMembers(key).returning[MavenCentral.GroupArtifact].catchAll: e =>
+            defer:
+              ZIO.logError(e.toString).run
+              redis.del(key).run // unparsable keys shouldn't be in there
+              Chunk.empty
+        .mapError(e => SearchError(e.toString))
+        .run
+        .flatten
+        .toSet
 
       val cacheResults = gaResults ++ symbolResults
 
@@ -157,12 +159,16 @@ object SymbolSearch:
       else
         cacheResults
 
+  private def queryParts(query: String): List[String] =
+    query.toLowerCase.split("\\s+").nn.map(_.nn).toList.filter(_.nonEmpty)
+
   def searchGroupArtifacts(query: String): ZIO[Redis, Throwable, Set[MavenCentral.GroupArtifact]] =
     defer:
       val all = allGroupArtifacts.run
-      val lowerQuery = query.toLowerCase
+      val parts = queryParts(query)
       all.filter: ga =>
-        ga.groupId.toString.toLowerCase.contains(lowerQuery) || ga.artifactId.toString.toLowerCase.contains(lowerQuery)
+        val combined = ga.groupId.toString.toLowerCase + ":" + ga.artifactId.toString.toLowerCase
+        parts.forall(combined.contains)
 
   def allGroupArtifacts: ZIO[Redis, Throwable, Set[MavenCentral.GroupArtifact]] =
     defer:

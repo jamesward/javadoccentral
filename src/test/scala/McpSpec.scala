@@ -106,7 +106,7 @@ object McpSpec extends ZIOSpecDefault:
           val toolNames = toolList.map(_.name()).toSet
           // all tools present
           assertTrue(
-            toolNames == Set("get_latest_version", "get_index", "get_javadoc_content_list", "get_javadoc_symbol_contents",
+            toolNames == Set("get_latest_version", "get_javadoc_index", "get_javadoc_content_list", "get_javadoc_symbol_contents",
               "list_source_contents", "get_source_contents", "search_artifacts", "symbol_to_artifact"),
           ) &&
           // outputSchema, if present, must have type "object"

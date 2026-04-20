@@ -45,7 +45,7 @@ object MCP:
       ZIO.scoped:
         Extractor.latest(input)
 
-  val getIndexTool = McpTool("get_index")
+  val getIndexTool = McpTool("get_javadoc_index")
     .description("Gets the index from the javadocs for a given Maven Central library artifact - often the index provides helpful reference documentation")
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: GroupArtifactVersion) =>
