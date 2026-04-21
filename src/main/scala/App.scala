@@ -189,7 +189,7 @@ object App extends ZIOAppDefault:
       Handler.fromFileZIO:
         ZIO.scoped:
           defer:
-            val javadocDir = Extractor.javadoc(groupArtifactVersion).run
+            val javadocDir = ZIO.serviceWithZIO[Extractor.JavadocCache](_.cache.get(groupArtifactVersion)).run
             ZIO.when(file.toString == "index.html")(indexJavadocContents(groupArtifactVersion)).run // update the cache
             Extractor.javadocFile(groupArtifactVersion, javadocDir, file.toString).run
           .catchAll(e => ZIO.fail(JavadocException(e)))

@@ -52,19 +52,17 @@ object Extractor:
       val tmpDir = ZIO.service[TmpDir].run
       val javadocDir = File(tmpDir.dir, groupArtifactVersion.toString)
 
-      // could be less racey
       if !javadocDir.exists() then
         val javadocUrl = javadocUriOrDie.run
-        val maybeBlock = blocker.get(groupArtifactVersion).run
-        // note: fold doesn't work with defer here
-        maybeBlock match
-          case Some(promise) =>
-            promise.await.run
-          case _ =>
-            val promise = Promise.make[Nothing, Unit].run
-            blocker.put(groupArtifactVersion, promise).run
-            MavenCentral.downloadAndExtractZip(javadocUrl, javadocDir).orDie.run
-            promise.succeed(()).run
+        val promise = Promise.make[Nothing, Unit].run
+        val existing = blocker.putIfAbsent(groupArtifactVersion, promise).run
+        existing match
+          case Some(existingPromise) =>
+            existingPromise.await.run
+          case None =>
+            MavenCentral.downloadAndExtractZip(javadocUrl, javadocDir)
+              .ensuring(promise.succeed(()) *> blocker.remove(groupArtifactVersion))
+              .orDie.run
 
       javadocDir
 
@@ -84,16 +82,16 @@ object Extractor:
       val sourcesDir = File(tmpDir.dir, s"${groupArtifactVersion.toString}-sources")
 
       if !sourcesDir.exists() then
-        val maybeBlock = blocker.get(groupArtifactVersion).run
-        maybeBlock match
-          case Some(promise) =>
-            promise.await.run
-          case _ =>
-            val promise = Promise.make[Nothing, Unit].run
-            blocker.put(groupArtifactVersion, promise).run
+        val promise = Promise.make[Nothing, Unit].run
+        val existing = blocker.putIfAbsent(groupArtifactVersion, promise).run
+        existing match
+          case Some(existingPromise) =>
+            existingPromise.await.run
+          case None =>
             val sourcesUrl = sourcesUriOrDie.run
-            MavenCentral.downloadAndExtractZip(sourcesUrl, sourcesDir).orDie.run
-            promise.succeed(()).run
+            MavenCentral.downloadAndExtractZip(sourcesUrl, sourcesDir)
+              .ensuring(promise.succeed(()) *> blocker.remove(groupArtifactVersion))
+              .orDie.run
 
       sourcesDir
 
