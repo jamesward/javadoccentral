@@ -47,6 +47,7 @@ object UI:
             |   font-family: monospace;
             |   font-size: 16px;
             |   background-color: #edede0;
+            |   padding-bottom: 80px;
             | }
             |""".stripMargin),
       ),
@@ -61,12 +62,22 @@ object UI:
     )
 
   val index: Html =
-    form(actionAttr := "/", methodAttr := "get",
-      label("GroupId (i.e. ", a(href := "/org.springframework", "org.springframework"), "): ",
-        input(nameAttr := "groupId", requiredAttr := true)
+    div(
+      form(actionAttr := "/", methodAttr := "get",
+        label("Search: ",
+          input(nameAttr := "q", styleAttr := "width: 20em"),
+        ),
+        " ",
+        input(valueAttr := "Search", typeAttr := "submit"),
       ),
-      " ",
-      input(valueAttr := "Go!", typeAttr := "submit"),
+      p(styleAttr := "margin: 1.5em 0 0.5em 0; color: #666;", "Or browse by Maven Central coordinates:"),
+      form(actionAttr := "/", methodAttr := "get",
+        label("GroupId (e.g. ", a(href := "/org.springframework", "org.springframework"), "): ",
+          input(nameAttr := "groupId", requiredAttr := true)
+        ),
+        " ",
+        input(valueAttr := "Go!", typeAttr := "submit"),
+      ),
     )
 
   def invalidGroupId(groupId: MavenCentral.GroupId): Html =

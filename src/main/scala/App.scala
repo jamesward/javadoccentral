@@ -432,20 +432,25 @@ object App extends ZIOAppDefault:
     mcpRoutes ++ appRoutes
 
   private val redirectQueryParams = HandlerAspect.intercept: (request, response) =>
-    request.url.queryParam("groupId").map: groupId =>
-      request.url.path(Path.root / groupId).setQueryParams()
+    request.url.queryParam("q").map: q =>
+      // manual redirect because the URL type really wants to encode the query param as ?query= but we just want ?query
+      val param = URL.root.setQueryParams(q).toString.stripSuffix("=")
+      Response(Status.MovedPermanently, Headers(Header.Location.name -> param))
+    .orElse:
+      request.url.queryParam("groupId").map: groupId =>
+        Response.redirect(request.url.path(Path.root / groupId).setQueryParams(), true)
     .orElse:
       request.url.queryParam("artifactId").map: artifactId =>
-        request.url.path(request.path / artifactId).setQueryParams()
+        Response.redirect(request.url.path(request.path / artifactId).setQueryParams(), true)
     .orElse:
       request.url.queryParam("version").map: version =>
-        request.url.path(request.path / version).setQueryParams()
-    .fold(
+        Response.redirect(request.url.path(request.path / version).setQueryParams(), true)
+    .getOrElse(
       if request.url.path.hasTrailingSlash && request.url.path != Path.root then
         Response.redirect(request.url.dropTrailingSlash)
       else
         response
-    )(Response.redirect(_, true))
+    )
 
   private def getForwardedFor(request: Request): Option[BadActor.IP] =
     request.headers.get("X-Forwarded-For").flatMap(_.split(",").lastOption).orElse(request.remoteAddress.map(_.getHostAddress))
