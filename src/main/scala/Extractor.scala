@@ -60,9 +60,11 @@ object Extractor:
           case Some(existingPromise) =>
             existingPromise.await.run
           case None =>
+            ZIO.logInfo(s"Downloading javadoc: $javadocUrl").run
             MavenCentral.downloadAndExtractZip(javadocUrl, javadocDir)
               .ensuring(promise.succeed(()) *> blocker.remove(groupArtifactVersion))
               .orDie.run
+            ZIO.logInfo(s"Downloaded javadoc: $groupArtifactVersion").run
 
       javadocDir
 
@@ -89,9 +91,11 @@ object Extractor:
             existingPromise.await.run
           case None =>
             val sourcesUrl = sourcesUriOrDie.run
+            ZIO.logInfo(s"Downloading sources: $sourcesUrl").run
             MavenCentral.downloadAndExtractZip(sourcesUrl, sourcesDir)
               .ensuring(promise.succeed(()) *> blocker.remove(groupArtifactVersion))
               .orDie.run
+            ZIO.logInfo(s"Downloaded sources: $groupArtifactVersion").run
 
       sourcesDir
 
