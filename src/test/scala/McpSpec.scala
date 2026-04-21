@@ -205,4 +205,5 @@ object McpSpec extends ZIOSpecDefault:
       ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
       SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
       BadActor.live,
+      App.crawlerEvictionsLayer,
     ) @@ withLiveClock @@ timeout(3.minutes) @@ sequential

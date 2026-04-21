@@ -125,4 +125,5 @@ object AppSpec extends ZIOSpecDefault:
     ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
     SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
     BadActor.live,
+    App.crawlerEvictionsLayer,
   ) @@ TestAspect.withLiveRandom @@ TestAspect.withLiveSystem @@ TestAspect.sequential

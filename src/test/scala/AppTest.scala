@@ -21,4 +21,5 @@ object AppTest extends ZIOAppDefault:
       ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
       SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
       BadActor.live,
+      App.crawlerEvictionsLayer,
     )

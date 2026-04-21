@@ -487,8 +487,79 @@ object App extends ZIOAppDefault:
                     )
                     ZIO.fail(gibberishResponse).run
 
-  val appWithMiddleware: Routes[BadActor.Store & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Extractor.LatestCache & Extractor.TmpDir & Client & Redis & HerokuInference, Response] =
-    app @@ badActorMiddleware @@ redirectQueryParams @@ Middleware.requestLogging(loggedRequestHeaders = Set(Header.UserAgent))
+  private val knownCrawlers = Set(
+    "meta-externalagent",
+    "semrushbot",
+    "amazonbot",
+    "petalbot",
+    "dotbot",
+    "bytespider",
+    "gptbot",
+    "claudebot",
+    "bingbot",
+    "googlebot",
+    "yandexbot",
+    "baiduspider",
+  )
+
+  private def isCrawler(request: Request): Boolean =
+    request.header(Header.UserAgent).exists: ua =>
+      val lower = ua.renderedValue.toLowerCase
+      knownCrawlers.exists(lower.contains)
+
+  private def gavFromPath(path: Path): Option[MavenCentral.GroupArtifactVersion] =
+    val segments = path.segments.toList
+    if segments.length >= 3 then
+      for
+        g <- MavenCentral.GroupId.unapply(segments(0))
+        a <- MavenCentral.ArtifactId.unapply(segments(1))
+        v <- MavenCentral.Version.unapply(segments(2))
+      yield MavenCentral.GroupArtifactVersion(g, a, v)
+    else None
+
+  private def deleteDir(dir: java.io.File): Unit =
+    if dir.isDirectory then
+      dir.listFiles.nn.foreach(deleteDir)
+    dir.delete()
+
+  private val crawlerEvictDelay = 10.minutes
+
+  case class CrawlerEvictions(pending: ConcurrentMap[MavenCentral.GroupArtifactVersion, Fiber[Nothing, Unit]])
+
+  val crawlerEvictionsLayer: ZLayer[Any, Nothing, CrawlerEvictions] =
+    ZLayer.fromZIO:
+      ConcurrentMap.empty[MavenCentral.GroupArtifactVersion, Fiber[Nothing, Unit]].map(CrawlerEvictions(_))
+
+  private def evictCrawlerCache(gav: MavenCentral.GroupArtifactVersion): ZIO[CrawlerEvictions & Extractor.JavadocCache & Extractor.TmpDir, Nothing, Unit] =
+    defer:
+      val tmpDir = ZIO.serviceWith[Extractor.TmpDir](_.dir).run
+      val cache = ZIO.serviceWith[Extractor.JavadocCache](_.cache).run
+      cache.invalidate(gav).run
+      ZIO.attempt(deleteDir(java.io.File(tmpDir, gav.toString))).ignoreLogged.run
+      ZIO.serviceWithZIO[CrawlerEvictions](_.pending.remove(gav)).run
+      ZIO.logInfo(s"Evicted crawler cache: $gav").run
+
+  private def scheduleCrawlerEviction(gav: MavenCentral.GroupArtifactVersion): ZIO[CrawlerEvictions & Extractor.JavadocCache & Extractor.TmpDir, Nothing, Unit] =
+    defer:
+      val ce = ZIO.service[CrawlerEvictions].run
+      val maybeExisting = ce.pending.get(gav).run
+      ZIO.foreachDiscard(maybeExisting)(_.interrupt).run
+      val fiber = evictCrawlerCache(gav).delay(crawlerEvictDelay).forkDaemon.run
+      ce.pending.put(gav, fiber).unit.run
+
+  private val crawlerMiddleware: HandlerAspect[CrawlerEvictions & Extractor.JavadocCache & Extractor.TmpDir, Unit] =
+    HandlerAspect.interceptHandlerStateful(
+      Handler.fromFunction[Request]: request =>
+        val maybeGav = if isCrawler(request) then gavFromPath(request.path) else None
+        (maybeGav, (request, ()))
+    )(
+      Handler.fromFunctionZIO[(Option[MavenCentral.GroupArtifactVersion], Response)]:
+        case (Some(gav), response) => scheduleCrawlerEviction(gav).as(response)
+        case (None, response) => ZIO.succeed(response)
+    )
+
+  val appWithMiddleware: Routes[CrawlerEvictions & BadActor.Store & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Extractor.LatestCache & Extractor.TmpDir & Client & Redis & HerokuInference, Response] =
+    app @@ badActorMiddleware @@ crawlerMiddleware @@ redirectQueryParams @@ Middleware.requestLogging(loggedRequestHeaders = Set(Header.UserAgent))
 
   // todo: i think there is a better way
   val server =
@@ -580,4 +651,5 @@ object App extends ZIOAppDefault:
       ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
       SymbolSearch.herokuInferenceLayer,
       BadActor.live,
+      crawlerEvictionsLayer,
     )
