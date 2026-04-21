@@ -160,7 +160,7 @@ object SymbolSearch:
         cacheResults
 
   private def queryParts(query: String): List[String] =
-    query.toLowerCase.split("\\s+").nn.map(_.nn).toList.filter(_.nonEmpty)
+    query.toLowerCase.split("\\s+").nn.map(_.nn.replaceAll("[^a-z0-9._:-]", "")).toList.filter(_.nonEmpty)
 
   def searchGroupArtifacts(query: String): ZIO[Redis, Throwable, Set[MavenCentral.GroupArtifact]] =
     defer:
