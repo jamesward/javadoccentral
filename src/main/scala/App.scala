@@ -488,7 +488,7 @@ object App extends ZIOAppDefault:
                     ZIO.fail(gibberishResponse).run
 
   val appWithMiddleware: Routes[BadActor.Store & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Extractor.LatestCache & Extractor.TmpDir & Client & Redis & HerokuInference, Response] =
-    app @@ badActorMiddleware @@ redirectQueryParams @@ Middleware.requestLogging()
+    app @@ badActorMiddleware @@ redirectQueryParams @@ Middleware.requestLogging(loggedRequestHeaders = Set(Header.UserAgent))
 
   // todo: i think there is a better way
   val server =
