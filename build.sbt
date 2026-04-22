@@ -1,11 +1,12 @@
 val _ = require(sys.props("java.specification.version").toInt >= 25, s"Java 25+ is required, but found ${sys.props("java.version")}")
 
 val zioHttpMcpDir = file("../zio-http-mcp")
+val zioMavenCentralDir = file("../zio-mavencentral")
 
 lazy val root = {
   val base = (project in file(".")).enablePlugins(LauncherJarPlugin)
-  if (zioHttpMcpDir.exists()) base.dependsOn(RootProject(zioHttpMcpDir))
-  else base
+  val withMcp = if (zioHttpMcpDir.exists()) base.dependsOn(RootProject(zioHttpMcpDir)) else base
+  if (zioMavenCentralDir.exists()) withMcp.dependsOn(RootProject(zioMavenCentralDir)) else withMcp
 }
 
 val zioVersion = "2.1.25"
@@ -48,8 +49,6 @@ libraryDependencies ++= Seq(
 
   "org.slf4j" % "slf4j-simple" % "2.0.17",
 
-  "com.jamesward" %% "zio-mavencentral" % "0.6.1",
-
   "org.jsoup" % "jsoup" % "1.22.2",
 
   "dev.kreuzberg" % "html-to-markdown" % "3.1.0", // wait on 3.2.x for https://github.com/kreuzberg-dev/html-to-markdown/issues/315
@@ -65,6 +64,11 @@ libraryDependencies ++= Seq(
 
 libraryDependencies ++= {
   if (!zioHttpMcpDir.exists()) Seq("com.jamesward" %% "zio-http-mcp" % "0.0.6")
+  else Seq.empty
+}
+
+libraryDependencies ++= {
+  if (!zioMavenCentralDir.exists()) Seq("com.jamesward" %% "zio-mavencentral" % "0.6.2")
   else Seq.empty
 }
 

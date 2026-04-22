@@ -43,9 +43,16 @@ object AppSpec extends ZIOSpecDefault:
           artifactIdRedir.status.isRedirection,
           artifactIdRedir.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward/travis-central-test")),
           indexPath.status.isSuccess,
+          indexPath.header(Header.CacheControl).exists(_.renderedValue.contains("immutable")),
+          indexPath.header(Header.CacheControl).exists(_.renderedValue.contains("max-age=31536000")),
           filePath.status.isSuccess,
+          filePath.header(Header.CacheControl).exists(_.renderedValue.contains("immutable")),
           notFoundFilePath.status == Status.NotFound,
           notFoundGroupId.status == Status.NotFound,
+          // /latest must not get immutable caching (it redirects to a changing version)
+          latest.header(Header.CacheControl).forall(!_.renderedValue.contains("immutable")),
+          // top-level and groupId pages don't get immutable caching
+          groupIdResp.header(Header.CacheControl).forall(!_.renderedValue.contains("immutable")),
         )
     , test("version page for javadoc without index.html"):
       val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")

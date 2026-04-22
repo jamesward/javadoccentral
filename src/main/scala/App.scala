@@ -600,8 +600,32 @@ object App extends ZIOAppDefault:
         case (None, response) => ZIO.succeed(response)
     )
 
+  // Javadoc content at /{groupId}/{artifactId}/{version}/... with a concrete version
+  // is immutable — Maven Central artifacts at a released version don't change.
+  // Mark these responses with a long max-age + immutable to eliminate repeat fetches.
+  // Exclude "latest" since it redirects to a changing concrete version.
+  private val immutableCacheControl = Header.CacheControl.Multiple(NonEmptyChunk(
+    Header.CacheControl.Public,
+    Header.CacheControl.MaxAge(365.days.toSeconds.toInt),
+    Header.CacheControl.Immutable,
+  ))
+
+  private val immutableAssetCache = HandlerAspect.intercept: (request, response) =>
+    val segs = request.path.segments.toList
+    val isImmutableAsset = request.method == Method.GET
+      && response.status.isSuccess
+      && segs.length >= 4
+      && segs(2) != "latest"
+      && MavenCentral.Version.unapply(segs(2)).isDefined
+      && MavenCentral.GroupId.unapply(segs(0)).isDefined
+      && MavenCentral.ArtifactId.unapply(segs(1)).isDefined
+    if isImmutableAsset then
+      response.addHeader(immutableCacheControl)
+    else
+      response
+
   val appWithMiddleware: Routes[CrawlerGavLimiter & CrawlerEvictions & BadActor.Store & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Extractor.LatestCache & Extractor.TmpDir & Client & Redis & HerokuInference, Response] =
-    app @@ badActorMiddleware @@ crawlerMiddleware @@ crawlerRateLimitMiddleware @@ redirectQueryParams @@ Middleware.requestLogging(loggedRequestHeaders = Set(Header.UserAgent))
+    app @@ badActorMiddleware @@ crawlerMiddleware @@ crawlerRateLimitMiddleware @@ redirectQueryParams @@ immutableAssetCache @@ Middleware.requestLogging(loggedRequestHeaders = Set(Header.UserAgent))
 
   // todo: i think there is a better way
   val server =
