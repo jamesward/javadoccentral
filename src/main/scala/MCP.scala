@@ -38,67 +38,80 @@ object MCP:
   given throwableError: McpError[Throwable] with
     def message(e: Throwable): String = e.getMessage
 
+  private def logMcpErrors[R, E, A](toolName: String)(effect: ZIO[R, E, A]): ZIO[R, E, A] =
+    effect
+      .tapError(e => ZIO.logWarning(s"MCP tool error: tool=$toolName error=$e"))
+      .tapDefect(c => ZIO.logError(s"MCP tool defect: tool=$toolName cause=${c.prettyPrint}"))
+
   val getLatestTool = McpTool("get_latest_version")
     .description("Gets the latest version of a given artifact")
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: GroupArtifact) =>
-      ZIO.scoped:
-        Extractor.latest(input)
+      logMcpErrors("get_latest_version"):
+        ZIO.scoped:
+          Extractor.latest(input)
 
   val getIndexTool = McpTool("get_javadoc_index")
     .description("Gets the index from the javadocs for a given Maven Central library artifact - often the index provides helpful reference documentation")
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: GroupArtifactVersion) =>
-      ZIO.scoped:
-        defer:
-          App.indexJavadocContents(input).run
-          Extractor.index(input).run
+      logMcpErrors("get_javadoc_index"):
+        ZIO.scoped:
+          defer:
+            App.indexJavadocContents(input).run
+            Extractor.index(input).run
 
   val getClassesTool = McpTool("get_javadoc_content_list")
     .description("Gets a list of the contents of a javadoc jar")
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: GroupArtifactVersion) =>
-      ZIO.scoped:
-        defer:
-          App.indexJavadocContents(input).run
-          Extractor.javadocContents(input).run
+      logMcpErrors("get_javadoc_content_list"):
+        ZIO.scoped:
+          defer:
+            App.indexJavadocContents(input).run
+            Extractor.javadocContents(input).run
 
   val getSymbolContentsTool = McpTool("get_javadoc_symbol_contents")
     .description("Gets the contents of a javadoc symbol. Get the symbol link from the get_javadoc_content_list tool.")
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: JavadocSymbol) =>
       val groupArtifactVersion = GroupArtifactVersion(input.groupId, input.artifactId, input.version)
-      ZIO.scoped:
-        Extractor.javadocSymbolContents(groupArtifactVersion, input.link)
+      logMcpErrors("get_javadoc_symbol_contents"):
+        ZIO.scoped:
+          Extractor.javadocSymbolContents(groupArtifactVersion, input.link)
 
   val listSourceTool = McpTool("list_source_contents")
     .description("Gets a list of the contents of a source jar")
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: GroupArtifactVersion) =>
-      ZIO.scoped:
-        Extractor.sourceContents(input)
+      logMcpErrors("list_source_contents"):
+        ZIO.scoped:
+          Extractor.sourceContents(input)
 
   val getSourceTool = McpTool("get_source_contents")
     .description("Gets the contents of a source file. Get the list of files from the list_source_contents tool.")
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: JavadocSymbol) =>
       val groupArtifactVersion = GroupArtifactVersion(input.groupId, input.artifactId, input.version)
-      ZIO.scoped:
-        Extractor.sourceFileContents(groupArtifactVersion, input.link)
+      logMcpErrors("get_source_contents"):
+        ZIO.scoped:
+          Extractor.sourceFileContents(groupArtifactVersion, input.link)
 
   val searchArtifactsTool = McpTool("search_artifacts")
     .description("Searches indexed Maven Central library artifacts by partial group id or artifact id (case insensitive)")
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: Symbol) =>
-      SymbolSearch.searchGroupArtifacts(input.query)
+      logMcpErrors("search_artifacts"):
+        SymbolSearch.searchGroupArtifacts(input.query)
 
   val symbolToArtifactTool = McpTool("symbol_to_artifact")
     .description("Gets the group and artifact for a given symbol, class, or package. Symbol search is case sensitive.")
     .annotations(readOnly = True, destructive = False, idempotent = False, openWorld = True)
     .handle: (input: Symbol) =>
-      ZIO.scoped:
-        // todo: rate limit
-        SymbolSearch.search(input.query)
+      logMcpErrors("symbol_to_artifact"):
+        ZIO.scoped:
+          // todo: rate limit
+          SymbolSearch.search(input.query)
 
   val mcpServer = McpServer("javadocs.dev", "0.0.2")
     .tool(getLatestTool)
