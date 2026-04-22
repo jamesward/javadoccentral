@@ -110,6 +110,26 @@ object AppSpec extends ZIOSpecDefault:
           duration.toSeconds >= 30,
           !gibberish.isEmpty,
         )
+    , test("crawler rate limit: one GAV per crawler, other GAVs get 429"):
+      val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
+      val bot = Header.Custom("User-Agent", "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)")
+      val gav1 = Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "index.html"
+      val gav1File = Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "org" / "webjars" / "package-summary.html"
+      val gav2 = Path.root / "org.webjars" / "jquery" / "3.7.1" / "index.html"
+      defer:
+        val firstGav = App.appWithMiddleware.runZIO(Request.get(URL(gav1)).addHeader(forwardedForHeader).addHeader(bot)).run
+        val sameGavOtherFile = App.appWithMiddleware.runZIO(Request.get(URL(gav1File)).addHeader(forwardedForHeader).addHeader(bot)).run
+        val otherGav = App.appWithMiddleware.runZIO(Request.get(URL(gav2)).addHeader(forwardedForHeader).addHeader(bot)).run
+        // non-crawler bypasses the limiter entirely
+        val nonCrawlerSameGav = App.appWithMiddleware.runZIO(Request.get(URL(gav2)).addHeader(forwardedForHeader)).run
+
+        assertTrue(
+          firstGav.status == Status.Ok,
+          sameGavOtherFile.status == Status.Ok,
+          otherGav.status == Status.TooManyRequests,
+          otherGav.header(Header.RetryAfter).isDefined,
+          nonCrawlerSameGav.status != Status.TooManyRequests,
+        )
 
   ).provide(
     App.blockerLayer,
@@ -126,4 +146,5 @@ object AppSpec extends ZIOSpecDefault:
     SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
     BadActor.live,
     App.crawlerEvictionsLayer,
+      App.crawlerGavLimiterLayer,
   ) @@ TestAspect.withLiveRandom @@ TestAspect.withLiveSystem @@ TestAspect.sequential

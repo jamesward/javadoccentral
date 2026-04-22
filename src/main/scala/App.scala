@@ -502,10 +502,42 @@ object App extends ZIOAppDefault:
     "baiduspider",
   )
 
-  private def isCrawler(request: Request): Boolean =
-    request.header(Header.UserAgent).exists: ua =>
+  private def matchedCrawler(request: Request): Option[String] =
+    request.header(Header.UserAgent).flatMap: ua =>
       val lower = ua.renderedValue.toLowerCase
-      knownCrawlers.exists(lower.contains)
+      knownCrawlers.find(lower.contains)
+
+  private def isCrawler(request: Request): Boolean =
+    matchedCrawler(request).isDefined
+
+  // Per-crawler GAV limiter: each crawler UA may have at most one active GAV.
+  // Requests for the active GAV (or non-GAV paths) pass; other GAVs get 429.
+  // This prevents crawlers from loading many javadoc jars concurrently.
+  case class CrawlerGavLimiter(active: ConcurrentMap[String, MavenCentral.GroupArtifactVersion])
+
+  val crawlerGavLimiterLayer: ZLayer[Any, Nothing, CrawlerGavLimiter] =
+    ZLayer.fromZIO:
+      ConcurrentMap.empty[String, MavenCentral.GroupArtifactVersion].map(CrawlerGavLimiter(_))
+
+  private val crawlerRateLimitMiddleware: HandlerAspect[CrawlerGavLimiter, Unit] =
+    HandlerAspect.interceptIncomingHandler:
+      Handler.fromFunctionZIO[Request]: request =>
+        matchedCrawler(request) match
+          case None => ZIO.succeed(request -> ())
+          case Some(crawler) =>
+            gavFromPath(request.path) match
+              case None => ZIO.succeed(request -> ())
+              case Some(gav) =>
+                ZIO.serviceWithZIO[CrawlerGavLimiter]: limiter =>
+                  limiter.active.putIfAbsent(crawler, gav).flatMap:
+                    case None => ZIO.succeed(request -> ())
+                    case Some(existing) if existing == gav => ZIO.succeed(request -> ())
+                    case Some(_) =>
+                      ZIO.fail(
+                        Response
+                          .status(Status.TooManyRequests)
+                          .addHeader(Header.RetryAfter.ByDuration(1.minute))
+                      )
 
   private def gavFromPath(path: Path): Option[MavenCentral.GroupArtifactVersion] =
     val segments = path.segments.toList
@@ -522,7 +554,12 @@ object App extends ZIOAppDefault:
       dir.listFiles.nn.foreach(deleteDir)
     dir.delete()
 
-  private val crawlerEvictDelay = 10.minutes
+  // how long to keep a crawler-requested GAV on disk after its last request.
+  // The rate limiter already bounds to 1 active GAV per crawler, so the total
+  // concurrent GAVs on disk is small (~1 per distinct crawler UA). A generous
+  // delay here reduces the chance that a paused crawler's return request
+  // triggers a re-download of a GAV we just evicted.
+  private val crawlerEvictDelay = 30.minutes
 
   case class CrawlerEvictions(pending: ConcurrentMap[MavenCentral.GroupArtifactVersion, Fiber[Nothing, Unit]])
 
@@ -530,16 +567,21 @@ object App extends ZIOAppDefault:
     ZLayer.fromZIO:
       ConcurrentMap.empty[MavenCentral.GroupArtifactVersion, Fiber[Nothing, Unit]].map(CrawlerEvictions(_))
 
-  private def evictCrawlerCache(gav: MavenCentral.GroupArtifactVersion): ZIO[CrawlerEvictions & Extractor.JavadocCache & Extractor.TmpDir, Nothing, Unit] =
+  private def evictCrawlerCache(gav: MavenCentral.GroupArtifactVersion): ZIO[CrawlerEvictions & CrawlerGavLimiter & Extractor.JavadocCache & Extractor.TmpDir, Nothing, Unit] =
     defer:
       val tmpDir = ZIO.serviceWith[Extractor.TmpDir](_.dir).run
       val cache = ZIO.serviceWith[Extractor.JavadocCache](_.cache).run
       cache.invalidate(gav).run
       ZIO.attempt(deleteDir(java.io.File(tmpDir, gav.toString))).ignoreLogged.run
       ZIO.serviceWithZIO[CrawlerEvictions](_.pending.remove(gav)).run
+      // release any crawler slots holding this GAV so they can move to the next one
+      ZIO.serviceWithZIO[CrawlerGavLimiter]: limiter =>
+        limiter.active.toChunk.flatMap: entries =>
+          ZIO.foreachDiscard(entries.collect { case (c, g) if g == gav => c })(limiter.active.remove(_))
+      .run
       ZIO.logInfo(s"Evicted crawler cache: $gav").run
 
-  private def scheduleCrawlerEviction(gav: MavenCentral.GroupArtifactVersion): ZIO[CrawlerEvictions & Extractor.JavadocCache & Extractor.TmpDir, Nothing, Unit] =
+  private def scheduleCrawlerEviction(gav: MavenCentral.GroupArtifactVersion): ZIO[CrawlerEvictions & CrawlerGavLimiter & Extractor.JavadocCache & Extractor.TmpDir, Nothing, Unit] =
     defer:
       val ce = ZIO.service[CrawlerEvictions].run
       val maybeExisting = ce.pending.get(gav).run
@@ -547,7 +589,7 @@ object App extends ZIOAppDefault:
       val fiber = evictCrawlerCache(gav).delay(crawlerEvictDelay).forkDaemon.run
       ce.pending.put(gav, fiber).unit.run
 
-  private val crawlerMiddleware: HandlerAspect[CrawlerEvictions & Extractor.JavadocCache & Extractor.TmpDir, Unit] =
+  private val crawlerMiddleware: HandlerAspect[CrawlerGavLimiter & CrawlerEvictions & Extractor.JavadocCache & Extractor.TmpDir, Unit] =
     HandlerAspect.interceptHandlerStateful(
       Handler.fromFunction[Request]: request =>
         val maybeGav = if isCrawler(request) then gavFromPath(request.path) else None
@@ -558,8 +600,8 @@ object App extends ZIOAppDefault:
         case (None, response) => ZIO.succeed(response)
     )
 
-  val appWithMiddleware: Routes[CrawlerEvictions & BadActor.Store & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Extractor.LatestCache & Extractor.TmpDir & Client & Redis & HerokuInference, Response] =
-    app @@ badActorMiddleware @@ crawlerMiddleware @@ redirectQueryParams @@ Middleware.requestLogging(loggedRequestHeaders = Set(Header.UserAgent))
+  val appWithMiddleware: Routes[CrawlerGavLimiter & CrawlerEvictions & BadActor.Store & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Extractor.LatestCache & Extractor.TmpDir & Client & Redis & HerokuInference, Response] =
+    app @@ badActorMiddleware @@ crawlerMiddleware @@ crawlerRateLimitMiddleware @@ redirectQueryParams @@ Middleware.requestLogging(loggedRequestHeaders = Set(Header.UserAgent))
 
   // todo: i think there is a better way
   val server =
@@ -701,4 +743,5 @@ object App extends ZIOAppDefault:
       SymbolSearch.herokuInferenceLayer,
       BadActor.live,
       crawlerEvictionsLayer,
+      crawlerGavLimiterLayer,
     )

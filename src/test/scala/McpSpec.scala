@@ -206,4 +206,5 @@ object McpSpec extends ZIOSpecDefault:
       SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
       BadActor.live,
       App.crawlerEvictionsLayer,
+      App.crawlerGavLimiterLayer,
     ) @@ withLiveClock @@ timeout(3.minutes) @@ sequential

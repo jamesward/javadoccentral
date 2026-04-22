@@ -22,4 +22,5 @@ object AppTest extends ZIOAppDefault:
       SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
       BadActor.live,
       App.crawlerEvictionsLayer,
+      App.crawlerGavLimiterLayer,
     )
