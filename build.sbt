@@ -48,7 +48,7 @@ libraryDependencies ++= Seq(
 
   "org.slf4j" % "slf4j-simple" % "2.0.17",
 
-  "com.jamesward" %% "zio-mavencentral" % "0.5.10",
+  "com.jamesward" %% "zio-mavencentral" % "0.6.1",
 
   "org.jsoup" % "jsoup" % "1.22.2",
 

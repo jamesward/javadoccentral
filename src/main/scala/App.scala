@@ -148,7 +148,7 @@ object App extends ZIOAppDefault:
               case _: Extractor.JavadocFileNotFound =>
                 defer:
                   val javadocDir = ZIO.serviceWithZIO[Extractor.JavadocCache](_.cache.get(groupArtifactVersion)).run
-                  val files = Extractor.fileList(javadocDir.toPath).toSeq.filter(_.endsWith(".html")).sorted
+                  val files = Extractor.fileList(javadocDir.toPath).map(_.toSeq.filter(_.endsWith(".html")).sorted).run
                   val versions = ZIO.scoped(MavenCentral.searchVersions(groupId, artifactId)).map(_.value).orElseSucceed(Seq.empty).run
                   Response.html(UI.page("javadocs.dev", UI.javadocFileList(groupId, artifactId, version, versions, files)))
       .catchAll:
@@ -634,9 +634,23 @@ object App extends ZIOAppDefault:
 
             redis
 
+  private def dirSize(dir: java.io.File): Long =
+    if !dir.exists() then 0L
+    else if dir.isFile then dir.length()
+    else Option(dir.listFiles).map(_.map(dirSize).sum).getOrElse(0L)
+
+  private val logCacheStats: ZIO[Extractor.JavadocCache & Extractor.SourcesCache & Extractor.TmpDir & CrawlerEvictions, Nothing, Unit] =
+    defer:
+      val javadocCacheSize = ZIO.serviceWithZIO[Extractor.JavadocCache](_.cache.size).run
+      val sourcesCacheSize = ZIO.serviceWithZIO[Extractor.SourcesCache](_.cache.size).run
+      val pendingEvictions = ZIO.serviceWithZIO[CrawlerEvictions](_.pending.toChunk).run.size
+      val tmpDir = ZIO.service[Extractor.TmpDir].run.dir
+      val diskBytes = ZIO.attemptBlockingIO(dirSize(tmpDir)).orDie.run
+      ZIO.logInfo(s"cache stats: javadoc=$javadocCacheSize sources=$sourcesCacheSize pending_evictions=$pendingEvictions disk=${diskBytes / 1024 / 1024}MB").run
+
   def run =
     // todo: log filtering so they don't show up in tests / runtime config
-    Server.serve(appWithMiddleware).provide(
+    (logCacheStats.repeat(Schedule.spaced(1.minute)).forkDaemon *> Server.serve(appWithMiddleware)).provide(
       server,
       Client.default,
       Scope.default,
