@@ -648,10 +648,22 @@ object App extends ZIOAppDefault:
       val diskBytes = ZIO.attemptBlockingIO(dirSize(tmpDir)).orDie.run
       ZIO.logInfo(s"cache stats: javadoc=$javadocCacheSize sources=$sourcesCacheSize pending_evictions=$pendingEvictions disk=${diskBytes / 1024 / 1024}MB").run
 
-  // cap the blocking thread pool to prevent native thread exhaustion under load
-  // default is unbounded; each thread reserves 512KB stack (-Xss), so 32 threads = ~16MB
-  private val boundedBlockingExecutor: ZLayer[Any, Nothing, Unit] =
-    Runtime.setBlockingExecutor(Executor.fromJavaExecutor(java.util.concurrent.Executors.newFixedThreadPool(32).nn))
+  // cap the blocking thread pool to prevent native thread exhaustion under load.
+  // default ZIO blocking executor is unbounded; each thread reserves 512KB stack,
+  // so an unbounded pool can hit pthread_create EAGAIN under burst load on a 512MB dyno.
+  // must be applied via `bootstrap` so the app-level Runtime (including zio-http
+  // request fibers) inherits the FiberRef — applying via `.provide` on the main
+  // effect is too late for fibers forked by the server.
+  private val boundedBlockingPool =
+    val counter = java.util.concurrent.atomic.AtomicInteger(0)
+    val factory: java.util.concurrent.ThreadFactory = r =>
+      val t = Thread(r, s"javadocs-blocking-${counter.incrementAndGet()}").nn
+      t.setDaemon(true)
+      t
+    java.util.concurrent.Executors.newFixedThreadPool(32, factory).nn
+
+  override val bootstrap: ZLayer[Any, Nothing, Unit] =
+    Runtime.setBlockingExecutor(Executor.fromJavaExecutor(boundedBlockingPool))
 
   def run =
     // todo: log filtering so they don't show up in tests / runtime config
@@ -671,5 +683,4 @@ object App extends ZIOAppDefault:
       SymbolSearch.herokuInferenceLayer,
       BadActor.live,
       crawlerEvictionsLayer,
-      boundedBlockingExecutor,
     )
