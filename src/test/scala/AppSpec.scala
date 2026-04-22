@@ -154,4 +154,4 @@ object AppSpec extends ZIOSpecDefault:
     BadActor.live,
     App.crawlerEvictionsLayer,
       App.crawlerGavLimiterLayer,
-  ) @@ TestAspect.withLiveRandom @@ TestAspect.withLiveSystem @@ TestAspect.sequential
+  ) @@ TestAspect.withLiveClock @@ TestAspect.withLiveRandom @@ TestAspect.withLiveSystem @@ TestAspect.sequential
