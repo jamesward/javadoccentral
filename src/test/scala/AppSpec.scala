@@ -45,6 +45,8 @@ object AppSpec extends ZIOSpecDefault:
           indexPath.status.isSuccess,
           indexPath.header(Header.CacheControl).exists(_.renderedValue.contains("immutable")),
           indexPath.header(Header.CacheControl).exists(_.renderedValue.contains("max-age=31536000")),
+          indexPath.header(Header.ETag).contains(Header.ETag.Weak("/org.webjars/webjars-locator-core/0.52/index.html")),
+          indexPath.header(Header.LastModified).map(_.value.toInstant).contains(java.time.Instant.EPOCH),
           filePath.status.isSuccess,
           filePath.header(Header.CacheControl).exists(_.renderedValue.contains("immutable")),
           notFoundFilePath.status == Status.NotFound,
@@ -53,6 +55,28 @@ object AppSpec extends ZIOSpecDefault:
           latest.header(Header.CacheControl).forall(!_.renderedValue.contains("immutable")),
           // top-level and groupId pages don't get immutable caching
           groupIdResp.header(Header.CacheControl).forall(!_.renderedValue.contains("immutable")),
+        )
+    , test("304 Not Modified for immutable assets with If-None-Match or If-Modified-Since"):
+      val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
+      // Use a GAV that doesn't exist on Maven Central — the whole point is to prove
+      // we never try to download it, returning 304 before any route/download runs.
+      val neverDownloadedPath = Path.root / "com.example.nonexistent" / "no-such-artifact" / "99.99.99" / "index.html"
+      defer:
+        val withIfNoneMatch = App.appWithMiddleware.runZIO(
+          Request.get(URL(neverDownloadedPath))
+            .addHeader(forwardedForHeader)
+            .addHeader(Header.IfNoneMatch.Any)
+        ).run
+        val withIfModifiedSince = App.appWithMiddleware.runZIO(
+          Request.get(URL(neverDownloadedPath))
+            .addHeader(forwardedForHeader)
+            .addHeader(Header.IfModifiedSince(java.time.ZonedDateTime.ofInstant(java.time.Instant.EPOCH, java.time.ZoneOffset.UTC)))
+        ).run
+        assertTrue(
+          withIfNoneMatch.status == Status.NotModified,
+          withIfNoneMatch.header(Header.ETag).isDefined,
+          withIfNoneMatch.header(Header.LastModified).map(_.value.toInstant).contains(java.time.Instant.EPOCH),
+          withIfModifiedSince.status == Status.NotModified,
         )
     , test("version page for javadoc without index.html"):
       val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")

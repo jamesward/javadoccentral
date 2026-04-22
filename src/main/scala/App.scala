@@ -610,22 +610,62 @@ object App extends ZIOAppDefault:
     Header.CacheControl.Immutable,
   ))
 
-  private val immutableAssetCache = HandlerAspect.intercept: (request, response) =>
+  // Pin Last-Modified to epoch so that values stay stable across dyno restarts
+  // (extracted files on disk get new mtimes on each re-extract, which would
+  // otherwise invalidate client caches unnecessarily).
+  private val epochLastModified = Header.LastModified(
+    java.time.ZonedDateTime.ofInstant(java.time.Instant.EPOCH, java.time.ZoneOffset.UTC)
+  )
+
+  private def isImmutableAssetPath(request: Request): Boolean =
     val segs = request.path.segments.toList
-    val isImmutableAsset = request.method == Method.GET
-      && response.status.isSuccess
+    request.method == Method.GET
       && segs.length >= 4
       && segs(2) != "latest"
       && MavenCentral.Version.unapply(segs(2)).isDefined
       && MavenCentral.GroupId.unapply(segs(0)).isDefined
       && MavenCentral.ArtifactId.unapply(segs(1)).isDefined
-    if isImmutableAsset then
-      response.addHeader(immutableCacheControl)
-    else
-      response
+
+  private def stableEtag(request: Request): Header.ETag =
+    Header.ETag.Weak(request.path.toString)
+
+  // Outgoing: on successful responses for immutable GAV assets, strip any
+  // disk-derived Last-Modified/ETag (unstable across restarts), add stable
+  // path-based ETag + epoch Last-Modified, and emit immutable cache-control.
+  private val immutableAssetCacheHeaders: HandlerAspect[Any, Unit] =
+    HandlerAspect.intercept: (request, response) =>
+      if isImmutableAssetPath(request) && response.status.isSuccess then
+        response
+          .removeHeader(Header.ETag)
+          .removeHeader(Header.LastModified)
+          .addHeader(stableEtag(request))
+          .addHeader(epochLastModified)
+          .addHeader(immutableCacheControl)
+      else
+        response
+
+  // Incoming: if the client sent If-None-Match or If-Modified-Since for an
+  // immutable GAV path, short-circuit with 304 Not Modified BEFORE routing.
+  // This skips the javadoc jar download entirely for cached-client requests.
+  private val immutableAssetNotModified: HandlerAspect[Any, Unit] =
+    HandlerAspect.interceptIncomingHandler:
+      Handler.fromFunctionZIO[Request]: request =>
+        val hasValidator =
+          request.header(Header.IfNoneMatch).isDefined
+            || request.header(Header.IfModifiedSince).isDefined
+        if isImmutableAssetPath(request) && hasValidator then
+          ZIO.fail(
+            Response
+              .status(Status.NotModified)
+              .addHeader(stableEtag(request))
+              .addHeader(epochLastModified)
+              .addHeader(immutableCacheControl)
+          )
+        else
+          ZIO.succeed((request, ()))
 
   val appWithMiddleware: Routes[CrawlerGavLimiter & CrawlerEvictions & BadActor.Store & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.FetchBlocker & Extractor.FetchSourcesBlocker & Extractor.LatestCache & Extractor.TmpDir & Client & Redis & HerokuInference, Response] =
-    app @@ badActorMiddleware @@ crawlerMiddleware @@ crawlerRateLimitMiddleware @@ redirectQueryParams @@ immutableAssetCache @@ Middleware.requestLogging(loggedRequestHeaders = Set(Header.UserAgent))
+    app @@ badActorMiddleware @@ crawlerMiddleware @@ crawlerRateLimitMiddleware @@ redirectQueryParams @@ immutableAssetNotModified @@ immutableAssetCacheHeaders @@ Middleware.requestLogging(loggedRequestHeaders = Set(Header.UserAgent))
 
   // todo: i think there is a better way
   val server =
