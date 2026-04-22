@@ -708,22 +708,16 @@ object App extends ZIOAppDefault:
       val diskBytes = ZIO.attemptBlockingIO(dirSize(tmpDir)).orDie.run
       ZIO.logInfo(s"cache stats: javadoc=$javadocCacheSize sources=$sourcesCacheSize pending_evictions=$pendingEvictions disk=${diskBytes / 1024 / 1024}MB $jvmMemStats").run
 
-  // cap the blocking thread pool to prevent native thread exhaustion under load.
-  // default ZIO blocking executor is unbounded; each thread reserves 512KB stack,
-  // so an unbounded pool can hit pthread_create EAGAIN under burst load on a 512MB dyno.
-  // must be applied via `bootstrap` so the app-level Runtime (including zio-http
-  // request fibers) inherits the FiberRef — applying via `.provide` on the main
-  // effect is too late for fibers forked by the server.
-  private val boundedBlockingPool =
-    val counter = java.util.concurrent.atomic.AtomicInteger(0)
-    val factory: java.util.concurrent.ThreadFactory = r =>
-      val t = Thread(r, s"javadocs-blocking-${counter.incrementAndGet()}").nn
-      t.setDaemon(true)
-      t
-    java.util.concurrent.Executors.newFixedThreadPool(32, factory).nn
-
+  // Use virtual threads for blocking operations. On JDK 21+, virtual threads
+  // are lightweight (tiny stacks, mounted on a small carrier pool) and unmount
+  // cleanly during blocking I/O, so we avoid the pthread_create EAGAIN risk of
+  // the default ZIO cached thread pool without artificially capping concurrency.
+  // Must be applied via `bootstrap` so fibers forked by the server inherit the
+  // FiberRef.
   override val bootstrap: ZLayer[Any, Nothing, Unit] =
-    Runtime.setBlockingExecutor(Executor.fromJavaExecutor(boundedBlockingPool))
+    Runtime.setBlockingExecutor(
+      Executor.fromJavaExecutor(java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor().nn)
+    )
 
   def run =
     // todo: log filtering so they don't show up in tests / runtime config
