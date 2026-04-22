@@ -635,9 +635,27 @@ object App extends ZIOAppDefault:
             redis
 
   private def dirSize(dir: java.io.File): Long =
-    if !dir.exists() then 0L
-    else if dir.isFile then dir.length()
-    else Option(dir.listFiles).map(_.map(dirSize).sum).getOrElse(0L)
+    val path = dir.toPath.nn
+    if !Files.exists(path) then 0L
+    else
+      import java.nio.file.{Files as NioFiles, LinkOption}
+      import java.nio.file.attribute.BasicFileAttributes
+      var total = 0L
+      val stream = NioFiles.walk(path).nn
+      try
+        stream.iterator.nn.forEachRemaining: p =>
+          val attrs = NioFiles.readAttributes(p, classOf[BasicFileAttributes], LinkOption.NOFOLLOW_LINKS).nn
+          if attrs.isRegularFile then total += attrs.size()
+      finally stream.close()
+      total
+
+  private def jvmMemStats: String =
+    val mxBean = java.lang.management.ManagementFactory.getMemoryMXBean
+    val heap = mxBean.getHeapMemoryUsage
+    val nonHeap = mxBean.getNonHeapMemoryUsage
+    val threadCount = java.lang.management.ManagementFactory.getThreadMXBean.getThreadCount
+    val mb = (b: Long) => b / 1024 / 1024
+    s"heap_used=${mb(heap.getUsed)}MB heap_committed=${mb(heap.getCommitted)}MB nonheap_used=${mb(nonHeap.getUsed)}MB nonheap_committed=${mb(nonHeap.getCommitted)}MB threads=$threadCount"
 
   private val logCacheStats: ZIO[Extractor.JavadocCache & Extractor.SourcesCache & Extractor.TmpDir & CrawlerEvictions, Nothing, Unit] =
     defer:
@@ -646,7 +664,7 @@ object App extends ZIOAppDefault:
       val pendingEvictions = ZIO.serviceWithZIO[CrawlerEvictions](_.pending.toChunk).run.size
       val tmpDir = ZIO.service[Extractor.TmpDir].run.dir
       val diskBytes = ZIO.attemptBlockingIO(dirSize(tmpDir)).orDie.run
-      ZIO.logInfo(s"cache stats: javadoc=$javadocCacheSize sources=$sourcesCacheSize pending_evictions=$pendingEvictions disk=${diskBytes / 1024 / 1024}MB").run
+      ZIO.logInfo(s"cache stats: javadoc=$javadocCacheSize sources=$sourcesCacheSize pending_evictions=$pendingEvictions disk=${diskBytes / 1024 / 1024}MB $jvmMemStats").run
 
   // cap the blocking thread pool to prevent native thread exhaustion under load.
   // default ZIO blocking executor is unbounded; each thread reserves 512KB stack,

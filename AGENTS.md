@@ -101,3 +101,4 @@ private def scheduleCrawlerEviction(gav: GAV): ZIO[...] =
 - Single dyno (`web.1`) — all traffic hits one instance
 - 30-second request timeout (H12 error)
 - `-XX:+ExitOnOutOfMemoryError` — OOM kills the process immediately
+- When running the `heroku` command you must not specify an app name
