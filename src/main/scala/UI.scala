@@ -199,7 +199,7 @@ object UI:
   def javadocFileList(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, versions: Seq[MavenCentral.Version], files: Seq[String]): Html =
     div(
       needVersion(groupId, artifactId, if versions.isEmpty then Seq(version) else versions),
-      h3("Files"),
+      h3("javadoc does not contain an index.html file, but here are the files it does contain:"),
       ul(
         files.map: file =>
           li(a(href := s"/$groupId/$artifactId/$version/$file", file))
