@@ -235,13 +235,13 @@ object Extractor:
 
 
   def javaDocTextSymbolContents(contents: String): Option[String] =
-    Option(HtmlToMarkdown.convert(contents).content()) // .toScala
+    HtmlToMarkdown.convert(contents).content().toScala
 
   def scalaDocTextSymbolContents(contents: String): Option[String] =
     val document = Jsoup.parse(contents)
     val contentRoot = Option(document.selectFirst("#content > div"))
       .getOrElse(document.body())
-    Option(HtmlToMarkdown.convert(contentRoot.outerHtml()).content()) // .toScala
+    HtmlToMarkdown.convert(contentRoot.outerHtml()).content().toScala
 
   def javadocSymbolContents(groupArtifactVersion: GroupArtifactVersion, path: String):
       ZIO[JavadocCache & Client & FetchBlocker & Scope, NotFoundError | JavadocFileNotFound | JavadocContentError, String] =
