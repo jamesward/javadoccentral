@@ -40,7 +40,6 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-cache"             % "0.2.8",
   "dev.zio" %% "zio-logging"           % "2.5.3",
   "dev.zio" %% "zio-direct"            % "1.0.0-RC7",
-  "dev.zio" %% "zio-direct-streams"    % "1.0.0-RC7",
   "dev.zio" %% "zio-http"              % "3.10.1",
   "dev.zio" %% "zio-redis"             % "1.2.1",
   "dev.zio" %% "zio-schema-protobuf"   % "1.8.3",
@@ -68,7 +67,7 @@ libraryDependencies ++= {
 }
 
 libraryDependencies ++= {
-  if (!zioMavenCentralDir.exists()) Seq("com.jamesward" %% "zio-mavencentral" % "0.6.2")
+  if (!zioMavenCentralDir.exists()) Seq("com.jamesward" %% "zio-mavencentral" % "0.6.4")
   else Seq.empty
 }
 

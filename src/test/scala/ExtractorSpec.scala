@@ -4,7 +4,7 @@ import zio.direct.*
 import zio.http.Client
 import zio.test.*
 import zio.test.Assertion.failsWithA
-import zio.{Exit, Scope, ZLayer}
+import zio.{Exit, Scope, ZIO, ZLayer, durationInt}
 
 object ExtractorSpec extends ZIOSpecDefault:
 
@@ -135,7 +135,34 @@ object ExtractorSpec extends ZIOSpecDefault:
           contents.size == 2,
           contents.contains("com/jamesward/zio_mavencentral/MavenCentral.scala")
         )
-    }
+    },
+    test("parallel downloads: 20 artifacts concurrently") {
+      val gavs = Seq(
+        gav("com.jamesward", "zio-mavencentral_3", "0.0.21"),
+        gav("dev.zio", "zio_3", "2.1.9"),
+        gav("dev.zio", "zio_2.13", "2.1.9"),
+        gav("io.ktor", "ktor-io-jvm", "3.2.3"),
+        gav("io.ktor", "ktor-http-jvm", "3.2.3"),
+        gav("io.ktor", "ktor-utils-jvm", "3.2.3"),
+        gav("io.ktor", "ktor-serialization-jvm", "3.2.3"),
+        gav("io.ktor", "ktor-client-core-jvm", "3.2.3"),
+        gav("io.ktor", "ktor-events-jvm", "3.2.3"),
+        gav("io.ktor", "ktor-websockets-jvm", "3.2.3"),
+        gav("org.springframework.ai", "spring-ai-mcp", "1.0.1"),
+        gav("com.vaadin", "vaadin-confirm-dialog-flow", "24.9.0"),
+        gav("org.webjars", "webjars-locator-lite", "1.1.3"),
+        gav("org.webjars", "webjars-locator-core", "0.52"),
+        gav("org.jsoup", "jsoup", "1.22.2"),
+        gav("org.slf4j", "slf4j-simple", "2.0.17"),
+        gav("org.slf4j", "slf4j-api", "2.0.17"),
+        gav("dev.zio", "zio-schema_3", "1.8.3"),
+        gav("dev.zio", "zio-streams_3", "2.1.25"),
+        gav("dev.zio", "zio-test_3", "2.1.25"),
+      )
+      defer:
+        val dirs = ZIO.foreachPar(gavs)(Extractor.javadoc).run
+        assertTrue(dirs.size == 20, dirs.forall(_.exists()))
+    } @@ TestAspect.timeout(2.minutes) @@ TestAspect.withLiveClock
   ).provide(
     Scope.default,
     Client.default,

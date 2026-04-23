@@ -93,6 +93,8 @@ private def scheduleCrawlerEviction(gav: GAV): ZIO[...] =
 - `MockInference.layer` as fallback when Heroku inference is unavailable
 - `TestAspect.withLiveClock`, `TestAspect.withLiveRandom`, `TestAspect.withLiveSystem` as needed
 - `TestAspect.sequential` for tests with shared state
+- When tests are run, store the results in a file so you can reference the results without re-running the tests
+- If something is broken and doesn't make sense, your first task is reproduce the issue in a test
 
 ### Heroku Constraints
 

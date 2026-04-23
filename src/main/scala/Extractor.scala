@@ -61,7 +61,7 @@ object Extractor:
             existingPromise.await.run
           case None =>
             ZIO.logInfo(s"Downloading javadoc: $javadocUrl").run
-            val duration = MavenCentral.downloadAndExtractZipStreaming(javadocUrl, javadocDir)
+            val duration = MavenCentral.downloadAndExtractZip(javadocUrl, javadocDir)
               .ensuring(promise.succeed(()) *> blocker.remove(groupArtifactVersion))
               .orDie.timed.map(_._1).run
             ZIO.logInfo(s"Downloaded javadoc: $groupArtifactVersion duration=${duration.toMillis}ms").run
@@ -92,7 +92,7 @@ object Extractor:
           case None =>
             val sourcesUrl = sourcesUriOrDie.run
             ZIO.logInfo(s"Downloading sources: $sourcesUrl").run
-            val duration = MavenCentral.downloadAndExtractZipStreaming(sourcesUrl, sourcesDir)
+            val duration = MavenCentral.downloadAndExtractZip(sourcesUrl, sourcesDir)
               .ensuring(promise.succeed(()) *> blocker.remove(groupArtifactVersion))
               .orDie.timed.map(_._1).run
             ZIO.logInfo(s"Downloaded sources: $groupArtifactVersion duration=${duration.toMillis}ms").run
