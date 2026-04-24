@@ -40,7 +40,6 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-cache"             % "0.2.8",
   "dev.zio" %% "zio-logging"           % "2.5.3",
   "dev.zio" %% "zio-direct"            % "1.0.0-RC7",
-  "dev.zio" %% "zio-http"              % "3.10.1",
   "dev.zio" %% "zio-redis"             % "1.2.1",
   "dev.zio" %% "zio-schema-protobuf"   % "1.8.3",
   "dev.zio" %% "zio-schema-json"       % "1.8.3",
@@ -50,7 +49,7 @@ libraryDependencies ++= Seq(
 
   "org.jsoup" % "jsoup" % "1.22.2",
 
-  "dev.kreuzberg" % "html-to-markdown" % "3.3.1",
+  "dev.kreuzberg" % "html-to-markdown" % "3.3.3",
 
   "dev.zio" %% "zio-test"           % zioVersion % Test,
   "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,
@@ -62,12 +61,12 @@ libraryDependencies ++= Seq(
 )
 
 libraryDependencies ++= {
-  if (!zioHttpMcpDir.exists()) Seq("com.jamesward" %% "zio-http-mcp" % "0.0.6")
+  if (!zioHttpMcpDir.exists()) Seq("com.jamesward" %% "zio-http-mcp" % "0.0.7")
   else Seq.empty
 }
 
 libraryDependencies ++= {
-  if (!zioMavenCentralDir.exists()) Seq("com.jamesward" %% "zio-mavencentral" % "0.6.4")
+  if (!zioMavenCentralDir.exists()) Seq("com.jamesward" %% "zio-mavencentral" % "0.6.5")
   else Seq.empty
 }
 
