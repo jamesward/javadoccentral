@@ -1,12 +1,13 @@
 val _ = require(sys.props("java.specification.version").toInt >= 25, s"Java 25+ is required, but found ${sys.props("java.version")}")
 
+val useLocalSubprojects = sys.props.get("local").isDefined
 val zioHttpMcpDir = file("../zio-http-mcp")
 val zioMavenCentralDir = file("../zio-mavencentral")
 
 lazy val root = {
   val base = (project in file(".")).enablePlugins(LauncherJarPlugin)
-  val withMcp = if (zioHttpMcpDir.exists()) base.dependsOn(RootProject(zioHttpMcpDir)) else base
-  if (zioMavenCentralDir.exists()) withMcp.dependsOn(RootProject(zioMavenCentralDir)) else withMcp
+  val withMcp = if (useLocalSubprojects && zioHttpMcpDir.exists()) base.dependsOn(RootProject(zioHttpMcpDir)) else base
+  if (useLocalSubprojects && zioMavenCentralDir.exists()) withMcp.dependsOn(RootProject(zioMavenCentralDir)) else withMcp
 }
 
 val zioVersion = "2.1.25"
@@ -27,10 +28,19 @@ scalacOptions ++= Seq(
   //"-Yexplicit-nulls", // doesn't seem to work anymore
   "-language:strictEquality",
   // "-Xfatal-warnings", // doesn't seem to work anymore
-  "-opt",
-  "-opt-inline:**",
-//  "-Wopt:all",
+  //  "-Wopt:all",
 )
+
+// only in CI & Heroku
+scalacOptions ++= {
+  if (sys.env.contains("CI") || sys.env.contains("STACK")) {
+    streams.value.log.info("enabling optimizations in CI & Heroku builds")
+    Seq("-opt", "-opt-inline:**")
+  }
+  else {
+    Seq.empty
+  }
+}
 
 scalaVersion := "3.8.3"
 
@@ -61,13 +71,13 @@ libraryDependencies ++= Seq(
 )
 
 libraryDependencies ++= {
-  if (!zioHttpMcpDir.exists()) Seq("com.jamesward" %% "zio-http-mcp" % "0.0.7")
-  else Seq.empty
+  if (useLocalSubprojects && zioHttpMcpDir.exists()) Seq.empty
+  else Seq("com.jamesward" %% "zio-http-mcp" % "0.0.7")
 }
 
 libraryDependencies ++= {
-  if (!zioMavenCentralDir.exists()) Seq("com.jamesward" %% "zio-mavencentral" % "0.6.5")
-  else Seq.empty
+  if (useLocalSubprojects && zioMavenCentralDir.exists()) Seq.empty
+  else Seq("com.jamesward" %% "zio-mavencentral" % "0.6.5")
 }
 
 Compile / packageDoc / publishArtifact := false

@@ -27,33 +27,3 @@ You can search for symbols with a query parameter, like:
 ## MCP Server
 
 Point your MCP client to `https://www.javadocs.dev/mcp` (Streamable HTTP)
-
-
-## Dev Info
-
-Run with restart, embedded Redis & optionally mock inference:
-```
-./sbt ~reStartTest
-```
-
-Run with restart, prod config:
-```
-./sbt ~reStart
-```
-
-Run and output GraalVM configs, with GraalVM:
-```
-# uncomment javaOptions in build.sbt
-./sbt run
-```
-
-Build the container:
-```
-pack build --builder=paketobuildpacks/builder-jammy-base \
- javadoccentral
-```
-
-Run the container:
-```
-docker run -p8080:8080 -m 512m javadoccentral
-```
