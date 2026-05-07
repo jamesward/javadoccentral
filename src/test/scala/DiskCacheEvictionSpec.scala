@@ -95,6 +95,7 @@ object DiskCacheEvictionSpec extends ZIOSpecDefault:
         ZLayer.fromZIO(
           ZIO.attempt(Files.createTempDirectory("cap-overflow-test").nn.toFile).orDie.map(Extractor.TmpDir(_))
         ),
+        App.fetchBlockerLayer,
         zio.http.Client.default,
         Scope.default,
       )
@@ -135,6 +136,7 @@ object DiskCacheEvictionSpec extends ZIOSpecDefault:
         ZLayer.fromZIO(
           ZIO.attempt(Files.createTempDirectory("invalidate-test").nn.toFile).orDie.map(Extractor.TmpDir(_))
         ),
+        App.fetchBlockerLayer,
         zio.http.Client.default,
         Scope.default,
       )

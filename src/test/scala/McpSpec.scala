@@ -198,6 +198,7 @@ object McpSpec extends ZIOSpecDefault:
       App.javadocCacheLayer,
       App.sourcesCacheLayer,
       App.tmpDirLayer,
+      App.fetchBlockerLayer,
       EmbeddedRedis.layer,
       Redis.singleNode,
       ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),

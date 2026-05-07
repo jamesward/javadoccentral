@@ -136,6 +136,22 @@ object ExtractorSpec extends ZIOSpecDefault:
           contents.contains("com/jamesward/zio_mavencentral/MavenCentral.scala")
         )
     },
+    test("concurrent javadoc calls for the same GAV do not race on disk") {
+      // Reproduces the production `FileAlreadyExistsException` seen after a
+      // cache eviction: when two fibers run `Extractor.javadoc` for the
+      // same GAV at the same time — e.g., because `ScopedCache` evicted a
+      // `Pending` entry under capacity pressure — both write into the
+      // same `javadocDir` and race inside `Files.copy(..., targetPath)`
+      // (no REPLACE_EXISTING), which throws on files like
+      // `META-INF/MANIFEST.MF`. The fix is to give each invocation its own
+      // unique directory.
+      val g = gav("com.jamesward", "zio-mavencentral_3", "0.0.21")
+      defer:
+        val results = ZIO.foreachPar(1 to 10): _ =>
+          ZIO.scoped(Extractor.javadoc(g).unit).exit
+        .run
+        assertTrue(results.forall(_.isSuccess))
+    } @@ TestAspect.timeout(2.minutes) @@ TestAspect.withLiveClock,
     test("parallel downloads: 20 artifacts concurrently") {
       val gavs = Seq(
         gav("com.jamesward", "zio-mavencentral_3", "0.0.21"),
@@ -169,4 +185,5 @@ object ExtractorSpec extends ZIOSpecDefault:
     App.javadocCacheLayer,
     App.sourcesCacheLayer,
     App.tmpDirLayer,
+    App.fetchBlockerLayer,
   )

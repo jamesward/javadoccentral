@@ -3,11 +3,12 @@ import com.jamesward.zio_mavencentral.MavenCentral.*
 import dev.kreuzberg.htmltomarkdown.HtmlToMarkdown
 import org.jsoup.Jsoup
 import zio.cache.{Cache, ScopedCache, ScopedLookup}
+import zio.concurrent.ConcurrentMap
 import zio.direct.*
 import zio.durationInt
 import zio.http.{Client, URL}
 import zio.prelude.data.Optional.AllValuesAreNullable
-import zio.{Schedule, Scope, ZIO}
+import zio.{Promise, Schedule, Scope, ZIO}
 
 import java.io.File
 import java.nio.file.{Files, Path}
@@ -62,6 +63,30 @@ object Extractor:
     def getDir(gav: GroupArtifactVersion): ZIO[Scope, NotFoundError, File] =
       cache.get(gav)
 
+  /**
+   * Ensures that only one `Extractor.javadoc` (or `Extractor.sources`) call
+   * per GAV is actually downloading + extracting at a time.
+   *
+   * This exists because `zio.cache.ScopedCache`'s `Pending` state — the only
+   * thing that otherwise deduplicates concurrent lookups — can be dropped
+   * from the cache's internal map under capacity pressure (`trackAccess`
+   * evicts LRU entries including `Pending`, and `cleanMapValue` is a no-op
+   * for `Pending`). When that happens, two concurrent `get(gav)` calls both
+   * start their own lookup. If both extract into the same `javadocDir` they
+   * race inside `Files.copy(..., targetPath)` (no `REPLACE_EXISTING`) and
+   * throw `FileAlreadyExistsException` on files like `META-INF/MANIFEST.MF`.
+   *
+   * The `Promise` per in-flight extraction serializes those racing lookups:
+   * the first fiber to `putIfAbsent` owns the extraction; any fiber that
+   * finds an existing `Promise` awaits it instead of starting a second
+   * extraction. The owner always completes the promise and removes the map
+   * entry via `.onExit`, even on failure or interrupt.
+   */
+  case class FetchBlocker(
+    javadoc: ConcurrentMap[GroupArtifactVersion, Promise[NotFoundError, Unit]],
+    sources: ConcurrentMap[GroupArtifactVersion, Promise[NotFoundError, Unit]],
+  )
+
   // Recursively deletes a directory tree. Safe to call on a non-existent path.
   private def deleteDirBlocking(dir: File): Unit =
     if dir.isDirectory then
@@ -93,11 +118,13 @@ object Extractor:
    * directory is already present from a previous run), then registers a
    * finalizer that deletes the directory when the cache entry is evicted.
    *
-   * `ScopedCache` deduplicates concurrent lookups for the same key via its
-   * `Pending` state, so there is no need for an external FetchBlocker here.
+   * Concurrent calls for the same GAV are serialized via [[FetchBlocker]]
+   * so only one actually downloads + extracts; the others `await` the
+   * in-flight extraction. This is a belt-and-braces safeguard against
+   * `ScopedCache`'s `Pending` dedup being dropped under capacity pressure.
    */
   def javadoc(groupArtifactVersion: GroupArtifactVersion):
-      ZIO[Client & TmpDir & Scope, NotFoundError, File] =
+      ZIO[Client & TmpDir & FetchBlocker & Scope, NotFoundError, File] =
     val javadocUriOrDie: ZIO[Client & Scope, NotFoundError, URL] =
       MavenCentral.javadocUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version)
         .retryOnServerError
@@ -108,13 +135,31 @@ object Extractor:
     defer:
       val tmpDir = ZIO.service[TmpDir].run
       val javadocDir = File(tmpDir.dir, groupArtifactVersion.toString)
+      val blocker = ZIO.service[FetchBlocker].run
 
-      if !javadocDir.exists() then
-        val javadocUrl = javadocUriOrDie.run
-        ZIO.logInfo(s"Downloading javadoc: $javadocUrl").run
-        val duration = MavenCentral.downloadAndExtractZip(javadocUrl, javadocDir)
-          .orDie.timed.map(_._1).run
-        ZIO.logInfo(s"Downloaded javadoc: $groupArtifactVersion duration=${duration.toMillis}ms").run
+      // Serialize concurrent lookups for this GAV: the owning fiber extracts,
+      // waiters await its `Promise`. See `FetchBlocker` docs for why this
+      // is required on top of `ScopedCache`'s own `Pending` dedup.
+      val myPromise = Promise.make[NotFoundError, Unit].run
+      val existing = blocker.javadoc.putIfAbsent(groupArtifactVersion, myPromise).run
+      existing match
+        case Some(inFlight) =>
+          ZIO.logInfo(s"Awaiting in-flight javadoc extraction: $groupArtifactVersion").run
+          inFlight.await.run
+        case None =>
+          // We own the extraction. `.onExit` always completes the promise
+          // and removes the map entry — success, failure, or interrupt.
+          val work: ZIO[Client & Scope, NotFoundError, Unit] =
+            defer:
+              if !javadocDir.exists() then
+                val javadocUrl = javadocUriOrDie.run
+                ZIO.logInfo(s"Downloading javadoc: $javadocUrl").run
+                val duration = MavenCentral.downloadAndExtractZip(javadocUrl, javadocDir)
+                  .orDie.timed.map(_._1).run
+                ZIO.logInfo(s"Downloaded javadoc: $groupArtifactVersion duration=${duration.toMillis}ms").run
+          work.onExit: exit =>
+            blocker.javadoc.remove(groupArtifactVersion) *> myPromise.done(exit)
+          .run
 
       // Cache-entry finalizer: when this entry is evicted (capacity, TTL, or
       // explicit invalidate) the scope closes and we delete the extracted dir.
@@ -130,7 +175,7 @@ object Extractor:
     javadocSymbolContents(groupArtifactVersion, "index.html")
 
   def sources(groupArtifactVersion: GroupArtifactVersion):
-      ZIO[Client & TmpDir & Scope, NotFoundError, File] =
+      ZIO[Client & TmpDir & FetchBlocker & Scope, NotFoundError, File] =
     val sourcesUriOrDie: ZIO[Client & Scope, NotFoundError, URL] =
       MavenCentral.sourcesUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version)
         .retryOnServerError
@@ -141,13 +186,27 @@ object Extractor:
     defer:
       val tmpDir = ZIO.service[TmpDir].run
       val sourcesDir = File(tmpDir.dir, s"${groupArtifactVersion.toString}-sources")
+      val blocker = ZIO.service[FetchBlocker].run
 
-      if !sourcesDir.exists() then
-        val sourcesUrl = sourcesUriOrDie.run
-        ZIO.logInfo(s"Downloading sources: $sourcesUrl").run
-        val duration = MavenCentral.downloadAndExtractZip(sourcesUrl, sourcesDir)
-          .orDie.timed.map(_._1).run
-        ZIO.logInfo(s"Downloaded sources: $groupArtifactVersion duration=${duration.toMillis}ms").run
+      // See `Extractor.javadoc` for the rationale behind this coordination.
+      val myPromise = Promise.make[NotFoundError, Unit].run
+      val existing = blocker.sources.putIfAbsent(groupArtifactVersion, myPromise).run
+      existing match
+        case Some(inFlight) =>
+          ZIO.logInfo(s"Awaiting in-flight sources extraction: $groupArtifactVersion").run
+          inFlight.await.run
+        case None =>
+          val work: ZIO[Client & Scope, NotFoundError, Unit] =
+            defer:
+              if !sourcesDir.exists() then
+                val sourcesUrl = sourcesUriOrDie.run
+                ZIO.logInfo(s"Downloading sources: $sourcesUrl").run
+                val duration = MavenCentral.downloadAndExtractZip(sourcesUrl, sourcesDir)
+                  .orDie.timed.map(_._1).run
+                ZIO.logInfo(s"Downloaded sources: $groupArtifactVersion duration=${duration.toMillis}ms").run
+          work.onExit: exit =>
+            blocker.sources.remove(groupArtifactVersion) *> myPromise.done(exit)
+          .run
 
       ZIO.addFinalizer(
         ZIO.logInfo(s"Evicting sources cache entry: $groupArtifactVersion") *>

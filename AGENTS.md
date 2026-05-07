@@ -143,3 +143,26 @@ val cache = ScopedCache.makeWith(capacity, ScopedLookup(Extractor.javadoc)):
 Callers consume `getDir` inside `ZIO.scoped` so their owner reference is
 released after use. `ScopedCache` also runs its own background TTL sweeper
 (once per second) — no custom janitor is needed.
+
+#### `Pending` dedup is not guaranteed — use `FetchBlocker`
+
+`ScopedCache` tries to dedup concurrent lookups via its internal `Pending`
+state, but that is **not pinned in the map**: `trackAccess` treats every
+map entry the same, and if a `Pending` entry becomes the LRU under
+capacity pressure it gets dropped (its `cleanMapValue` case is a no-op).
+A subsequent `get` for the same key will then start a second concurrent
+lookup — breaking the dedup contract.
+
+For the javadoc/sources caches this matters because two concurrent
+lookups that both call `MavenCentral.downloadAndExtractZip` into the
+same `javadocDir` race inside `Files.copy(..., targetPath)` (no
+`REPLACE_EXISTING`), surfacing as
+`FileAlreadyExistsException` on files like `META-INF/MANIFEST.MF`.
+
+The fix is `Extractor.FetchBlocker`: a pair of
+`ConcurrentMap[GAV, Promise[NotFoundError, Unit]]` that sits in front of
+the extraction. First fiber wins `putIfAbsent` and owns the extraction;
+others await its `Promise`. Owner uses `.onExit` to complete the promise
+and remove the map entry on success, failure, or interrupt. This pattern
+is generally useful any time a cached value's construction has side
+effects that can't safely run concurrently for the same key.

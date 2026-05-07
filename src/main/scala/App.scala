@@ -33,19 +33,26 @@ object App extends ZIOAppDefault:
   val javadocCacheTtl: Duration = 2.hours
   val javadocCacheCapacity: Int = 100
 
-  val javadocCacheLayer: ZLayer[Client & Extractor.TmpDir & Scope, Nothing, Extractor.JavadocCache] = ZLayer.fromZIO:
+  val javadocCacheLayer: ZLayer[Client & Extractor.TmpDir & Extractor.FetchBlocker & Scope, Nothing, Extractor.JavadocCache] = ZLayer.fromZIO:
     ScopedCache.makeWith(javadocCacheCapacity, ScopedLookup(Extractor.javadoc)):
       case Exit.Success(_) => javadocCacheTtl
       case Exit.Failure(_) => Duration.Zero
     .map(Extractor.JavadocCache(_))
 
-  val sourcesCacheLayer: ZLayer[Client & Extractor.TmpDir & Scope, Nothing, Extractor.SourcesCache] = ZLayer.fromZIO:
+  val sourcesCacheLayer: ZLayer[Client & Extractor.TmpDir & Extractor.FetchBlocker & Scope, Nothing, Extractor.SourcesCache] = ZLayer.fromZIO:
     ScopedCache.makeWith(javadocCacheCapacity, ScopedLookup(Extractor.sources)):
       case Exit.Success(_) => javadocCacheTtl
       case Exit.Failure(_) => Duration.Zero
     .map(Extractor.SourcesCache(_))
 
   val tmpDirLayer = ZLayer.succeed(Extractor.TmpDir(Files.createTempDirectory("jars").nn.toFile))
+
+  val fetchBlockerLayer: ZLayer[Any, Nothing, Extractor.FetchBlocker] =
+    ZLayer.fromZIO:
+      defer:
+        val javadocMap = ConcurrentMap.empty[MavenCentral.GroupArtifactVersion, Promise[MavenCentral.NotFoundError, Unit]].run
+        val sourcesMap = ConcurrentMap.empty[MavenCentral.GroupArtifactVersion, Promise[MavenCentral.NotFoundError, Unit]].run
+        Extractor.FetchBlocker(javadocMap, sourcesMap)
 
   val symbolSearchGuardLayer: ZLayer[Any, Nothing, SymbolSearch.SymbolSearchGuard] =
     ZLayer.fromZIO:
@@ -146,6 +153,7 @@ object App extends ZIOAppDefault:
       javadocCacheLayer,
       sourcesCacheLayer,
       tmpDirLayer,
+      fetchBlockerLayer,
       redisConfigLayer,
       redisAuthLayer,
       ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),

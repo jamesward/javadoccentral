@@ -264,6 +264,7 @@ object AppSpec extends ZIOSpecDefault:
     App.sourcesCacheLayer,
     App.latestCacheLayer,
     App.tmpDirLayer,
+    App.fetchBlockerLayer,
     Client.default,
     Scope.default,
     EmbeddedRedis.layer,
