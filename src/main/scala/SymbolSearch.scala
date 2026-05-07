@@ -13,6 +13,8 @@ import zio.stream.ZStream
 
 object SymbolSearch:
 
+  import Extractor.retryOnServerError
+
   val groupArtifactsKey = "_groupArtifacts"
   val gavCacheKey = "_gavCache"
 
@@ -153,7 +155,7 @@ object SymbolSearch:
         .run
         ZIO.logInfo(s"AI search: symbol=$symbol results=${aiResults.size}").run
         val validatedResults = ZIO.filterPar(aiResults): ga =>
-          MavenCentral.isArtifact(ga.groupId, ga.artifactId).orElseSucceed(false)
+          MavenCentral.isArtifact(ga.groupId, ga.artifactId).retryOnServerError.orElseSucceed(false)
         .run
         val indexLoad = validatedResults.map:
           groupArtifact =>

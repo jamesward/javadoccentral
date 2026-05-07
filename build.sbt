@@ -10,7 +10,7 @@ lazy val root = {
   if (useLocalSubprojects && zioMavenCentralDir.exists()) withMcp.dependsOn(RootProject(zioMavenCentralDir)) else withMcp
 }
 
-val zioVersion = "2.1.25"
+val zioVersion = "2.1.26"
 
 // Hack Alert: This is the default when not in buildpacks (i.e. `default`)
 // In buildpacks it is javadoccentral which puts it alphabetically after dev.zio.zio-constraintless_3-0.3.1.jar
@@ -72,12 +72,12 @@ libraryDependencies ++= Seq(
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioHttpMcpDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-http-mcp" % "0.0.7")
+  else Seq("com.jamesward" %% "zio-http-mcp" % "0.0.8")
 }
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioMavenCentralDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-mavencentral" % "0.6.5")
+  else Seq("com.jamesward" %% "zio-mavencentral" % "0.7.0")
 }
 
 Compile / packageDoc / publishArtifact := false

@@ -2,6 +2,7 @@ import com.jamesward.zio_mavencentral.MavenCentral
 import zio.*
 import zio.concurrent.ConcurrentMap
 import zio.direct.*
+import zio.durationInt
 import zio.http.*
 import zio.http.Header.Accept
 import zio.http.codec.PathCodec
@@ -17,6 +18,8 @@ object Web:
   given CanEqual[Method, Method] = CanEqual.derived
   given CanEqual[MediaType, MediaType] = CanEqual.derived
 
+  import Extractor.retryOnServerError
+
   private def acceptsMarkdown(request: Request): Boolean =
     request.header(Accept).exists: accept =>
       val types = accept.mimeTypes.map(_.mediaType)
@@ -28,7 +31,7 @@ object Web:
   def withGroupId(groupId: MavenCentral.GroupId, request: Request): Handler[Client, Nothing, (MavenCentral.GroupId, Request), Response] =
     Handler.fromZIO:
       ZIO.scoped:
-        MavenCentral.searchArtifacts(groupId)
+        MavenCentral.searchArtifacts(groupId).retryOnServerError
     .flatMap: artifacts =>
       if acceptsMarkdown(request) then
         val md = s"# $groupId\n\n## Artifacts\n\n" +
@@ -46,9 +49,9 @@ object Web:
     Handler.fromZIO:
       ZIO.scoped:
         defer:
-          val isArtifact = MavenCentral.isArtifact(groupId, artifactId).run
+          val isArtifact = MavenCentral.isArtifact(groupId, artifactId).retryOnServerError.run
           ZIO.when(isArtifact):
-            MavenCentral.searchVersions(groupId, artifactId)
+            MavenCentral.searchVersions(groupId, artifactId).retryOnServerError
           .run
     .flatMap: maybeVersions =>
       maybeVersions.fold:
@@ -56,13 +59,13 @@ object Web:
         val combinedGroupId = MavenCentral.GroupId(groupId.toString + "." + artifactId.toString)
         Handler.fromZIO:
           ZIO.scoped:
-            MavenCentral.searchArtifacts(combinedGroupId)
+            MavenCentral.searchArtifacts(combinedGroupId).retryOnServerError
         .flatMap: _ =>
           Response.redirect(URL(Path.root / combinedGroupId.toString)).toHandler
         .orElse:
           Handler.fromZIO:
             ZIO.scoped:
-              MavenCentral.searchArtifacts(groupId)
+              MavenCentral.searchArtifacts(groupId).retryOnServerError
           .flatMap: artifactIds =>
             Response.html(UI.page("javadocs.dev", UI.needArtifactId(groupId, artifactIds.value, Some(artifactId))), Status.NotFound).toHandler
           .orElse:
@@ -78,7 +81,7 @@ object Web:
       // invalid groupId or artifactId
       Handler.fromZIO:
         ZIO.scoped:
-          MavenCentral.searchArtifacts(groupId)
+          MavenCentral.searchArtifacts(groupId).retryOnServerError
       .flatMap: artifactIds =>
         Response.html(UI.page("javadocs.dev", UI.needArtifactId(groupId, artifactIds.value)), Status.NotFound).toHandler // todo: message
       .orElse:
@@ -133,13 +136,13 @@ object Web:
                 defer:
                   val javadocDir = ZIO.serviceWithZIO[Extractor.JavadocCache](_.getDir(groupArtifactVersion)).run
                   val files = Extractor.fileList(javadocDir.toPath).map(_.toSeq.filter(_.endsWith(".html")).sorted).run
-                  val versions = ZIO.scoped(MavenCentral.searchVersions(groupId, artifactId)).map(_.value).orElseSucceed(Seq.empty).run
+                  val versions = ZIO.scoped(MavenCentral.searchVersions(groupId, artifactId).retryOnServerError).map(_.value).orElseSucceed(Seq.empty).run
                   Response.html(UI.page("javadocs.dev", UI.javadocFileList(groupId, artifactId, version, versions, files)))
       .catchAll:
         case _: MavenCentral.NotFoundError | _: Extractor.JavadocFileNotFound =>
           Handler.fromZIO:
             ZIO.scoped:
-              MavenCentral.searchVersions(groupId, artifactId)
+              MavenCentral.searchVersions(groupId, artifactId).retryOnServerError
           .flatMap: versions =>
             Response.html(UI.page("javadocs.dev", UI.noJavadoc(groupId, artifactId, versions.value, version)), Status.NotFound).toHandler // todo: message
           .orElse:
@@ -311,7 +314,7 @@ object Web:
   def llmsArtifact(gId: MavenCentral.GroupId, aId: MavenCentral.ArtifactId, @unused request: Request): Handler[Client, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, Request), Response] =
     Handler.fromZIO:
       ZIO.scoped:
-        MavenCentral.searchVersions(gId, aId)
+        MavenCentral.searchVersions(gId, aId).retryOnServerError
     .flatMap: versions =>
       val md = s"# $gId:$aId\n\n## Versions\n\n" +
         versions.value.map(v => s"- [$v](https://www.javadocs.dev/llms/$gId/$aId/$v)").mkString("\n") + "\n"

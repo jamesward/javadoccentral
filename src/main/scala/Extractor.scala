@@ -4,9 +4,10 @@ import dev.kreuzberg.htmltomarkdown.HtmlToMarkdown
 import org.jsoup.Jsoup
 import zio.cache.{Cache, ScopedCache, ScopedLookup}
 import zio.direct.*
+import zio.durationInt
 import zio.http.{Client, URL}
 import zio.prelude.data.Optional.AllValuesAreNullable
-import zio.{Scope, ZIO}
+import zio.{Schedule, Scope, ZIO}
 
 import java.io.File
 import java.nio.file.{Files, Path}
@@ -25,6 +26,22 @@ object Extractor:
   case class Content(link: String, external: Boolean, fqn: String, `type`: String, kind: String, extra: String)
 
   case class LatestCache(cache: Cache[GroupArtifact, GroupIdOrArtifactIdNotFoundError | LatestNotFound, Version])
+
+  /**
+   * Retries a ZIO effect on transient Maven Central errors (5xx).
+   *
+   * Retries up to 2 times with exponential backoff starting at 1 second,
+   * but only when the error is a `MavenCentral.TemporaryServerError`.
+   * Permanent errors (e.g. `NotFoundError`, 4xx) fail immediately.
+   */
+  extension [R, E, A](zio: ZIO[R, E, A])
+    def retryOnServerError: ZIO[R, E, A] =
+      zio.retry(
+        Schedule.recurWhile[E]:
+          case _: MavenCentral.TemporaryServerError => true
+          case _ => false
+        && Schedule.exponential(1.second) && Schedule.recurs(2)
+      )
 
   /**
    * Extracted-javadoc cache backed by `zio.cache.ScopedCache`.
@@ -63,6 +80,7 @@ object Extractor:
 
   def latest(groupArtifact: GroupArtifact): ZIO[Client & Scope, GroupIdOrArtifactIdNotFoundError | LatestNotFound, Version] =
     MavenCentral.latest(groupArtifact.groupId, groupArtifact.artifactId)
+      .retryOnServerError
       .catchAll:
         case t: Throwable => ZIO.die(t)
         case groupIdOrArtifactIdNotFoundError: GroupIdOrArtifactIdNotFoundError => ZIO.fail(groupIdOrArtifactIdNotFoundError)
@@ -81,9 +99,11 @@ object Extractor:
   def javadoc(groupArtifactVersion: GroupArtifactVersion):
       ZIO[Client & TmpDir & Scope, NotFoundError, File] =
     val javadocUriOrDie: ZIO[Client & Scope, NotFoundError, URL] =
-      MavenCentral.javadocUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version).catchAll:
-        case t: Throwable => ZIO.die(t)
-        case javadocNotFoundError: NotFoundError => ZIO.fail(javadocNotFoundError)
+      MavenCentral.javadocUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version)
+        .retryOnServerError
+        .catchAll:
+          case t: Throwable => ZIO.die(t)
+          case javadocNotFoundError: NotFoundError => ZIO.fail(javadocNotFoundError)
 
     defer:
       val tmpDir = ZIO.service[TmpDir].run
@@ -112,9 +132,11 @@ object Extractor:
   def sources(groupArtifactVersion: GroupArtifactVersion):
       ZIO[Client & TmpDir & Scope, NotFoundError, File] =
     val sourcesUriOrDie: ZIO[Client & Scope, NotFoundError, URL] =
-      MavenCentral.sourcesUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version).catchAll:
-        case t: Throwable => ZIO.die(t)
-        case sourcesNotFoundError: NotFoundError => ZIO.fail(sourcesNotFoundError)
+      MavenCentral.sourcesUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version)
+        .retryOnServerError
+        .catchAll:
+          case t: Throwable => ZIO.die(t)
+          case sourcesNotFoundError: NotFoundError => ZIO.fail(sourcesNotFoundError)
 
     defer:
       val tmpDir = ZIO.service[TmpDir].run
@@ -202,7 +224,7 @@ object Extractor:
   def javadocJavaFormat(groupArtifactVersion: GroupArtifactVersion, javadocDir: File):
       ZIO[Any, JavadocFormatFailure, Set[Content]] =
     javadocFile(groupArtifactVersion, javadocDir, "element-list")
-      .mapError(_ => JavadocFormatFailure())
+      .orElseFail(JavadocFormatFailure())
       .flatMap: file =>
         ZIO.attemptBlockingIO:
           val lines = Files.readAllLines(file.toPath).asScala
