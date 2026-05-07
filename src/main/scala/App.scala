@@ -19,6 +19,21 @@ object App extends ZIOAppDefault:
         maybePort.fold(Server.default)(Server.defaultWithPort)
     .flatten
 
+  // Wrap the default HTTP client with request logging so every outbound call
+  // (Maven Central metadata lookups, javadoc/sources jar downloads, etc.)
+  // emits a structured log line with method, URL, status, and duration.
+  //
+  // Caveat: for streaming responses (which `zio-mavencentral`'s
+  // `downloadAndExtractZip` uses) `duration_ms` measures time-to-response-
+  // headers, not end-of-body. Body-streaming + extraction time is still
+  // covered by the `Downloaded javadoc/sources ... duration=...ms` log in
+  // `Extractor.scala`; subtracting the two tells you body+extract wall time.
+  val clientLayer: ZLayer[Any, Throwable, Client] =
+    Client.default.update(_ @@ ZClientAspect.requestLogging(
+      loggedRequestHeaders = Set(Header.UserAgent),
+      loggedResponseHeaders = Set(Header.ContentLength, Header.ContentType)
+    ))
+
   val latestCacheLayer: ZLayer[Client & Scope, Nothing, Extractor.LatestCache] = ZLayer.fromZIO:
     Cache.makeWith(1_000, Lookup(Extractor.latest)):
       case Exit.Success(_) => 1.hour
@@ -147,7 +162,7 @@ object App extends ZIOAppDefault:
       logCacheStats.repeat(Schedule.spaced(statsInterval)).forkDaemon
     (background *> Server.serve(Web.appWithMiddleware)).provide(
       server,
-      Client.default,
+      clientLayer,
       Scope.default,
       latestCacheLayer,
       javadocCacheLayer,
