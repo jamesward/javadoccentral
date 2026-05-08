@@ -263,10 +263,7 @@ object AppSpec extends ZIOSpecDefault:
     App.javadocCacheLayer,
     App.sourcesCacheLayer,
     App.latestCacheLayer,
-    App.tmpDirLayer,
-    App.fetchBlockerLayer,
     Client.default,
-    Scope.default,
     EmbeddedRedis.layer,
     Redis.singleNode,
     ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
@@ -274,4 +271,7 @@ object AppSpec extends ZIOSpecDefault:
     BadActor.live,
     Web.crawlerGavLimiterLayer,
       App.symbolSearchGuardLayer,
+    // Test-level Scope: `Handler#runZIO` returns `ZIO[Scope & R, ...]`,
+    // so invoking the app from test bodies needs a `Scope`.
+    Scope.default,
   ) @@ TestAspect.withLiveClock @@ TestAspect.withLiveRandom @@ TestAspect.withLiveSystem @@ TestAspect.sequential

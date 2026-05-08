@@ -193,12 +193,9 @@ object McpSpec extends ZIOSpecDefault:
     ).provide(
       Server.defaultWith(_.onAnyOpenPort),
       Client.default,
-      Scope.default,
       App.latestCacheLayer,
       App.javadocCacheLayer,
       App.sourcesCacheLayer,
-      App.tmpDirLayer,
-      App.fetchBlockerLayer,
       EmbeddedRedis.layer,
       Redis.singleNode,
       ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),

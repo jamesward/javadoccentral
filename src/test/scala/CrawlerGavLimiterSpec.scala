@@ -11,8 +11,8 @@ import zio.test.*
  */
 object CrawlerGavLimiterSpec extends ZIOSpecDefault:
 
-  private val gav1 = Extractor.gav("g", "one", "1")
-  private val gav2 = Extractor.gav("g", "two", "1")
+  private val gav1 = MavenCentral.gav("g", "one", "1")
+  private val gav2 = MavenCentral.gav("g", "two", "1")
   private val crawler = "googlebot"
   private val hold = 10.minutes
 

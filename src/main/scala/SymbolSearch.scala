@@ -13,7 +13,7 @@ import zio.stream.ZStream
 
 object SymbolSearch:
 
-  import Extractor.retryOnServerError
+  import MavenCentral.retryOnServerError
 
   val groupArtifactsKey = "_groupArtifacts"
   val gavCacheKey = "_gavCache"
@@ -116,7 +116,7 @@ object SymbolSearch:
       val workaroundForMarkdownContent = choice.message.content.replace("```json", "").replace("```", "").trim
       workaroundForMarkdownContent.fromJson[Set[MavenCentral.GroupArtifact]].getOrElse(Set.empty)
 
-  def search(symbol: String): ZIO[Redis & HerokuInference & Scope & Client & Extractor.JavadocCache & Extractor.TmpDir & SymbolSearchGuard, SearchError, Set[MavenCentral.GroupArtifact]] =
+  def search(symbol: String): ZIO[Redis & HerokuInference & Client & Extractor.JavadocCache & SymbolSearchGuard, SearchError, Set[MavenCentral.GroupArtifact]] =
     defer:
       val redis = ZIO.service[Redis].run
 
@@ -150,7 +150,10 @@ object SymbolSearch:
       val cacheResults = gaResults ++ symbolResults
 
       if cacheResults.isEmpty then
-        val aiResults = aiSearch(symbol).mapError(e => SearchError(e.message)).tapError: e =>
+        // `aiSearch` needs a `Scope` for its HTTP response body; that
+        // scope is local to the AI call (the body is fully materialized
+        // here) so we don't propagate `Scope` out of `search`.
+        val aiResults = ZIO.scoped(aiSearch(symbol)).mapError(e => SearchError(e.message)).tapError: e =>
           ZIO.logError(s"aiSearch failed for symbol: $symbol: ${e.message}")
         .run
         ZIO.logInfo(s"AI search: symbol=$symbol results=${aiResults.size}").run
@@ -164,6 +167,10 @@ object SymbolSearch:
                 indexJavadocContents(MavenCentral.GroupArtifactVersion(groupArtifact.groupId, groupArtifact.artifactId, latest))
             .ignore
         ZIO.logInfo(s"Scheduling index load: symbol=$symbol artifacts=${validatedResults.size}").run
+        // `indexJavadocContents` already owns its Scope internally (it
+        // `ZIO.scoped`s the payload before `forkDaemon`), and
+        // `Extractor.latest` no longer requires `Scope`, so the forked
+        // daemon below has no `Scope` dependency to inherit.
         ZIO.collectAllParDiscard(indexLoad).forkDaemon.run
         validatedResults
       else
@@ -213,16 +220,19 @@ object SymbolSearch:
               ZIO.logInfo(s"Updated symbol index: $groupArtifactVersion symbols=${symbols.size}").run
             work.ensuring(guard.remove(groupArtifactVersion)).run
 
-  // we only want to trigger symbol cache loading when the index page is loaded
-  // this is a lazy way to populate the cache
+  // We only want to trigger symbol cache loading when the index page is loaded;
+  // this is a lazy way to populate the cache. The returned effect forks a
+  // daemon. With `JarCache`'s append-only model the daemon's `JarHandle` stays
+  // valid until app shutdown — no Scope coordination needed.
   def indexJavadocContents(groupArtifactVersion: MavenCentral.GroupArtifactVersion):
-    ZIO[Client & Extractor.JavadocCache & Extractor.TmpDir & Redis & SymbolSearch.SymbolSearchGuard & Scope, Nothing, Unit] =
+    ZIO[Client & Extractor.JavadocCache & Redis & SymbolSearch.SymbolSearchGuard, Nothing, Unit] =
 
-    val getContentsAndUpdateIndex = defer:
-      ZIO.logInfo(s"Index load started: $groupArtifactVersion").run
-      val (parseDuration, contents) = Extractor.javadocContents(groupArtifactVersion).timed.run
-      ZIO.logInfo(s"Index load parsed: $groupArtifactVersion symbols=${contents.size} duration=${parseDuration.toMillis}ms").run
-      SymbolSearch.update(groupArtifactVersion, contents).run
-      ZIO.logInfo(s"Index load complete: $groupArtifactVersion").run
+    val getContentsAndUpdateIndex =
+      defer:
+        ZIO.logInfo(s"Index load started: $groupArtifactVersion").run
+        val (parseDuration, contents) = Extractor.javadocContents(groupArtifactVersion).timed.run
+        ZIO.logInfo(s"Index load parsed: $groupArtifactVersion symbols=${contents.size} duration=${parseDuration.toMillis}ms").run
+        SymbolSearch.update(groupArtifactVersion, contents).run
+        ZIO.logInfo(s"Index load complete: $groupArtifactVersion").run
 
     getContentsAndUpdateIndex.forkDaemon.unit

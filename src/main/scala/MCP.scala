@@ -51,8 +51,7 @@ object MCP:
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: GroupArtifact) =>
       logMcp("get_latest_version", input.toString):
-        ZIO.scoped:
-          Extractor.latest(input)
+        Extractor.latest(input)
 
   val getIndexTool = McpTool("get_javadoc_index")
     .description("Gets the index from the javadocs for a given Maven Central library artifact - often the index provides helpful reference documentation")
@@ -112,9 +111,8 @@ object MCP:
     .annotations(readOnly = True, destructive = False, idempotent = False, openWorld = True)
     .handle: (input: Symbol) =>
       logMcp("symbol_to_artifact", input.query):
-        ZIO.scoped:
-          // todo: rate limit
-          SymbolSearch.search(input.query)
+        // todo: rate limit
+        SymbolSearch.search(input.query)
 
   val mcpServer = McpServer("javadocs.dev", "0.0.2")
     .tool(getLatestTool)

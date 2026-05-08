@@ -69,6 +69,65 @@ private def scheduleCrawlerEviction(gav: GAV): ZIO[...] =
 - `.orDie` for unrecoverable errors, `.ignoreLogged` for best-effort cleanup
 - `forkDaemon` for background tasks that should outlive the current scope
 
+### `Scope` usage conventions
+
+Getting `Scope` right matters for the `ScopedCache`-backed javadoc/sources
+caches — their per-entry finalizers delete the extracted directory, so the
+cache reference must live until the last reader is done.
+
+- **Layer-level Scope.** Use `ZLayer.scoped` (not `ZLayer.fromZIO` plus
+  `Scope.default`) for layers that construct scoped resources. The layer
+  owns a private `Scope` that is closed when the layer is finalized; the
+  `Scope` does not leak into unrelated code paths. Examples:
+  `javadocCacheLayer`, `sourcesCacheLayer` in `App.scala`.
+- **Request-handler Scope.** zio-http's `ServerInboundHandler.writeResponse`
+  creates one `Scope` per request and closes it **after** the response
+  body has been fully written to netty (`scope.use(handler *> writeBody)`).
+  Any `Scope` requirement at the `Handler` boundary is satisfied by that
+  per-request scope. `Server.serve` enforces `HasNoScope[R]` on the
+  outermost `Routes` environment, so Handlers must not expose `Scope` in
+  their declared `R`; use `Handler.scoped[R]` to absorb `Scope` into the
+  request scope when the inner ZIO legitimately requires one.
+- **File-streaming handlers must not use a local `ZIO.scoped`.**
+  `Handler.fromFileZIO` wraps the returned `File` in `Body.fromFile`,
+  which opens the `FileInputStream` lazily when netty pulls the body. A
+  local `ZIO.scoped` around `getDir` would close before netty opens the
+  file, prematurely releasing the `ScopedCache` owner-count reference; a
+  concurrent eviction could then delete the extracted directory
+  mid-stream. Instead, keep `Scope` on the inner ZIO and wrap the
+  resulting `Handler` in `Handler.scoped[R]` (see `Web.withFile`).
+- **In-memory response handlers may use `ZIO.scoped`.** When the response
+  body is fully materialized before the handler returns
+  (e.g. `Extractor.javadocContents` → `markdownResponse`), a local
+  `ZIO.scoped` is fine — the bytes are already in memory by the time the
+  scope closes.
+- **`forkDaemon` must not inherit a caller's `Scope`.** `forkDaemon` only
+  changes the fiber supervision; the ZIO environment (including any
+  `Scope`) is inherited as-is. If the parent's `Scope` closes while the
+  daemon is still running, the daemon's subsequent `acquireRelease` /
+  `addFinalizerExit` calls run the release immediately (the `Exited`
+  branch in `zio.Scope.ReleaseMap.addDiscard`), leaving the daemon
+  holding a reference that has already been released. Forked daemons
+  that need a `Scope` must own it:
+
+  ```scala
+  // Correct: the daemon owns its Scope.
+  def indexJavadocContents(gav): ZIO[…, Nothing, Unit] =
+    val work = ZIO.scoped:
+      defer:
+        val (_, contents) = Extractor.javadocContents(gav).timed.run
+        …
+    work.forkDaemon.unit
+  ```
+- **Don't declare phantom `Scope`.** If a method's body doesn't actually
+  use `Scope` (e.g. `Extractor.latest` which only calls
+  `MavenCentral.latest`), don't put it in the return type. The
+  requirement propagates through every caller and forces them to either
+  provide `Scope.default` or wrap in `ZIO.scoped` for no reason.
+- **Don't wrap non-scoped effects in `ZIO.scoped`.** Every `MavenCentral`
+  public method returns `ZIO[Client, …]` (they `ZIO.scoped` internally
+  when needed). Wrapping them in an outer `ZIO.scoped` is dead code.
+
 ### ZIO Idioms
 
 - Prefer `.delay(duration)` over `ZIO.sleep(duration) *> effect`

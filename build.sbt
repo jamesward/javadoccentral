@@ -77,7 +77,7 @@ libraryDependencies ++= {
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioMavenCentralDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-mavencentral" % "0.7.0")
+  else Seq("com.jamesward" %% "zio-mavencentral" % "0.8.0")
 }
 
 Compile / packageDoc / publishArtifact := false

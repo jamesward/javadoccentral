@@ -15,7 +15,7 @@ object SymbolSearchSpec extends ZIOSpecDefault:
     suite("embedded")(
       test("search") {
         defer:
-          val springai = Extractor.gav("org.springframework.ai", "spring-ai-mcp", "1.0.1")
+          val springai = MavenCentral.gav("org.springframework.ai", "spring-ai-mcp", "1.0.1")
           val doccontents = Extractor.javadocContents(springai).run
           SymbolSearch.update(springai, doccontents).run
 
@@ -97,21 +97,20 @@ object SymbolSearchSpec extends ZIOSpecDefault:
           )
       }
     ).provide(
-      Scope.default,
       Client.default,
       App.javadocCacheLayer,
-      App.tmpDirLayer,
-      App.fetchBlockerLayer,
       EmbeddedRedis.layer,
       Redis.singleNode,
       ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
       SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
       App.symbolSearchGuardLayer,
+      // Test-level Scope for body calls like Extractor.javadocContents.
+      Scope.default,
     ),
     suite("integration")(
       test("search with real Redis") {
         defer:
-          val springai = Extractor.gav("org.springframework.ai", "spring-ai-mcp", "1.0.1")
+          val springai = MavenCentral.gav("org.springframework.ai", "spring-ai-mcp", "1.0.1")
           val doccontents = Extractor.javadocContents(springai).run
           SymbolSearch.update(springai, doccontents).run
 
@@ -128,15 +127,13 @@ object SymbolSearchSpec extends ZIOSpecDefault:
           )
       }
     ).provide(
-      Scope.default,
       Client.default,
       App.javadocCacheLayer,
-      App.tmpDirLayer,
-      App.fetchBlockerLayer,
       App.redisConfigLayer,
       App.redisAuthLayer,
       ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
       SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
       App.symbolSearchGuardLayer,
+      Scope.default,
     ) @@ TestAspect.ifEnvSet("REDIS_URL") @@ TestAspect.timeout(10.seconds),
   ) @@ TestAspect.withLiveSystem @@ TestAspect.sequential

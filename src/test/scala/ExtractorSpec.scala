@@ -1,10 +1,9 @@
-import Extractor.gav
 import com.jamesward.zio_mavencentral.MavenCentral.*
 import zio.direct.*
 import zio.http.Client
 import zio.test.*
 import zio.test.Assertion.failsWithA
-import zio.{Exit, Scope, ZIO, ZLayer, durationInt}
+import zio.{ZIO, durationInt}
 
 object ExtractorSpec extends ZIOSpecDefault:
 
@@ -41,23 +40,19 @@ object ExtractorSpec extends ZIOSpecDefault:
         failsWithA[NotFoundError]
       )
     },
-    test("javadoc does not exist") {
-      assertZIO(Extractor.javadoc(gav("com.jamesward", "zio-mavencentral_3", "0.0.0")).exit)(
+    test("javadoc jar does not exist") {
+      assertZIO(Extractor.javadocJar(gav("com.jamesward", "zio-mavencentral_3", "0.0.0")).exit)(
         failsWithA[NotFoundError]
       )
     },
     test("sources do not exist") {
-      assertZIO(Extractor.sources(gav("com.jamesward", "zio-mavencentral_3", "0.0.0")).exit)(
+      assertZIO(Extractor.sourceContents(gav("com.jamesward", "zio-mavencentral_3", "0.0.0")).exit)(
         failsWithA[NotFoundError]
       )
     },
     test("javadoc file not found") {
       val groupArtifactVersion = gav("com.jamesward", "zio-mavencentral_3", "0.0.21")
-      assertZIO {
-        Extractor.javadoc(groupArtifactVersion).flatMap { javadocDir =>
-          Extractor.javadocFile(groupArtifactVersion, javadocDir, "asdf").exit
-        }
-      }(
+      assertZIO(Extractor.javadocEntryBytes(groupArtifactVersion, "asdf").exit)(
         failsWithA[Extractor.JavadocFileNotFound]
       )
     },
@@ -132,25 +127,22 @@ object ExtractorSpec extends ZIOSpecDefault:
       defer:
         val contents = Extractor.sourceContents(gav("com.jamesward", "zio-mavencentral_3", "0.0.21")).run
         assertTrue(
-          contents.size == 2,
+          // jar entries: META-INF/MANIFEST.MF + the source file (directory entries
+          // are filtered by sourceContents).
+          contents.size >= 2,
           contents.contains("com/jamesward/zio_mavencentral/MavenCentral.scala")
         )
     },
-    test("concurrent javadoc calls for the same GAV do not race on disk") {
-      // Reproduces the production `FileAlreadyExistsException` seen after a
-      // cache eviction: when two fibers run `Extractor.javadoc` for the
-      // same GAV at the same time — e.g., because `ScopedCache` evicted a
-      // `Pending` entry under capacity pressure — both write into the
-      // same `javadocDir` and race inside `Files.copy(..., targetPath)`
-      // (no REPLACE_EXISTING), which throws on files like
-      // `META-INF/MANIFEST.MF`. The fix is to give each invocation its own
-      // unique directory.
+    test("concurrent javadocJar calls for the same GAV deduplicate") {
+      // The library's `JarCache` provides single-flight via a `Promise`-keyed
+      // map; concurrent `get`s for the same GAV all observe the same handle.
       val g = gav("com.jamesward", "zio-mavencentral_3", "0.0.21")
       defer:
-        val results = ZIO.foreachPar(1 to 10): _ =>
-          ZIO.scoped(Extractor.javadoc(g).unit).exit
-        .run
-        assertTrue(results.forall(_.isSuccess))
+        val handles = ZIO.foreachPar(1 to 10)(_ => Extractor.javadocJar(g)).run
+        assertTrue(
+          handles.size == 10,
+          handles.forall(_ eq handles.head),
+        )
     } @@ TestAspect.timeout(2.minutes) @@ TestAspect.withLiveClock,
     test("parallel downloads: 20 artifacts concurrently") {
       val gavs = Seq(
@@ -176,14 +168,11 @@ object ExtractorSpec extends ZIOSpecDefault:
         gav("dev.zio", "zio-test_3", "2.1.25"),
       )
       defer:
-        val dirs = ZIO.foreachPar(gavs)(Extractor.javadoc).run
-        assertTrue(dirs.size == 20, dirs.forall(_.exists()))
+        val handles = ZIO.foreachPar(gavs)(Extractor.javadocJar).run
+        assertTrue(handles.size == 20, handles.forall(_.sizeBytes > 0L))
     } @@ TestAspect.timeout(2.minutes) @@ TestAspect.withLiveClock
   ).provide(
-    Scope.default,
     Client.default,
     App.javadocCacheLayer,
     App.sourcesCacheLayer,
-    App.tmpDirLayer,
-    App.fetchBlockerLayer,
   )

@@ -1,231 +1,74 @@
 import com.jamesward.zio_mavencentral.MavenCentral
 import com.jamesward.zio_mavencentral.MavenCentral.*
+import com.jamesward.zio_mavencentral.JarCache
 import dev.kreuzberg.htmltomarkdown.HtmlToMarkdown
 import org.jsoup.Jsoup
-import zio.cache.{Cache, ScopedCache, ScopedLookup}
-import zio.concurrent.ConcurrentMap
+import zio.cache.Cache
 import zio.direct.*
-import zio.durationInt
-import zio.http.{Client, URL}
+import zio.http.Client
 import zio.prelude.data.Optional.AllValuesAreNullable
-import zio.{Promise, Schedule, Scope, ZIO}
+import zio.{IO, ZIO}
 
-import java.io.File
-import java.nio.file.{Files, Path}
-import scala.jdk.CollectionConverters.*
+import java.nio.charset.StandardCharsets
 import scala.jdk.OptionConverters.*
 
+/**
+ * Javadoc/sources reading on top of `zio-mavencentral`'s [[JarCache]].
+ *
+ * The actual download/cache/random-access machinery lives in the library;
+ * this file is the *content* layer — symbol-search index parsing, javadoc
+ * vs. scaladoc vs. kotlindoc format detection, HTML → markdown for the
+ * MCP path, etc. None of it cares about on-disk extraction anymore;
+ * callers receive a `JarCache.JarHandle` and read entries directly.
+ */
 object Extractor:
-  case class TmpDir(dir: File)
 
   case class JavadocFileNotFound(groupArtifactVersion: GroupArtifactVersion, path: String)
 
   case class JavadocContentError(groupArtifactVersion: GroupArtifactVersion, path: String)
 
-  case class LatestNotFound(groupArtifact: GroupArtifact)
+  /** Re-exported here for backward compatibility; lives in the library. */
+  type LatestNotFound = MavenCentral.LatestNotFound
+  val LatestNotFound = MavenCentral.LatestNotFound
 
   case class Content(link: String, external: Boolean, fqn: String, `type`: String, kind: String, extra: String)
 
+  /** Caches `GroupArtifact -> latest Version` lookups so a single resolution
+   *  is shared by concurrent callers and reused across requests for an hour. */
   case class LatestCache(cache: Cache[GroupArtifact, GroupIdOrArtifactIdNotFoundError | LatestNotFound, Version])
 
   /**
-   * Retries a ZIO effect on transient Maven Central errors (5xx).
-   *
-   * Retries up to 2 times with exponential backoff starting at 1 second,
-   * but only when the error is a `MavenCentral.TemporaryServerError`.
-   * Permanent errors (e.g. `NotFoundError`, 4xx) fail immediately.
+   * Wrapper around `JarCache` for javadoc jars. Exists so the ZIO
+   * environment can distinguish javadoc vs. sources caches by type
+   * (otherwise both would be `JarCache` and `ZIO.service[JarCache]`
+   * would be ambiguous).
    */
-  extension [R, E, A](zio: ZIO[R, E, A])
-    def retryOnServerError: ZIO[R, E, A] =
-      zio.retry(
-        Schedule.recurWhile[E]:
-          case _: MavenCentral.TemporaryServerError => true
-          case _ => false
-        && Schedule.exponential(1.second) && Schedule.recurs(2)
-      )
-
-  /**
-   * Extracted-javadoc cache backed by `zio.cache.ScopedCache`.
-   *
-   * Each cache entry owns a `Scope`. When the entry is evicted — for any
-   * reason, including capacity overflow, TTL expiry, or explicit invalidation
-   * — the scope is closed and the attached finalizer deletes the extracted
-   * directory. Per-entry reference counting inside `ScopedCache` ensures the
-   * directory is not deleted while a reader still holds a handle to it;
-   * callers of `getDir` must therefore consume the result inside `ZIO.scoped`
-   * (or pass along the `Scope` requirement).
-   */
-  case class JavadocCache(cache: ScopedCache[GroupArtifactVersion, NotFoundError, File]):
-    def getDir(gav: GroupArtifactVersion): ZIO[Scope, NotFoundError, File] =
+  final class JavadocCache(val cache: JarCache):
+    def get(gav: GroupArtifactVersion): ZIO[Client, NotFoundError, JarCache.JarHandle] =
       cache.get(gav)
 
-  case class SourcesCache(cache: ScopedCache[GroupArtifactVersion, NotFoundError, File]):
-    def getDir(gav: GroupArtifactVersion): ZIO[Scope, NotFoundError, File] =
+  final class SourcesCache(val cache: JarCache):
+    def get(gav: GroupArtifactVersion): ZIO[Client, NotFoundError, JarCache.JarHandle] =
       cache.get(gav)
 
-  /**
-   * Ensures that only one `Extractor.javadoc` (or `Extractor.sources`) call
-   * per GAV is actually downloading + extracting at a time.
-   *
-   * This exists because `zio.cache.ScopedCache`'s `Pending` state — the only
-   * thing that otherwise deduplicates concurrent lookups — can be dropped
-   * from the cache's internal map under capacity pressure (`trackAccess`
-   * evicts LRU entries including `Pending`, and `cleanMapValue` is a no-op
-   * for `Pending`). When that happens, two concurrent `get(gav)` calls both
-   * start their own lookup. If both extract into the same `javadocDir` they
-   * race inside `Files.copy(..., targetPath)` (no `REPLACE_EXISTING`) and
-   * throw `FileAlreadyExistsException` on files like `META-INF/MANIFEST.MF`.
-   *
-   * The `Promise` per in-flight extraction serializes those racing lookups:
-   * the first fiber to `putIfAbsent` owns the extraction; any fiber that
-   * finds an existing `Promise` awaits it instead of starting a second
-   * extraction. The owner always completes the promise and removes the map
-   * entry via `.onExit`, even on failure or interrupt.
-   */
-  case class FetchBlocker(
-    javadoc: ConcurrentMap[GroupArtifactVersion, Promise[NotFoundError, Unit]],
-    sources: ConcurrentMap[GroupArtifactVersion, Promise[NotFoundError, Unit]],
-  )
+  /** Re-exported library helper. Kept as a method here so existing call
+   *  sites (`Extractor.latest`) compile unchanged. */
+  def latest(groupArtifact: GroupArtifact): ZIO[Client, GroupIdOrArtifactIdNotFoundError | LatestNotFound, Version] =
+    MavenCentral.latestOrFail(groupArtifact)
 
-  // Recursively deletes a directory tree. Safe to call on a non-existent path.
-  private def deleteDirBlocking(dir: File): Unit =
-    if dir.isDirectory then
-      val children = dir.listFiles
-      if children != null then
-        var i = 0
-        while i < children.length do
-          val c = children(i)
-          if c != null then deleteDirBlocking(c)
-          i += 1
-    dir.delete()
-    ()
+  /** Strip an `#anchor` fragment so it doesn't disturb jar-entry lookup. */
+  private def normalizePath(path: String): String =
+    path.takeWhile(_ != '#')
 
-  def gav(groupId: String, artifactId: String, version: String) =
-    GroupArtifactVersion(GroupId(groupId), ArtifactId(artifactId), Version(version))
-
-  def latest(groupArtifact: GroupArtifact): ZIO[Client & Scope, GroupIdOrArtifactIdNotFoundError | LatestNotFound, Version] =
-    MavenCentral.latest(groupArtifact.groupId, groupArtifact.artifactId)
-      .retryOnServerError
-      .catchAll:
-        case t: Throwable => ZIO.die(t)
-        case groupIdOrArtifactIdNotFoundError: GroupIdOrArtifactIdNotFoundError => ZIO.fail(groupIdOrArtifactIdNotFoundError)
-      .someOrFail(LatestNotFound(groupArtifact))
-
-  /**
-   * Scoped lookup used by the javadoc `ScopedCache`.
-   *
-   * Downloads and extracts the javadoc jar into `<tmpDir>/<gav>/` (unless the
-   * directory is already present from a previous run), then registers a
-   * finalizer that deletes the directory when the cache entry is evicted.
-   *
-   * Concurrent calls for the same GAV are serialized via [[FetchBlocker]]
-   * so only one actually downloads + extracts; the others `await` the
-   * in-flight extraction. This is a belt-and-braces safeguard against
-   * `ScopedCache`'s `Pending` dedup being dropped under capacity pressure.
-   */
-  def javadoc(groupArtifactVersion: GroupArtifactVersion):
-      ZIO[Client & TmpDir & FetchBlocker & Scope, NotFoundError, File] =
-    val javadocUriOrDie: ZIO[Client & Scope, NotFoundError, URL] =
-      MavenCentral.javadocUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version)
-        .retryOnServerError
-        .catchAll:
-          case t: Throwable => ZIO.die(t)
-          case javadocNotFoundError: NotFoundError => ZIO.fail(javadocNotFoundError)
-
-    defer:
-      val tmpDir = ZIO.service[TmpDir].run
-      val javadocDir = File(tmpDir.dir, groupArtifactVersion.toString)
-      val blocker = ZIO.service[FetchBlocker].run
-
-      // Serialize concurrent lookups for this GAV: the owning fiber extracts,
-      // waiters await its `Promise`. See `FetchBlocker` docs for why this
-      // is required on top of `ScopedCache`'s own `Pending` dedup.
-      val myPromise = Promise.make[NotFoundError, Unit].run
-      val existing = blocker.javadoc.putIfAbsent(groupArtifactVersion, myPromise).run
-      existing match
-        case Some(inFlight) =>
-          ZIO.logInfo(s"Awaiting in-flight javadoc extraction: $groupArtifactVersion").run
-          inFlight.await.run
-        case None =>
-          // We own the extraction. `.onExit` always completes the promise
-          // and removes the map entry — success, failure, or interrupt.
-          val work: ZIO[Client & Scope, NotFoundError, Unit] =
-            defer:
-              if !javadocDir.exists() then
-                val javadocUrl = javadocUriOrDie.run
-                ZIO.logInfo(s"Downloading javadoc: $javadocUrl").run
-                val duration = MavenCentral.downloadAndExtractZip(javadocUrl, javadocDir)
-                  .orDie.timed.map(_._1).run
-                ZIO.logInfo(s"Downloaded javadoc: $groupArtifactVersion duration=${duration.toMillis}ms").run
-          work.onExit: exit =>
-            blocker.javadoc.remove(groupArtifactVersion) *> myPromise.done(exit)
-          .run
-
-      // Cache-entry finalizer: when this entry is evicted (capacity, TTL, or
-      // explicit invalidate) the scope closes and we delete the extracted dir.
-      ZIO.addFinalizer(
-        ZIO.logInfo(s"Evicting javadoc cache entry: $groupArtifactVersion") *>
-          ZIO.attemptBlockingIO(deleteDirBlocking(javadocDir)).ignoreLogged
-      ).run
-
-      javadocDir
-
-  def index(groupArtifactVersion: GroupArtifactVersion):
-      ZIO[Client & TmpDir & JavadocCache & Scope, NotFoundError | JavadocFileNotFound | JavadocContentError, String] =
-    javadocSymbolContents(groupArtifactVersion, "index.html")
-
-  def sources(groupArtifactVersion: GroupArtifactVersion):
-      ZIO[Client & TmpDir & FetchBlocker & Scope, NotFoundError, File] =
-    val sourcesUriOrDie: ZIO[Client & Scope, NotFoundError, URL] =
-      MavenCentral.sourcesUri(groupArtifactVersion.groupId, groupArtifactVersion.artifactId, groupArtifactVersion.version)
-        .retryOnServerError
-        .catchAll:
-          case t: Throwable => ZIO.die(t)
-          case sourcesNotFoundError: NotFoundError => ZIO.fail(sourcesNotFoundError)
-
-    defer:
-      val tmpDir = ZIO.service[TmpDir].run
-      val sourcesDir = File(tmpDir.dir, s"${groupArtifactVersion.toString}-sources")
-      val blocker = ZIO.service[FetchBlocker].run
-
-      // See `Extractor.javadoc` for the rationale behind this coordination.
-      val myPromise = Promise.make[NotFoundError, Unit].run
-      val existing = blocker.sources.putIfAbsent(groupArtifactVersion, myPromise).run
-      existing match
-        case Some(inFlight) =>
-          ZIO.logInfo(s"Awaiting in-flight sources extraction: $groupArtifactVersion").run
-          inFlight.await.run
-        case None =>
-          val work: ZIO[Client & Scope, NotFoundError, Unit] =
-            defer:
-              if !sourcesDir.exists() then
-                val sourcesUrl = sourcesUriOrDie.run
-                ZIO.logInfo(s"Downloading sources: $sourcesUrl").run
-                val duration = MavenCentral.downloadAndExtractZip(sourcesUrl, sourcesDir)
-                  .orDie.timed.map(_._1).run
-                ZIO.logInfo(s"Downloaded sources: $groupArtifactVersion duration=${duration.toMillis}ms").run
-          work.onExit: exit =>
-            blocker.sources.remove(groupArtifactVersion) *> myPromise.done(exit)
-          .run
-
-      ZIO.addFinalizer(
-        ZIO.logInfo(s"Evicting sources cache entry: $groupArtifactVersion") *>
-          ZIO.attemptBlockingIO(deleteDirBlocking(sourcesDir)).ignoreLogged
-      ).run
-
-      sourcesDir
-
-  def javadocFile(groupArtifactVersion: GroupArtifactVersion, javadocDir: File, path: String):
-      ZIO[Any, JavadocFileNotFound, File] =
-
-    val normalizedPath = path.takeWhile(_ != '#')
-
-    val javadocFile = File(javadocDir, normalizedPath)
-
-    if javadocFile.exists() && javadocFile.isFile then
-      ZIO.succeed(javadocFile)
-    else
-      ZIO.fail(JavadocFileNotFound(groupArtifactVersion, path))
+  /** Read a single jar entry as a UTF-8 string, mapping a missing entry
+   *  to [[JavadocFileNotFound]]. */
+  private def readEntryString(
+    handle: JarCache.JarHandle,
+    gav: GroupArtifactVersion,
+    path: String,
+  ): IO[JavadocFileNotFound, String] =
+    handle.readEntryString(normalizePath(path))
+      .mapError(_ => JavadocFileNotFound(gav, path))
 
   def parseScaladoc(contents: String): Either[String, Set[Content]] =
     import zio.json.*
@@ -239,116 +82,89 @@ object Extractor:
     case class KotlindocEntry(name: String, description: String, location: String) derives JsonDecoder
     contents.fromJson[Set[KotlindocEntry]].map(_.map(e => Content(e.location, false, e.description, e.name.trim, "", "")))
 
-  def bruteForce(baseDir: File): ZIO[Any, Nothing, Set[Content]] =
-    ZIO.attemptBlockingIO:
-      // todo: handle index.html & zio/stm/index.html
-      Files.walk(baseDir.toPath).iterator().asScala
-        .filter { path =>
-          path.toString.endsWith(".html")
-        }
-        .map { path =>
-          Content(
-            baseDir.toPath.relativize(path).toString,
-            false,
-            path.getFileName.toString.stripSuffix(".html"),
-            "",
-            "",
-            "",
-          )
-        }
-        .toSet
-    .orDie
+  /** Last-resort symbol set: every `.html` entry name in the jar. */
+  def bruteForce(handle: JarCache.JarHandle): ZIO[Any, Nothing, Set[Content]] =
+    handle.filterEntryNames(_.endsWith(".html")).map { names =>
+      names.map { name =>
+        val fileName = name.substring(name.lastIndexOf('/') + 1)
+        Content(name, false, fileName.stripSuffix(".html"), "", "", "")
+      }
+    }
 
   case class JavadocFormatFailure()
 
-  // todo: handle order version of scaladoc (fun!)
-  def javadocScalaFormat(groupArtifactVersion: GroupArtifactVersion, javadocDir: File):
+  // todo: handle older versions of scaladoc
+  def javadocScalaFormat(gav: GroupArtifactVersion, handle: JarCache.JarHandle):
       ZIO[Any, JavadocFormatFailure, Set[Content]] =
-    javadocFile(groupArtifactVersion, javadocDir, "scripts/searchData.js")
-      .flatMap: file =>
-        ZIO.attemptBlockingIO(Files.readString(file.toPath).stripPrefix("pages = ").stripSuffix(";")).flatMap: contents =>
-          ZIO.fromEither(parseScaladoc(contents))
-      .orElseFail(JavadocFormatFailure())
+    handle.readEntryString("scripts/searchData.js")
+      .mapError(_ => JavadocFormatFailure())
+      .flatMap: raw =>
+        val contents = raw.stripPrefix("pages = ").stripSuffix(";")
+        ZIO.fromEither(parseScaladoc(contents)).orElseFail(JavadocFormatFailure())
 
-  // todo: handle order version of dokka (fun!)
-  def javadocKotlinFormat(groupArtifactVersion: GroupArtifactVersion, javadocDir: File):
+  // todo: handle older versions of dokka
+  def javadocKotlinFormat(gav: GroupArtifactVersion, handle: JarCache.JarHandle):
       ZIO[Any, JavadocFormatFailure, Set[Content]] =
-    javadocFile(groupArtifactVersion, javadocDir, "scripts/pages.json")
-      .flatMap: file =>
-        ZIO.attemptBlockingIO(Files.readString(file.toPath)).flatMap: contents =>
-          ZIO.fromEither(parseKotlindoc(contents))
-      .orElseFail(JavadocFormatFailure())
+    handle.readEntryString("scripts/pages.json")
+      .mapError(_ => JavadocFormatFailure())
+      .flatMap: contents =>
+        ZIO.fromEither(parseKotlindoc(contents)).orElseFail(JavadocFormatFailure())
 
   // could be better based on index-all.html
-  def javadocJavaFormat(groupArtifactVersion: GroupArtifactVersion, javadocDir: File):
+  def javadocJavaFormat(gav: GroupArtifactVersion, handle: JarCache.JarHandle):
       ZIO[Any, JavadocFormatFailure, Set[Content]] =
-    javadocFile(groupArtifactVersion, javadocDir, "element-list")
-      .orElseFail(JavadocFormatFailure())
-      .flatMap: file =>
-        ZIO.attemptBlockingIO:
-          val lines = Files.readAllLines(file.toPath).asScala
-          // extract module directories (lines like "module:org.webjars.locator_lite")
-          val moduleDirs = lines.collect:
-            case line if line.startsWith("module:") => line.stripPrefix("module:")
-          // package entries are lines without "module:" prefix
-          val packages = lines.filterNot(_.startsWith("module:")).filter(_.nonEmpty)
+    handle.readEntryString("element-list")
+      .mapError(_ => JavadocFormatFailure())
+      .flatMap: raw =>
+        val lines = raw.linesIterator.toVector
+        // Modular javadocs prefix package lists with "module:<modName>".
+        val moduleDirs = lines.collect:
+          case line if line.startsWith("module:") => line.stripPrefix("module:")
+        val packages = lines.filterNot(_.startsWith("module:")).filter(_.nonEmpty)
 
-          def walkPackageDir(baseDir: File, pkg: String): Seq[Content] =
-            val pkgDir = File(baseDir, pkg.replace('.', '/'))
-            if pkgDir.isDirectory then
-              val files = Files.walk(pkgDir.toPath).iterator().asScala
-              files
-                .map(javadocDir.toPath.relativize) // always relative to javadoc root
-                .filter: file =>
-                  file.toString.endsWith(".html") &&
-                    !file.getFileName.toString.startsWith("package-") &&
-                    !file.toString.contains("class-use")
-                .map: file =>
-                  val fqn = file.toString.stripSuffix(".html").replace('/', '.')
-                  Content(file.toString, false, fqn, "", "", "")
-                .toSeq
-            else
-              Seq.empty
+        handle.entryNames.map: allEntries =>
+          def entriesUnderPkg(prefix: String, pkg: String): Set[Content] =
+            // Match jar entries whose path begins with `<prefix><pkg-as-path>/`,
+            // are .html, and aren't package-* / class-use noise.
+            val pkgPath = if prefix.isEmpty then pkg.replace('.', '/') + "/"
+                          else prefix + "/" + pkg.replace('.', '/') + "/"
+            allEntries.collect {
+              case name if name.startsWith(pkgPath)
+                && name.endsWith(".html")
+                && !name.substring(pkgPath.length).startsWith("package-")
+                && !name.contains("class-use")
+                && !name.substring(pkgPath.length).contains("/") =>
+                val fqn = name.stripSuffix(".html").replace('/', '.').stripPrefix(prefix.replace('/', '.'))
+                  .stripPrefix(".")
+                Content(name, false, fqn, "", "", "")
+            }
 
           packages.flatMap: pkg =>
-            // try root first, then under each module directory
-            val fromRoot = walkPackageDir(javadocDir, pkg)
+            val fromRoot = entriesUnderPkg("", pkg)
             if fromRoot.nonEmpty then fromRoot
-            else moduleDirs.flatMap(mod => walkPackageDir(File(javadocDir, mod), pkg))
+            else moduleDirs.flatMap(mod => entriesUnderPkg(mod, pkg)).toSet
           .toSet
-        .mapError(_ => JavadocFormatFailure())
 
   def javadocContents(groupArtifactVersion: GroupArtifactVersion):
-      ZIO[JavadocCache & Client & TmpDir & Scope, MavenCentral.NotFoundError, Set[Content]] =
+      ZIO[JavadocCache & Client, NotFoundError, Set[Content]] =
     defer:
-      val javadocCache = ZIO.service[JavadocCache].run
-      val javadocDir = javadocCache.getDir(groupArtifactVersion).run
-
-      javadocScalaFormat(groupArtifactVersion, javadocDir)
-        .orElse(javadocKotlinFormat(groupArtifactVersion, javadocDir))
-        .orElse(javadocJavaFormat(groupArtifactVersion, javadocDir))
+      val cache  = ZIO.service[JavadocCache].run
+      val handle = cache.get(groupArtifactVersion).run
+      javadocScalaFormat(groupArtifactVersion, handle)
+        .orElse(javadocKotlinFormat(groupArtifactVersion, handle))
+        .orElse(javadocJavaFormat(groupArtifactVersion, handle))
         .catchAll:
-          case _: JavadocFormatFailure =>
-            bruteForce(javadocDir)
-          case e: NotFoundError =>
-            ZIO.fail(e)
+          case _: JavadocFormatFailure => bruteForce(handle)
         .run
 
-  def fileList(path: Path): ZIO[Any, Nothing, Set[String]] =
-    ZIO.attemptBlockingIO:
-      Files.walk(path).iterator().asScala
-        .filter(_.toFile.isFile)
-        .map(path.relativize(_).toString)
-        .toSet
-    .orDie
-
   def sourceContents(groupArtifactVersion: GroupArtifactVersion):
-      ZIO[SourcesCache & Client & TmpDir & Scope, MavenCentral.NotFoundError, Set[String]] =
+      ZIO[SourcesCache & Client, NotFoundError, Set[String]] =
     defer:
-      val sourcesCache = ZIO.service[SourcesCache].run
-      val sourcesDir = sourcesCache.getDir(groupArtifactVersion).run
-      fileList(sourcesDir.toPath).run
-
+      val cache  = ZIO.service[SourcesCache].run
+      val handle = cache.get(groupArtifactVersion).run
+      // Mimic the previous Files.walk-of-regular-files semantics: ZipFile
+      // entries that look like directories (trailing '/') are excluded.
+      handle.filterEntryNames(name => !name.endsWith("/")).run
 
   def javaDocTextSymbolContents(contents: String): Option[String] =
     HtmlToMarkdown.convert(contents).content().toScala
@@ -360,31 +176,45 @@ object Extractor:
     HtmlToMarkdown.convert(contentRoot.outerHtml()).content().toScala
 
   def javadocSymbolContents(groupArtifactVersion: GroupArtifactVersion, path: String):
-      ZIO[JavadocCache & Client & TmpDir & Scope, NotFoundError | JavadocFileNotFound | JavadocContentError, String] =
+      ZIO[JavadocCache & Client, NotFoundError | JavadocFileNotFound | JavadocContentError, String] =
     defer:
-      val javadocCache = ZIO.service[JavadocCache].run
-      val javadocDir = javadocCache.getDir(groupArtifactVersion).run
+      val cache    = ZIO.service[JavadocCache].run
+      val handle   = cache.get(groupArtifactVersion).run
+      val contents = readEntryString(handle, groupArtifactVersion, path).run
 
-      javadocFile(groupArtifactVersion, javadocDir, path)
-        .flatMap: file =>
-          ZIO.attemptBlockingIO(Files.readString(file.toPath)).orDie.flatMap: contents =>
-            val maybeResult =
-              if contents.contains("Generated by javadoc") then
-                javaDocTextSymbolContents(contents)
-              else if contents.contains("<div id=\"content\" class=\"body-medium\"") then
-                scalaDocTextSymbolContents(contents)
-              else
-                Some(contents)
-            ZIO.fromOption(maybeResult).mapError(_ => JavadocContentError(groupArtifactVersion, path))
-      .run
+      val maybeResult =
+        if contents.contains("Generated by javadoc") then javaDocTextSymbolContents(contents)
+        else if contents.contains("<div id=\"content\" class=\"body-medium\"") then scalaDocTextSymbolContents(contents)
+        else Some(contents)
+
+      ZIO.fromOption(maybeResult).mapError(_ => JavadocContentError(groupArtifactVersion, path)).run
+
+  /** Raw bytes for a single jar entry, used by the HTTP file-serving path
+   *  in `Web.scala` (response body comes from these bytes). */
+  def javadocEntryBytes(groupArtifactVersion: GroupArtifactVersion, path: String):
+      ZIO[JavadocCache & Client, NotFoundError | JavadocFileNotFound, Array[Byte]] =
+    defer:
+      val cache  = ZIO.service[JavadocCache].run
+      val handle = cache.get(groupArtifactVersion).run
+      handle.readEntry(normalizePath(path))
+        .mapError(_ => JavadocFileNotFound(groupArtifactVersion, path))
+        .run
+
+  /** Direct access to a javadoc jar's handle. Used when callers need
+   *  multiple entries / metadata. */
+  def javadocJar(groupArtifactVersion: GroupArtifactVersion):
+      ZIO[JavadocCache & Client, NotFoundError, JarCache.JarHandle] =
+    ZIO.serviceWithZIO[JavadocCache](_.get(groupArtifactVersion))
+
+  /** MCP convenience: read `index.html` from the javadoc jar as a markdown
+   *  string. Equivalent to `javadocSymbolContents(gav, "index.html")`. */
+  def index(groupArtifactVersion: GroupArtifactVersion):
+      ZIO[JavadocCache & Client, NotFoundError | JavadocFileNotFound | JavadocContentError, String] =
+    javadocSymbolContents(groupArtifactVersion, "index.html")
 
   def sourceFileContents(groupArtifactVersion: GroupArtifactVersion, path: String):
-      ZIO[SourcesCache & Client & TmpDir & Scope, NotFoundError | JavadocFileNotFound, String] =
+      ZIO[SourcesCache & Client, NotFoundError | JavadocFileNotFound, String] =
     defer:
-      val sourcesCache = ZIO.service[SourcesCache].run
-      val sourcesDir = sourcesCache.getDir(groupArtifactVersion).run
-
-      javadocFile(groupArtifactVersion, sourcesDir, path)
-        .flatMap: file =>
-          ZIO.attemptBlockingIO(Files.readString(file.toPath)).orDie
-        .run
+      val cache  = ZIO.service[SourcesCache].run
+      val handle = cache.get(groupArtifactVersion).run
+      readEntryString(handle, groupArtifactVersion, path).run

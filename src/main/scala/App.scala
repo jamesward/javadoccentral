@@ -1,6 +1,6 @@
-import com.jamesward.zio_mavencentral.MavenCentral
+import com.jamesward.zio_mavencentral.{JarCache, MavenCentral}
 import zio.*
-import zio.cache.{Cache, Lookup, ScopedCache, ScopedLookup}
+import zio.cache.{Cache, Lookup}
 import zio.concurrent.ConcurrentMap
 import zio.direct.*
 import zio.http.*
@@ -34,40 +34,34 @@ object App extends ZIOAppDefault:
       loggedResponseHeaders = Set(Header.ContentLength, Header.ContentType)
     ))
 
-  val latestCacheLayer: ZLayer[Client & Scope, Nothing, Extractor.LatestCache] = ZLayer.fromZIO:
+  val latestCacheLayer: ZLayer[Client, Nothing, Extractor.LatestCache] = ZLayer.fromZIO:
     Cache.makeWith(1_000, Lookup(Extractor.latest)):
       case Exit.Success(_) => 1.hour
       case Exit.Failure(_) => Duration.Zero
     .map(Extractor.LatestCache(_))
 
-  // Extracted javadoc/sources directories live on the dyno's ephemeral disk
-  // and contribute to memory pressure via the kernel page cache. The cache
-  // is backed by `zio.cache.ScopedCache` so each entry owns a Scope; the
-  // scope's finalizer deletes the directory the moment the entry is evicted
-  // (capacity overflow, TTL expiry, or explicit invalidation).
-  val javadocCacheTtl: Duration = 2.hours
-  val javadocCacheCapacity: Int = 100
+  // Cached jars live on the dyno's ephemeral disk. Each cache entry owns one
+  // immutable `.jar` file plus an open `ZipFile` handle; reads are random-
+  // access into that handle. There is no eviction in normal operation —
+  // Heroku's daily dyno restart is the natural reset, and we have far more
+  // ephemeral disk (281 GB observed) than 24h of jars need (~25 GB worst-case).
+  val jarCacheRoot: java.io.File = Files.createTempDirectory("jar-cache").nn.toFile
 
-  val javadocCacheLayer: ZLayer[Client & Extractor.TmpDir & Extractor.FetchBlocker & Scope, Nothing, Extractor.JavadocCache] = ZLayer.fromZIO:
-    ScopedCache.makeWith(javadocCacheCapacity, ScopedLookup(Extractor.javadoc)):
-      case Exit.Success(_) => javadocCacheTtl
-      case Exit.Failure(_) => Duration.Zero
-    .map(Extractor.JavadocCache(_))
+  val javadocCacheLayer: ZLayer[Client, Nothing, Extractor.JavadocCache] =
+    ZLayer.scoped:
+      JarCache.make(
+        java.io.File(jarCacheRoot, "javadoc"),
+        JarCache.httpDownloader(gav => MavenCentral.javadocUri(gav.groupId, gav.artifactId, gav.version)),
+        label = "javadoc",
+      ).map(new Extractor.JavadocCache(_))
 
-  val sourcesCacheLayer: ZLayer[Client & Extractor.TmpDir & Extractor.FetchBlocker & Scope, Nothing, Extractor.SourcesCache] = ZLayer.fromZIO:
-    ScopedCache.makeWith(javadocCacheCapacity, ScopedLookup(Extractor.sources)):
-      case Exit.Success(_) => javadocCacheTtl
-      case Exit.Failure(_) => Duration.Zero
-    .map(Extractor.SourcesCache(_))
-
-  val tmpDirLayer = ZLayer.succeed(Extractor.TmpDir(Files.createTempDirectory("jars").nn.toFile))
-
-  val fetchBlockerLayer: ZLayer[Any, Nothing, Extractor.FetchBlocker] =
-    ZLayer.fromZIO:
-      defer:
-        val javadocMap = ConcurrentMap.empty[MavenCentral.GroupArtifactVersion, Promise[MavenCentral.NotFoundError, Unit]].run
-        val sourcesMap = ConcurrentMap.empty[MavenCentral.GroupArtifactVersion, Promise[MavenCentral.NotFoundError, Unit]].run
-        Extractor.FetchBlocker(javadocMap, sourcesMap)
+  val sourcesCacheLayer: ZLayer[Client, Nothing, Extractor.SourcesCache] =
+    ZLayer.scoped:
+      JarCache.make(
+        java.io.File(jarCacheRoot, "sources"),
+        JarCache.httpDownloader(gav => MavenCentral.sourcesUri(gav.groupId, gav.artifactId, gav.version)),
+        label = "sources",
+      ).map(new Extractor.SourcesCache(_))
 
   val symbolSearchGuardLayer: ZLayer[Any, Nothing, SymbolSearch.SymbolSearchGuard] =
     ZLayer.fromZIO:
@@ -134,13 +128,14 @@ object App extends ZIOAppDefault:
     val mb = (b: Long) => b / 1024 / 1024
     s"heap_used=${mb(heap.getUsed)}MB heap_committed=${mb(heap.getCommitted)}MB nonheap_used=${mb(nonHeap.getUsed)}MB nonheap_committed=${mb(nonHeap.getCommitted)}MB threads=$threadCount"
 
-  private val logCacheStats: ZIO[Extractor.JavadocCache & Extractor.SourcesCache & Extractor.TmpDir, Nothing, Unit] =
+  private val logCacheStats: ZIO[Extractor.JavadocCache & Extractor.SourcesCache, Nothing, Unit] =
     defer:
-      val javadocCacheSize = ZIO.serviceWithZIO[Extractor.JavadocCache](_.cache.size).run
-      val sourcesCacheSize = ZIO.serviceWithZIO[Extractor.SourcesCache](_.cache.size).run
-      val tmpDir = ZIO.service[Extractor.TmpDir].run.dir
-      val diskBytes = ZIO.attemptBlockingIO(dirSize(tmpDir)).orDie.run
-      ZIO.logInfo(s"cache stats: javadoc=$javadocCacheSize sources=$sourcesCacheSize disk=${diskBytes / 1024 / 1024}MB $jvmMemStats").run
+      val javadocCacheSize  = ZIO.serviceWithZIO[Extractor.JavadocCache](_.cache.size).run
+      val sourcesCacheSize  = ZIO.serviceWithZIO[Extractor.SourcesCache](_.cache.size).run
+      val javadocCacheBytes = ZIO.serviceWithZIO[Extractor.JavadocCache](_.cache.totalBytes).run
+      val sourcesCacheBytes = ZIO.serviceWithZIO[Extractor.SourcesCache](_.cache.totalBytes).run
+      val totalMB = (javadocCacheBytes + sourcesCacheBytes) / 1024 / 1024
+      ZIO.logInfo(s"cache stats: javadoc=$javadocCacheSize sources=$sourcesCacheSize disk=${totalMB}MB $jvmMemStats").run
 
   // How often to sample cache / memory stats for the logs.
   private val statsInterval: Duration = 1.minute
@@ -155,20 +150,16 @@ object App extends ZIOAppDefault:
     Runtime.enableLoomBasedBlockingExecutor
 
   def run =
-    // `ScopedCache` runs its own background TTL sweeper (every second) and
-    // cleans up evicted entries via the scope finalizer registered in
-    // `Extractor.javadoc` / `Extractor.sources`. No custom janitor needed.
+    // `JarCache` is append-only for the dyno's lifetime; ZipFile handles
+    // are released when the cache layer's scope closes at app shutdown.
     val background =
       logCacheStats.repeat(Schedule.spaced(statsInterval)).forkDaemon
     (background *> Server.serve(Web.appWithMiddleware)).provide(
       server,
       clientLayer,
-      Scope.default,
       latestCacheLayer,
       javadocCacheLayer,
       sourcesCacheLayer,
-      tmpDirLayer,
-      fetchBlockerLayer,
       redisConfigLayer,
       redisAuthLayer,
       ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
