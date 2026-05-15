@@ -134,6 +134,5 @@ object SymbolSearchSpec extends ZIOSpecDefault:
       ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
       SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
       App.symbolSearchGuardLayer,
-      Scope.default,
     ) @@ TestAspect.ifEnvSet("REDIS_URL") @@ TestAspect.timeout(10.seconds),
   ) @@ TestAspect.withLiveSystem @@ TestAspect.sequential

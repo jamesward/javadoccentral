@@ -24,6 +24,24 @@ You can also specify `latest` for the version, like:
 You can search for symbols with a query parameter, like:
 `https://www.javadocs.dev/?WebJarAssetLocator`
 
+## Badge
+
+Display a `javadocs.dev | <latest version>` badge in your project's README. The badge resolves the latest version on Maven Central and is cached for an hour.
+
+URL format: `https://www.javadocs.dev/GROUP_ID/ARTIFACT_ID/badge.svg`
+
+Markdown:
+
+```markdown
+[![javadocs.dev](https://www.javadocs.dev/com.jamesward/zio-mavencentral_3/badge.svg)](https://www.javadocs.dev/com.jamesward/zio-mavencentral_3/latest)
+```
+
+HTML:
+
+```html
+<a href="https://www.javadocs.dev/com.jamesward/zio-mavencentral_3/latest"><img src="https://www.javadocs.dev/com.jamesward/zio-mavencentral_3/badge.svg" alt="javadocs.dev"></a>
+```
+
 ## MCP Server
 
 Point your MCP client to `https://www.javadocs.dev/mcp` (Streamable HTTP)

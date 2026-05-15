@@ -92,6 +92,13 @@ javaOptions ++= Seq(
   "-XX:MaxMetaspaceSize=96m",
   "-XX:ReservedCodeCacheSize=48m",
   "-XX:CICompilerCount=2",
+  // JDK 25: silence "terminally deprecated sun.misc.Unsafe" warnings
+  // emitted by scala-library (LazyVals$) and "restricted method
+  // java.lang.System::loadLibrary" warnings emitted by netty-common.
+  // Both are upstream and unavoidable until those libraries migrate;
+  // these flags suppress the noise.
+  "--enable-native-access=ALL-UNNAMED",
+  "--sun-misc-unsafe-memory-access=allow",
 )
 
 lazy val runTest = taskKey[Unit]("run AppTest")

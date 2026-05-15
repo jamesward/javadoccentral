@@ -194,6 +194,58 @@ object Web:
               Response.notFound((groupArtifactVersion.toPath ++ file).toString)
       Handler.fromFunctionZIO[(MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request)](_ => responseEffect)
 
+  /** Shields.io static-badge URL for a label/message/color triple. The
+   *  label and message are URL-encoded so `.`, `+`, `-`, and other
+   *  punctuation survive transport. */
+  private def shieldsBadgeUrl(label: String, message: String, color: String): URL =
+    val msg = java.net.URLEncoder.encode(message, "UTF-8").nn
+    val lbl = java.net.URLEncoder.encode(label, "UTF-8").nn
+    URL.decode(s"https://img.shields.io/static/v1?label=$lbl&message=$msg&color=$color")
+      .toOption
+      .getOrElse(throw new RuntimeException(s"failed to build shields.io URL for $label/$message"))
+
+  /** Cache the *redirect* response (not the underlying SVG) for an hour at
+   *  intermediaries. Browsers and CDNs that fetch this URL on every README
+   *  view will reuse the cached 302 instead of re-resolving `latest`. The
+   *  upstream `Extractor.LatestCache` already memoizes for 1 hour, so the
+   *  client-side TTL matches the server-side TTL. */
+  private val badgeCacheControl: Header.CacheControl =
+    Header.CacheControl.Multiple(NonEmptyChunk(
+      Header.CacheControl.Public,
+      Header.CacheControl.MaxAge(1.hour.toSeconds.toInt),
+    ))
+
+  /** Shorter TTL for the failure case — if the artifact starts existing later,
+   *  we want the badge to flip to the real version reasonably quickly. */
+  private val badgeNotFoundCacheControl: Header.CacheControl =
+    Header.CacheControl.Multiple(NonEmptyChunk(
+      Header.CacheControl.Public,
+      Header.CacheControl.MaxAge(5.minutes.toSeconds.toInt),
+    ))
+
+  /** GET /{groupId}/{artifactId}/badge.svg
+   *
+   *  Public badge endpoint for any Maven Central artifact. Resolves the
+   *  latest version and 302-redirects to a shields.io static badge of the
+   *  form `javadocs.dev | <version>`. Designed to be embedded in third-party
+   *  README files alongside a link to `https://javadocs.dev/{g}/{a}/latest`.
+   *
+   *  Failures (unknown GAV, upstream error) redirect to a red "not found"
+   *  badge so the README still renders, and we don't leak 5xx through any
+   *  upstream image cache. */
+  def badge(gId: MavenCentral.GroupId, aId: MavenCentral.ArtifactId, @unused request: Request):
+      Handler[Extractor.LatestCache, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, Request), Response] =
+    val ga = MavenCentral.GroupArtifact(gId, aId)
+    Handler.fromZIO:
+      ZIO.serviceWithZIO[Extractor.LatestCache](_.cache.get(ga))
+    .map: version =>
+      Response.redirect(shieldsBadgeUrl("javadocs.dev", version.toString, "blue"))
+        .addHeader(badgeCacheControl)
+    .catchAll: _ =>
+      Response.redirect(shieldsBadgeUrl("javadocs.dev", "not found", "red"))
+        .addHeader(badgeNotFoundCacheControl)
+        .toHandler
+
   private def groupIdExtractor(groupId: String): Either[String, MavenCentral.GroupId] =
     if groupId == "mcp" then
       Left("mcp")
@@ -430,6 +482,10 @@ object Web:
       getOrHead / ".well-known" / trailing -> Handler.notFound,
       getOrHead / groupId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, Request)](withGroupId),
       getOrHead / groupId / artifactId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, Request)](withArtifactId),
+      // Must be registered before the version-trailing catch-all below;
+      // otherwise `/g/a/badge.svg` would be interpreted as the version segment
+      // of a (non-existent) artifact and 404.
+      getOrHead / groupId / artifactId / "badge.svg" -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, Request)](badge),
       getOrHead / groupId / artifactId / version / trailing -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request)](withVersionAndFile),
     )
 

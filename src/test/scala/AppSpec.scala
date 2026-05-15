@@ -144,6 +144,39 @@ object AppSpec extends ZIOSpecDefault:
           headResp.status == Status.NotFound,
           headBody.isEmpty,
         )
+    , test("badge redirects to shields.io with the latest version"):
+      val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
+      defer:
+        val badge = Web.appWithMiddleware.runZIO(
+          Request.get(URL(Path.root / "com.jamesward" / "travis-central-test" / "badge.svg")).addHeader(forwardedForHeader)
+        ).run
+        // Unknown artifact -> still a redirect, but to a "not found" badge.
+        val notFound = Web.appWithMiddleware.runZIO(
+          Request.get(URL(Path.root / "asdfqwerzzxcv" / "no-such-artifact" / "badge.svg")).addHeader(forwardedForHeader)
+        ).run
+
+        val location   = badge.headers.get(Header.Location).map(_.renderedValue).getOrElse("")
+        val locationNF = notFound.headers.get(Header.Location).map(_.renderedValue).getOrElse("")
+
+        assertTrue(
+          badge.status.isRedirection,
+          location.startsWith("https://img.shields.io/static/v1?"),
+          location.contains("label=javadocs.dev"),
+          // A real version string should land in the message; we don't pin a
+          // specific version (it could change), just assert it's present and
+          // non-empty.
+          location.contains("&message="),
+          !location.contains("&message=&"),
+          location.contains("&color=blue"),
+          badge.header(Header.CacheControl).exists(_.renderedValue.contains("max-age=3600")),
+          badge.header(Header.CacheControl).exists(_.renderedValue.contains("public")),
+
+          notFound.status.isRedirection,
+          locationNF.startsWith("https://img.shields.io/static/v1?"),
+          locationNF.contains("label=javadocs.dev"),
+          locationNF.contains("&color=red"),
+          notFound.header(Header.CacheControl).exists(_.renderedValue.contains("max-age=300")),
+        )
     , test("rate limit bad actors"):
       defer:
         val forwardedBadActorHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
