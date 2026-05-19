@@ -55,11 +55,11 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-schema-json"       % "1.8.5",
   "dev.zio" %% "zio-schema-derivation" % "1.8.5",
 
-  "org.slf4j" % "slf4j-simple" % "2.0.17",
+  "org.slf4j" % "slf4j-simple" % "2.0.18",
 
   "org.jsoup" % "jsoup" % "1.22.2",
 
-  "dev.kreuzberg" % "html-to-markdown" % "3.3.3",
+  "dev.kreuzberg" % "html-to-markdown" % "3.4.1",
 
   "dev.zio" %% "zio-test"           % zioVersion % Test,
   "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,
@@ -77,7 +77,7 @@ libraryDependencies ++= {
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioMavenCentralDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-mavencentral" % "0.8.0")
+  else Seq("com.jamesward" %% "zio-mavencentral" % "0.8.3")
 }
 
 Compile / packageDoc / publishArtifact := false

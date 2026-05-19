@@ -10,7 +10,6 @@ import zio.prelude.data.Optional.AllValuesAreNullable
 import zio.{IO, ZIO}
 
 import java.nio.charset.StandardCharsets
-import scala.jdk.OptionConverters.*
 
 /**
  * Javadoc/sources reading on top of `zio-mavencentral`'s [[JarCache]].
@@ -167,13 +166,13 @@ object Extractor:
       handle.filterEntryNames(name => !name.endsWith("/")).run
 
   def javaDocTextSymbolContents(contents: String): Option[String] =
-    HtmlToMarkdown.convert(contents).content().toScala
+    Option(HtmlToMarkdown.convert(contents).content())
 
   def scalaDocTextSymbolContents(contents: String): Option[String] =
     val document = Jsoup.parse(contents)
     val contentRoot = Option(document.selectFirst("#content > div"))
       .getOrElse(document.body())
-    HtmlToMarkdown.convert(contentRoot.outerHtml()).content().toScala
+    Option(HtmlToMarkdown.convert(contentRoot.outerHtml()).content())
 
   def javadocSymbolContents(groupArtifactVersion: GroupArtifactVersion, path: String):
       ZIO[JavadocCache & Client, NotFoundError | JavadocFileNotFound | JavadocContentError, String] =
