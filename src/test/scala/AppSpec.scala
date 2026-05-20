@@ -1,3 +1,5 @@
+import com.jamesward.zio_http_guard.{BadActor, BadActorMiddleware, CrawlerLimiter}
+import com.jamesward.zio_mavencentral.MavenCentral
 import com.jamesward.zio_mavencentral.MavenCentral.given
 import zio.*
 import zio.concurrent.ConcurrentMap
@@ -213,7 +215,7 @@ object AppSpec extends ZIOSpecDefault:
         )
     , test("gibberish"):
       defer:
-        val gibberishFromStreamFork = Web.gibberishStream.runCollect.timed.fork.run
+        val gibberishFromStreamFork = BadActorMiddleware.gibberishStream.runCollect.timed.fork.run
         // we can't just move the clock once as that won't trigger the interrupt
         TestClock.adjust(1.second).forever.fork.run
         val (duration, gibberish) = gibberishFromStreamFork.join.run
@@ -297,12 +299,13 @@ object AppSpec extends ZIOSpecDefault:
     App.sourcesCacheLayer,
     App.latestCacheLayer,
     Client.default,
+    MavenCentral.MavenCentralRepo.live,
     EmbeddedRedis.layer,
     Redis.singleNode,
     ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
     SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
     BadActor.live,
-    Web.crawlerGavLimiterLayer,
+    CrawlerLimiter.layer[MavenCentral.GroupArtifactVersion],
       App.symbolSearchGuardLayer,
     // Test-level Scope: `Handler#runZIO` returns `ZIO[Scope & R, ...]`,
     // so invoking the app from test bodies needs a `Scope`.

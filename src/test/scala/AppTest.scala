@@ -1,3 +1,5 @@
+import com.jamesward.zio_http_guard.{BadActor, CrawlerLimiter}
+import com.jamesward.zio_mavencentral.MavenCentral
 import zio.*
 import zio.http.*
 import zio.redis.embedded.EmbeddedRedis
@@ -9,6 +11,7 @@ object AppTest extends ZIOAppDefault:
     Server.serve(Web.appWithMiddleware).provide(
       App.server,
       Client.default,
+      MavenCentral.MavenCentralRepo.live,
       App.latestCacheLayer,
       App.javadocCacheLayer,
       App.sourcesCacheLayer,
@@ -17,6 +20,6 @@ object AppTest extends ZIOAppDefault:
       ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
       SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
       BadActor.live,
-      Web.crawlerGavLimiterLayer,
+      CrawlerLimiter.layer[MavenCentral.GroupArtifactVersion],
       App.symbolSearchGuardLayer,
     )

@@ -9,6 +9,8 @@ import zio.http.Client
 import zio.prelude.data.Optional.AllValuesAreNullable
 import zio.{IO, ZIO}
 
+import MavenCentral.MavenCentralRepo
+
 import java.nio.charset.StandardCharsets
 
 /**
@@ -43,16 +45,16 @@ object Extractor:
    * would be ambiguous).
    */
   final class JavadocCache(val cache: JarCache):
-    def get(gav: GroupArtifactVersion): ZIO[Client, NotFoundError, JarCache.JarHandle] =
+    def get(gav: GroupArtifactVersion): ZIO[Client & MavenCentralRepo, NotFoundError, JarCache.JarHandle] =
       cache.get(gav)
 
   final class SourcesCache(val cache: JarCache):
-    def get(gav: GroupArtifactVersion): ZIO[Client, NotFoundError, JarCache.JarHandle] =
+    def get(gav: GroupArtifactVersion): ZIO[Client & MavenCentralRepo, NotFoundError, JarCache.JarHandle] =
       cache.get(gav)
 
   /** Re-exported library helper. Kept as a method here so existing call
    *  sites (`Extractor.latest`) compile unchanged. */
-  def latest(groupArtifact: GroupArtifact): ZIO[Client, GroupIdOrArtifactIdNotFoundError | LatestNotFound, Version] =
+  def latest(groupArtifact: GroupArtifact): ZIO[MavenCentralRepo, GroupIdOrArtifactIdNotFoundError | LatestNotFound, Version] =
     MavenCentral.latestOrFail(groupArtifact)
 
   /** Strip an `#anchor` fragment so it doesn't disturb jar-entry lookup. */
@@ -145,7 +147,7 @@ object Extractor:
           .toSet
 
   def javadocContents(groupArtifactVersion: GroupArtifactVersion):
-      ZIO[JavadocCache & Client, NotFoundError, Set[Content]] =
+      ZIO[JavadocCache & Client & MavenCentralRepo, NotFoundError, Set[Content]] =
     defer:
       val cache  = ZIO.service[JavadocCache].run
       val handle = cache.get(groupArtifactVersion).run
@@ -157,7 +159,7 @@ object Extractor:
         .run
 
   def sourceContents(groupArtifactVersion: GroupArtifactVersion):
-      ZIO[SourcesCache & Client, NotFoundError, Set[String]] =
+      ZIO[SourcesCache & Client & MavenCentralRepo, NotFoundError, Set[String]] =
     defer:
       val cache  = ZIO.service[SourcesCache].run
       val handle = cache.get(groupArtifactVersion).run
@@ -175,7 +177,7 @@ object Extractor:
     Option(HtmlToMarkdown.convert(contentRoot.outerHtml()).content())
 
   def javadocSymbolContents(groupArtifactVersion: GroupArtifactVersion, path: String):
-      ZIO[JavadocCache & Client, NotFoundError | JavadocFileNotFound | JavadocContentError, String] =
+      ZIO[JavadocCache & Client & MavenCentralRepo, NotFoundError | JavadocFileNotFound | JavadocContentError, String] =
     defer:
       val cache    = ZIO.service[JavadocCache].run
       val handle   = cache.get(groupArtifactVersion).run
@@ -191,7 +193,7 @@ object Extractor:
   /** Raw bytes for a single jar entry, used by the HTTP file-serving path
    *  in `Web.scala` (response body comes from these bytes). */
   def javadocEntryBytes(groupArtifactVersion: GroupArtifactVersion, path: String):
-      ZIO[JavadocCache & Client, NotFoundError | JavadocFileNotFound, Array[Byte]] =
+      ZIO[JavadocCache & Client & MavenCentralRepo, NotFoundError | JavadocFileNotFound, Array[Byte]] =
     defer:
       val cache  = ZIO.service[JavadocCache].run
       val handle = cache.get(groupArtifactVersion).run
@@ -202,17 +204,17 @@ object Extractor:
   /** Direct access to a javadoc jar's handle. Used when callers need
    *  multiple entries / metadata. */
   def javadocJar(groupArtifactVersion: GroupArtifactVersion):
-      ZIO[JavadocCache & Client, NotFoundError, JarCache.JarHandle] =
+      ZIO[JavadocCache & Client & MavenCentralRepo, NotFoundError, JarCache.JarHandle] =
     ZIO.serviceWithZIO[JavadocCache](_.get(groupArtifactVersion))
 
   /** MCP convenience: read `index.html` from the javadoc jar as a markdown
    *  string. Equivalent to `javadocSymbolContents(gav, "index.html")`. */
   def index(groupArtifactVersion: GroupArtifactVersion):
-      ZIO[JavadocCache & Client, NotFoundError | JavadocFileNotFound | JavadocContentError, String] =
+      ZIO[JavadocCache & Client & MavenCentralRepo, NotFoundError | JavadocFileNotFound | JavadocContentError, String] =
     javadocSymbolContents(groupArtifactVersion, "index.html")
 
   def sourceFileContents(groupArtifactVersion: GroupArtifactVersion, path: String):
-      ZIO[SourcesCache & Client, NotFoundError | JavadocFileNotFound, String] =
+      ZIO[SourcesCache & Client & MavenCentralRepo, NotFoundError | JavadocFileNotFound, String] =
     defer:
       val cache  = ZIO.service[SourcesCache].run
       val handle = cache.get(groupArtifactVersion).run

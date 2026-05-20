@@ -1,3 +1,4 @@
+import com.jamesward.zio_mavencentral.MavenCentral
 import com.jamesward.zio_mavencentral.MavenCentral.*
 import zio.direct.*
 import zio.http.Client
@@ -173,6 +174,7 @@ object ExtractorSpec extends ZIOSpecDefault:
     } @@ TestAspect.timeout(2.minutes) @@ TestAspect.withLiveClock
   ).provide(
     Client.default,
+    MavenCentral.MavenCentralRepo.live,
     App.javadocCacheLayer,
     App.sourcesCacheLayer,
   )

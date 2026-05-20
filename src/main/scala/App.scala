@@ -1,3 +1,4 @@
+import com.jamesward.zio_http_guard.{BadActor, CrawlerLimiter}
 import com.jamesward.zio_mavencentral.{JarCache, MavenCentral}
 import zio.*
 import zio.cache.{Cache, Lookup}
@@ -34,7 +35,7 @@ object App extends ZIOAppDefault:
       loggedResponseHeaders = Set(Header.ContentLength, Header.ContentType)
     ))
 
-  val latestCacheLayer: ZLayer[Client, Nothing, Extractor.LatestCache] = ZLayer.fromZIO:
+  val latestCacheLayer: ZLayer[MavenCentral.MavenCentralRepo, Nothing, Extractor.LatestCache] = ZLayer.fromZIO:
     Cache.makeWith(1_000, Lookup(Extractor.latest)):
       case Exit.Success(_) => 1.hour
       case Exit.Failure(_) => Duration.Zero
@@ -157,6 +158,7 @@ object App extends ZIOAppDefault:
     (background *> Server.serve(Web.appWithMiddleware)).provide(
       server,
       clientLayer,
+      MavenCentral.MavenCentralRepo.live,
       latestCacheLayer,
       javadocCacheLayer,
       sourcesCacheLayer,
@@ -165,6 +167,6 @@ object App extends ZIOAppDefault:
       ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
       SymbolSearch.herokuInferenceLayer,
       BadActor.live,
-      Web.crawlerGavLimiterLayer,
+      CrawlerLimiter.layer[MavenCentral.GroupArtifactVersion],
       symbolSearchGuardLayer,
     )

@@ -13,7 +13,7 @@ import zio.stream.ZStream
 
 object SymbolSearch:
 
-  import MavenCentral.retryOnServerError
+  import MavenCentral.MavenCentralRepo
 
   val groupArtifactsKey = "_groupArtifacts"
   val gavCacheKey = "_gavCache"
@@ -116,7 +116,7 @@ object SymbolSearch:
       val workaroundForMarkdownContent = choice.message.content.replace("```json", "").replace("```", "").trim
       workaroundForMarkdownContent.fromJson[Set[MavenCentral.GroupArtifact]].getOrElse(Set.empty)
 
-  def search(symbol: String): ZIO[Redis & HerokuInference & Client & Extractor.JavadocCache & SymbolSearchGuard, SearchError, Set[MavenCentral.GroupArtifact]] =
+  def search(symbol: String): ZIO[Redis & HerokuInference & Client & MavenCentralRepo & Extractor.JavadocCache & SymbolSearchGuard, SearchError, Set[MavenCentral.GroupArtifact]] =
     defer:
       val redis = ZIO.service[Redis].run
 
@@ -158,7 +158,7 @@ object SymbolSearch:
         .run
         ZIO.logInfo(s"AI search: symbol=$symbol results=${aiResults.size}").run
         val validatedResults = ZIO.filterPar(aiResults): ga =>
-          MavenCentral.isArtifact(ga.groupId, ga.artifactId).retryOnServerError.orElseSucceed(false)
+          MavenCentral.isArtifact(ga.groupId, ga.artifactId).orElseSucceed(false)
         .run
         val indexLoad = validatedResults.map:
           groupArtifact =>
@@ -225,7 +225,7 @@ object SymbolSearch:
   // daemon. With `JarCache`'s append-only model the daemon's `JarHandle` stays
   // valid until app shutdown — no Scope coordination needed.
   def indexJavadocContents(groupArtifactVersion: MavenCentral.GroupArtifactVersion):
-    ZIO[Client & Extractor.JavadocCache & Redis & SymbolSearch.SymbolSearchGuard, Nothing, Unit] =
+    ZIO[Client & MavenCentralRepo & Extractor.JavadocCache & Redis & SymbolSearch.SymbolSearchGuard, Nothing, Unit] =
 
     val getContentsAndUpdateIndex =
       defer:

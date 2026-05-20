@@ -98,6 +98,7 @@ object SymbolSearchSpec extends ZIOSpecDefault:
       }
     ).provide(
       Client.default,
+      MavenCentral.MavenCentralRepo.live,
       App.javadocCacheLayer,
       EmbeddedRedis.layer,
       Redis.singleNode,
@@ -128,6 +129,7 @@ object SymbolSearchSpec extends ZIOSpecDefault:
       }
     ).provide(
       Client.default,
+      MavenCentral.MavenCentralRepo.live,
       App.javadocCacheLayer,
       App.redisConfigLayer,
       App.redisAuthLayer,

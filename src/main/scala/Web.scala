@@ -1,14 +1,13 @@
+import com.jamesward.zio_http_guard.{BadActor, BadActorMiddleware, CrawlerLimiter}
 import com.jamesward.zio_mavencentral.{GavCacheMiddleware, MavenCentral}
-import com.jamesward.zio_mavencentral.MavenCentral.retryOnServerError
+import com.jamesward.zio_mavencentral.MavenCentral.MavenCentralRepo
 import zio.*
-import zio.concurrent.ConcurrentMap
 import zio.direct.*
 import zio.durationInt
 import zio.http.*
 import zio.http.Header.Accept
 import zio.http.codec.PathCodec
 import zio.redis.Redis
-import zio.stream.ZStream
 
 import scala.annotation.unused
 
@@ -27,9 +26,9 @@ object Web:
   private def markdownResponse(content: String): Response =
     Response.text(content).contentType(MediaType.text.markdown)
 
-  def withGroupId(groupId: MavenCentral.GroupId, request: Request): Handler[Client, Nothing, (MavenCentral.GroupId, Request), Response] =
+  def withGroupId(groupId: MavenCentral.GroupId, request: Request): Handler[MavenCentralRepo, Nothing, (MavenCentral.GroupId, Request), Response] =
     Handler.fromZIO:
-      MavenCentral.searchArtifacts(groupId).retryOnServerError
+      MavenCentral.searchArtifacts(groupId)
     .flatMap: artifacts =>
       if acceptsMarkdown(request) then
         val md = s"# $groupId\n\n## Artifacts\n\n" +
@@ -43,24 +42,24 @@ object Web:
       else
         Response.html(UI.page("javadocs.dev", UI.invalidGroupId(groupId)), Status.NotFound).toHandler
 
-  def withArtifactId(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, request: Request): Handler[Client, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, Request), Response] =
+  def withArtifactId(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, request: Request): Handler[MavenCentralRepo, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, Request), Response] =
     Handler.fromZIO:
       defer:
-        val isArtifact = MavenCentral.isArtifact(groupId, artifactId).retryOnServerError.run
+        val isArtifact = MavenCentral.isArtifact(groupId, artifactId).run
         ZIO.when(isArtifact):
-          MavenCentral.searchVersions(groupId, artifactId).retryOnServerError
+          MavenCentral.searchVersions(groupId, artifactId)
         .run
     .flatMap: maybeVersions =>
       maybeVersions.fold:
         // if not an artifact, try appending to the groupId if the combined groupId exists
         val combinedGroupId = MavenCentral.GroupId(groupId.toString + "." + artifactId.toString)
         Handler.fromZIO:
-          MavenCentral.searchArtifacts(combinedGroupId).retryOnServerError
+          MavenCentral.searchArtifacts(combinedGroupId)
         .flatMap: _ =>
           Response.redirect(URL(Path.root / combinedGroupId.toString)).toHandler
         .orElse:
           Handler.fromZIO:
-            MavenCentral.searchArtifacts(groupId).retryOnServerError
+            MavenCentral.searchArtifacts(groupId)
           .flatMap: artifactIds =>
             Response.html(UI.page("javadocs.dev", UI.needArtifactId(groupId, artifactIds.value, Some(artifactId))), Status.NotFound).toHandler
           .orElse:
@@ -75,7 +74,7 @@ object Web:
     .catchAll: e =>
       // invalid groupId or artifactId
       Handler.fromZIO:
-        MavenCentral.searchArtifacts(groupId).retryOnServerError
+        MavenCentral.searchArtifacts(groupId)
       .flatMap: artifactIds =>
         Response.html(UI.page("javadocs.dev", UI.needArtifactId(groupId, artifactIds.value)), Status.NotFound).toHandler // todo: message
       .orElse:
@@ -84,7 +83,7 @@ object Web:
   given zio.json.JsonEncoder[Extractor.Content] = zio.json.DeriveJsonEncoder.gen[Extractor.Content]
 
   def withVersion(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, request: Request):
-      Handler[Extractor.LatestCache & Client & Extractor.JavadocCache & Redis, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
+      Handler[Extractor.LatestCache & Client & MavenCentralRepo & Extractor.JavadocCache & Redis, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
     val groupArtifactVersion = MavenCentral.GroupArtifactVersion(groupId, artifactId, version)
 
     if acceptsMarkdown(request) then
@@ -125,12 +124,12 @@ object Web:
               Response.redirect(URL(groupArtifactVersion.toPath / "index.html"))
             else
               val files = handle.filterEntryNames(_.endsWith(".html")).map(_.toSeq.sorted).run
-              val versions = MavenCentral.searchVersions(groupId, artifactId).retryOnServerError.map(_.value).orElseSucceed(Seq.empty).run
+              val versions = MavenCentral.searchVersions(groupId, artifactId).map(_.value).orElseSucceed(Seq.empty).run
               Response.html(UI.page("javadocs.dev", UI.javadocFileList(groupId, artifactId, version, versions, files)))
       .catchAll:
         case _: MavenCentral.NotFoundError =>
           Handler.fromZIO:
-            MavenCentral.searchVersions(groupId, artifactId).retryOnServerError
+            MavenCentral.searchVersions(groupId, artifactId)
           .flatMap: versions =>
             Response.html(UI.page("javadocs.dev", UI.noJavadoc(groupId, artifactId, versions.value, version)), Status.NotFound).toHandler // todo: message
           .orElse:
@@ -153,7 +152,7 @@ object Web:
     else                                                           MediaType.application.`octet-stream`
 
   def withFile(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, file: Path, request: Request):
-      Handler[Client & Redis & Extractor.JavadocCache & SymbolSearch.SymbolSearchGuard, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
+      Handler[Client & MavenCentralRepo & Redis & Extractor.JavadocCache & SymbolSearch.SymbolSearchGuard, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
     val groupArtifactVersion = MavenCentral.GroupArtifactVersion(groupId, artifactId, version)
 
     // todo: reduce duplication on error handling
@@ -264,7 +263,7 @@ object Web:
     string("version").transformOrFailLeft(versionExtractor)(_.toString)
 
   def withVersionAndFile(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, path: Path, request: Request):
-      Handler[BadActor.Store & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Client & Redis & HerokuInference & SymbolSearch.SymbolSearchGuard, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] = {
+      Handler[BadActor & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Client & MavenCentralRepo & Redis & HerokuInference & SymbolSearch.SymbolSearchGuard, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] = {
     if (path.isEmpty)
       withVersion(groupId, artifactId, version, request)
     else
@@ -272,7 +271,7 @@ object Web:
   }
 
 
-  def index(request: Request): Handler[Redis & HerokuInference & Client & Extractor.JavadocCache & Extractor.SourcesCache & SymbolSearch.SymbolSearchGuard, Nothing, Request, Response] =
+  def index(request: Request): Handler[Redis & HerokuInference & Client & MavenCentralRepo & Extractor.JavadocCache & Extractor.SourcesCache & SymbolSearch.SymbolSearchGuard, Nothing, Request, Response] =
     request.queryParameters.map.keys.filterNot(_ == "groupId").headOption.fold(Response.html(UI.page("javadocs.dev", UI.index)).toHandler):
       query =>
         // todo: rate limit
@@ -369,9 +368,9 @@ object Web:
             Response.text(md)
       )
 
-  def llmsArtifact(gId: MavenCentral.GroupId, aId: MavenCentral.ArtifactId, @unused request: Request): Handler[Client, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, Request), Response] =
+  def llmsArtifact(gId: MavenCentral.GroupId, aId: MavenCentral.ArtifactId, @unused request: Request): Handler[MavenCentralRepo, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, Request), Response] =
     Handler.fromZIO:
-      MavenCentral.searchVersions(gId, aId).retryOnServerError
+      MavenCentral.searchVersions(gId, aId)
     .flatMap: versions =>
       val md = s"# $gId:$aId\n\n## Versions\n\n" +
         versions.value.map(v => s"- [$v](https://www.javadocs.dev/llms/$gId/$aId/$v)").mkString("\n") + "\n"
@@ -379,7 +378,7 @@ object Web:
     .catchAll: _ =>
       Response(status = Status.NotFound, body = Body.fromString(s"Artifact $gId:$aId not found")).toHandler
 
-  def llmsVersion(gId: MavenCentral.GroupId, aId: MavenCentral.ArtifactId, ver: MavenCentral.Version, @unused request: Request): Handler[Client & Extractor.JavadocCache & Redis, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Request), Response] =
+  def llmsVersion(gId: MavenCentral.GroupId, aId: MavenCentral.ArtifactId, ver: MavenCentral.Version, @unused request: Request): Handler[Client & MavenCentralRepo & Extractor.JavadocCache & Redis, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Request), Response] =
     val groupArtifactVersion = MavenCentral.GroupArtifactVersion(gId, aId, ver)
     Handler.fromResponseZIO:
       ZIO.scoped:
@@ -453,7 +452,7 @@ object Web:
       )
 
 
-  val app: Routes[BadActor.Store & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Client & Redis & HerokuInference & SymbolSearch.SymbolSearchGuard, Response] =
+  val app: Routes[BadActor & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Client & MavenCentralRepo & Redis & HerokuInference & SymbolSearch.SymbolSearchGuard, Response] =
     // `statelessRoutes` from zio-http-mcp only registers POST/GET/DELETE on /mcp.
     // A HEAD request would otherwise throw inside the route tree (turning into a
     // 500 via `.sandbox`). Register HEAD /mcp explicitly so it mirrors GET's 405.
@@ -468,7 +467,7 @@ object Web:
     // Content-Length header) for HEAD responses.
     val getOrHead: Method = Method.GET #| Method.HEAD
 
-    val appRoutes = Routes[BadActor.Store & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Client & Redis & HerokuInference & SymbolSearch.SymbolSearchGuard, Nothing](
+    val appRoutes = Routes[BadActor & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Client & MavenCentralRepo & Redis & HerokuInference & SymbolSearch.SymbolSearchGuard, Nothing](
       getOrHead / Root -> Handler.fromFunctionHandler[Request](index),
       getOrHead / "favicon.ico" -> Handler.fromResource("favicon.ico").orDie,
       getOrHead / "favicon.png" -> Handler.fromResource("favicon.png").orDie,
@@ -512,131 +511,10 @@ object Web:
         response
     )
 
-  private def getForwardedFor(request: Request): Option[BadActor.IP] =
-    request.headers.get("X-Forwarded-For").flatMap(_.split(",").lastOption).orElse(request.remoteAddress.map(_.getHostAddress))
+  private val badActorMiddleware: HandlerAspect[BadActor, Unit] = BadActorMiddleware()
 
-  val gibberishStream: ZStream[Any, Nothing, Byte] =
-    ZStream
-      .repeatZIOWithSchedule(Random.nextBytes(1024), Schedule.fixed(100.millis))
-      .flattenChunks
-      .interruptAfter(30.seconds)
-
-  private def suspect(req: Request): Boolean =
-    val s = req.path.toString
-    s.endsWith(".php") || s.contains("wp-includes") || s.contains("wp-admin") || s.contains("wp-content")
-
-  private val badActorMiddleware: HandlerAspect[BadActor.Store, Unit] =
-    HandlerAspect.interceptIncomingHandler:
-      Handler.fromFunctionZIO:
-        request =>
-          getForwardedFor(request).fold(ZIO.fail(Response.badRequest("Failed to get forwarded IP"))):
-            ip =>
-              defer:
-                val isSuspect = suspect(request)
-                val clock = ZIO.clock.run
-                val now = clock.instant.run
-                BadActor.checkReq(ip, now, isSuspect).run match
-                  case BadActor.Status.Allowed =>
-                    ZIO.succeed(request -> ()).run
-                  case BadActor.Status.Banned =>
-                    ZIO.logWarning(s"Bad actor detected: $ip").run
-                    val gibberishResponse = Response(
-                      status = Status.Ok, // so that the client will read the body
-                      body = Body.fromStreamChunked(gibberishStream),
-                      headers = Headers(Header.ContentType(MediaType.application.json))
-                    )
-                    ZIO.fail(gibberishResponse).run
-
-  private val knownCrawlers = Set(
-    "meta-externalagent",
-    "semrushbot",
-    "amazonbot",
-    "petalbot",
-    "dotbot",
-    "bytespider",
-    "gptbot",
-    "claudebot",
-    "bingbot",
-    "googlebot",
-    "yandexbot",
-    "baiduspider",
-    "ahrefsbot",
-    "dataforseobot",
-    "seznambot",
-  )
-
-  private def matchedCrawler(request: Request): Option[String] =
-    request.header(Header.UserAgent).flatMap: ua =>
-      val lower = ua.renderedValue.toLowerCase
-      knownCrawlers.find(lower.contains)
-
-  private def isCrawler(request: Request): Boolean =
-    matchedCrawler(request).isDefined
-
-  // Per-crawler GAV limiter: each crawler UA may have at most one active GAV
-  // at a time. Requests for the active GAV (or non-GAV paths) pass; other
-  // GAVs get 429. This prevents crawlers from triggering many concurrent
-  // javadoc extractions. The limiter is independent of the disk cache's
-  // eviction lifecycle: a crawler's slot is released after
-  // `crawlerGavHoldDuration` of inactivity for that crawler+GAV, at which
-  // point the crawler is free to move on to a different GAV.
-  private val crawlerGavHoldDuration: Duration = 10.minutes
-
-  case class CrawlerGavSlot(gav: MavenCentral.GroupArtifactVersion, lastAccess: java.time.Instant)
-
-  case class CrawlerGavLimiter(active: ConcurrentMap[String, CrawlerGavSlot]):
-    // Attempts to claim the crawler's active-GAV slot for this request.
-    // Returns true if the request is allowed, false if it should be 429'd.
-    // Handles three cases:
-    //   * no existing slot  -> claim it, allow
-    //   * same GAV          -> refresh timestamp, allow
-    //   * different GAV but the existing slot's last access is older than
-    //     `holdDuration` -> steal the slot, allow
-    //   * different GAV and still active -> deny
-    def tryClaim(
-      crawler: String,
-      gav: MavenCentral.GroupArtifactVersion,
-      holdDuration: Duration,
-    ): ZIO[Any, Nothing, Boolean] =
-      defer:
-        val now = Clock.instant.run
-        val fresh = CrawlerGavSlot(gav, now)
-        active.putIfAbsent(crawler, fresh).run match
-          case None => true
-          case Some(existing) if existing.gav == gav =>
-            // Refresh the timestamp. Last-writer-wins is fine for our
-            // purposes (coarse "recent activity" signal).
-            active.put(crawler, fresh).run
-            true
-          case Some(existing) =>
-            val idle = java.time.Duration.between(existing.lastAccess, now)
-            if idle.compareTo(holdDuration.asJava) >= 0 then
-              active.put(crawler, fresh).run
-              true
-            else false
-
-  val crawlerGavLimiterLayer: ZLayer[Any, Nothing, CrawlerGavLimiter] =
-    ZLayer.fromZIO:
-      ConcurrentMap.empty[String, CrawlerGavSlot].map(CrawlerGavLimiter(_))
-
-  private val crawlerRateLimitMiddleware: HandlerAspect[CrawlerGavLimiter, Unit] =
-    HandlerAspect.interceptIncomingHandler:
-      Handler.fromFunctionZIO[Request]: request =>
-        matchedCrawler(request) match
-          case None => ZIO.succeed(request -> ())
-          case Some(crawler) =>
-            GavCacheMiddleware.gavFromPath(request.path) match
-              case None => ZIO.succeed(request -> ())
-              case Some(gav) =>
-                ZIO.serviceWithZIO[CrawlerGavLimiter]: limiter =>
-                  limiter.tryClaim(crawler, gav, crawlerGavHoldDuration).flatMap:
-                    case true => ZIO.succeed(request -> ())
-                    case false =>
-                      ZIO.fail(
-                        Response
-                          .status(Status.TooManyRequests)
-                          .addHeader(Header.RetryAfter.ByDuration(1.minute))
-                      )
+  private val crawlerRateLimitMiddleware: HandlerAspect[CrawlerLimiter[MavenCentral.GroupArtifactVersion], Unit] =
+    CrawlerLimiter.middleware[MavenCentral.GroupArtifactVersion](req => GavCacheMiddleware.gavFromPath(req.path))
 
   // GAV-immutable HTTP cache aspects come from `zio-mavencentral`'s
   // `GavCacheMiddleware`. They short-circuit `If-None-Match`/`If-Modified-
@@ -674,5 +552,5 @@ object Web:
         case (false, response) => response
     )
 
-  val appWithMiddleware: Routes[CrawlerGavLimiter & BadActor.Store & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.LatestCache & Client & Redis & HerokuInference & SymbolSearch.SymbolSearchGuard, Response] =
+  val appWithMiddleware: Routes[CrawlerLimiter[MavenCentral.GroupArtifactVersion] & BadActor & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.LatestCache & Client & MavenCentralRepo & Redis & HerokuInference & SymbolSearch.SymbolSearchGuard, Response] =
     app @@ badActorMiddleware @@ crawlerRateLimitMiddleware @@ redirectQueryParams @@ immutableAssetNotModified @@ immutableAssetCacheHeaders @@ Middleware.requestLogging(loggedRequestHeaders = Set(Header.UserAgent)) @@ headStripBody

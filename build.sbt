@@ -3,11 +3,13 @@ val _ = require(sys.props("java.specification.version").toInt >= 25, s"Java 25+ 
 val useLocalSubprojects = sys.props.get("local").isDefined
 val zioHttpMcpDir = file("../zio-http-mcp")
 val zioMavenCentralDir = file("../zio-mavencentral")
+val zioHttpGuardDir = file("../zio-http-guard")
 
 lazy val root = {
   val base = (project in file(".")).enablePlugins(LauncherJarPlugin)
   val withMcp = if (useLocalSubprojects && zioHttpMcpDir.exists()) base.dependsOn(RootProject(zioHttpMcpDir)) else base
-  if (useLocalSubprojects && zioMavenCentralDir.exists()) withMcp.dependsOn(RootProject(zioMavenCentralDir)) else withMcp
+  val withMaven = if (useLocalSubprojects && zioMavenCentralDir.exists()) withMcp.dependsOn(RootProject(zioMavenCentralDir)) else withMcp
+  if (useLocalSubprojects && zioHttpGuardDir.exists()) withMaven.dependsOn(RootProject(zioHttpGuardDir)) else withMaven
 }
 
 val zioVersion = "2.1.26"
@@ -72,12 +74,17 @@ libraryDependencies ++= Seq(
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioHttpMcpDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-http-mcp" % "0.0.8")
+  else Seq("com.jamesward" %% "zio-http-mcp" % "0.0.9")
 }
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioMavenCentralDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-mavencentral" % "0.8.3")
+  else Seq("com.jamesward" %% "zio-mavencentral" % "0.9.0")
+}
+
+libraryDependencies ++= {
+  if (useLocalSubprojects && zioHttpGuardDir.exists()) Seq.empty
+  else Seq("com.jamesward" %% "zio-http-guard" % "0.0.1")
 }
 
 Compile / packageDoc / publishArtifact := false

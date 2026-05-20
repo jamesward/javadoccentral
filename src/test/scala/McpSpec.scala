@@ -1,3 +1,5 @@
+import com.jamesward.zio_http_guard.{BadActor, CrawlerLimiter}
+import com.jamesward.zio_mavencentral.MavenCentral
 import io.modelcontextprotocol.client.McpClient
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport
 import io.modelcontextprotocol.spec.McpSchema as JMcpSchema
@@ -193,6 +195,7 @@ object McpSpec extends ZIOSpecDefault:
     ).provide(
       Server.defaultWith(_.onAnyOpenPort),
       Client.default,
+      MavenCentral.MavenCentralRepo.live,
       App.latestCacheLayer,
       App.javadocCacheLayer,
       App.sourcesCacheLayer,
@@ -201,6 +204,6 @@ object McpSpec extends ZIOSpecDefault:
       ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
       SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
       BadActor.live,
-      Web.crawlerGavLimiterLayer,
+      CrawlerLimiter.layer[MavenCentral.GroupArtifactVersion],
       App.symbolSearchGuardLayer,
     ) @@ withLiveClock @@ timeout(3.minutes) @@ sequential
