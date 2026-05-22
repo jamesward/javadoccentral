@@ -12,6 +12,29 @@ Run sbt with `./sbt`
 
 Start the test server with: `./sbt ~reStartTest` (for auto-reloading) or `./sbt runTest` for non-auto-reloading
 
+## MCP tool descriptions
+
+The descriptions on the `McpTool` definitions in `MCP.scala` are not just
+labels — they are the primary signal a remote agent uses to choose between
+this MCP server and alternatives like "shell out and unzip the local jar
+cache." When editing them, keep the agent-steering posture:
+
+- Lead with **what task the tool is for**, not just what it returns.
+  ("Use this when you need to read the actual source of a JVM library.")
+- Mention that the tool works against the **live Maven Central catalog**
+  with **no local install / build / repository checkout** required —
+  this is the property that should make an agent prefer it over local
+  jar inspection.
+- **Cross-reference** related tools (which to call first, which `link`
+  values feed into which call, what the fallback is when one returns
+  `NotFoundError`).
+- **Disambiguate** javadoc-vs-source tools: when an agent wants rendered
+  API docs, it should reach for `get_javadoc_*`; when it wants the raw
+  Scala/Java/Kotlin source, it should reach for `*_source_*`.
+- Keep them concise but explicit. Verbose-but-clear is better than
+  terse-and-ambiguous when the cost of an agent picking the wrong path
+  is "shells out for several tool calls and burns context."
+
 ## Tech Stack
 
 - Scala 3 (3.8.x) with `-language:strictEquality`

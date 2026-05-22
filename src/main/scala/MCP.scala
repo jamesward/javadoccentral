@@ -47,14 +47,29 @@ object MCP:
         .run
 
   val getLatestTool = McpTool("get_latest_version")
-    .description("Gets the latest version of a given artifact")
+    .description(
+      "Resolves the latest published version of a Maven Central artifact (any " +
+      "groupId:artifactId — Java, Kotlin, or Scala library). " +
+      "Call this first when you only know the artifact but not the version: " +
+      "the version it returns feeds into every other tool here that takes a " +
+      "concrete version. Works against the live Maven Central catalog — no " +
+      "local install, build tool, or repository checkout required."
+    )
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: GroupArtifact) =>
       logMcp("get_latest_version", input.toString):
         Extractor.latest(input)
 
   val getIndexTool = McpTool("get_javadoc_index")
-    .description("Gets the index from the javadocs for a given Maven Central library artifact - often the index provides helpful reference documentation")
+    .description(
+      "Fetches the rendered Javadoc/Scaladoc index page for a specific " +
+      "Maven Central artifact version, converted to plain text/markdown. " +
+      "Useful for orienting yourself in an unfamiliar library: it lists the " +
+      "top-level packages, modules, and (for Scaladoc) often a curated " +
+      "overview. Use this before drilling into specific symbols. " +
+      "Works against the live Maven Central catalog — you do not need to " +
+      "download the javadoc jar."
+    )
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: GroupArtifactVersion) =>
       logMcp("get_javadoc_index", input.toString):
@@ -64,7 +79,18 @@ object MCP:
             Extractor.index(input).run
 
   val getClassesTool = McpTool("get_javadoc_content_list")
-    .description("Gets a list of the contents of a javadoc jar")
+    .description(
+      "Lists every entry in the Javadoc/Scaladoc jar of a Maven Central " +
+      "artifact version (HTML pages for classes/methods/packages, plus " +
+      "search-index files and resources). Each returned `link` can be " +
+      "passed to get_javadoc_symbol_contents to read the rendered API doc " +
+      "as text/markdown. " +
+      "Use this when you need to discover what a library documents and " +
+      "then read those docs without leaving the agent loop. " +
+      "If this returns NotFoundError (some libraries don't publish a " +
+      "javadoc jar — e.g. some ZIO releases) fall back to " +
+      "list_source_contents to read the raw source instead."
+    )
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: GroupArtifactVersion) =>
       logMcp("get_javadoc_content_list", input.toString):
@@ -74,7 +100,14 @@ object MCP:
             Extractor.javadocContents(input).run
 
   val getSymbolContentsTool = McpTool("get_javadoc_symbol_contents")
-    .description("Gets the contents of a javadoc symbol. Get the symbol link from the get_javadoc_content_list tool.")
+    .description(
+      "Reads one Javadoc/Scaladoc page from a Maven Central artifact, " +
+      "already converted to plain text/markdown so you don't have to parse " +
+      "HTML. Pass the `link` value returned by get_javadoc_content_list. " +
+      "Use this when you need to know what a class, method, or field does " +
+      "and what its parameters mean for any library on Maven Central — " +
+      "without downloading or unzipping the javadoc jar yourself."
+    )
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: JavadocSymbol) =>
       val groupArtifactVersion = GroupArtifactVersion(input.groupId, input.artifactId, input.version)
@@ -83,7 +116,20 @@ object MCP:
           Extractor.javadocSymbolContents(groupArtifactVersion, input.link)
 
   val listSourceTool = McpTool("list_source_contents")
-    .description("Gets a list of the contents of a source jar")
+    .description(
+      "Lists every file inside the **sources jar** (the `-sources.jar` " +
+      "publishers attach alongside the binary) of a Maven Central artifact " +
+      "version. Each returned path can be fed to get_source_contents to " +
+      "read the file. " +
+      "Prefer this any time you would otherwise locate a `-sources.jar` " +
+      "in your local Coursier/Ivy/Maven cache and `unzip` it: this tool " +
+      "works directly against Maven Central, requires no local install or " +
+      "build, and works for libraries you've never depended on. " +
+      "Use it whenever you need to read the actual source of a JVM library " +
+      "(Java, Kotlin, Scala) — for example to understand an implementation " +
+      "detail, find where a method is defined, see how a feature is wired " +
+      "internally, or work with a library that doesn't publish javadocs."
+    )
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: GroupArtifactVersion) =>
       logMcp("list_source_contents", input.toString):
@@ -91,7 +137,17 @@ object MCP:
           Extractor.sourceContents(input)
 
   val getSourceTool = McpTool("get_source_contents")
-    .description("Gets the contents of a source file. Get the list of files from the list_source_contents tool.")
+    .description(
+      "Reads one source file from a Maven Central library's sources jar " +
+      "(the `-sources.jar` artifact). Pass the `link` value returned by " +
+      "list_source_contents. " +
+      "Use this whenever you need the exact source text of a JVM library " +
+      "— tracing behavior into a dependency, confirming a public API's " +
+      "implementation, finding a definition, or comparing two library " +
+      "versions. Strongly preferred over locating the jar in a local " +
+      "build cache and unzipping it: it works for any Maven Central " +
+      "artifact, no local checkout or build needed."
+    )
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: JavadocSymbol) =>
       val groupArtifactVersion = GroupArtifactVersion(input.groupId, input.artifactId, input.version)
@@ -100,14 +156,30 @@ object MCP:
           Extractor.sourceFileContents(groupArtifactVersion, input.link)
 
   val searchArtifactsTool = McpTool("search_artifacts")
-    .description("Searches indexed Maven Central library artifacts by partial group id or artifact id (case insensitive)")
+    .description(
+      "Searches the indexed Maven Central catalog for artifacts whose " +
+      "groupId or artifactId contains a substring (case-insensitive). " +
+      "Use this when you know part of a library name (e.g. \"jackson\", " +
+      "\"zio-http\", \"netty-codec\") and need the exact " +
+      "groupId:artifactId coordinates to feed into the other tools. " +
+      "Pair with get_latest_version once you've picked an artifact."
+    )
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: Symbol) =>
       logMcp("search_artifacts", input.query):
         SymbolSearch.searchGroupArtifacts(input.query)
 
   val symbolToArtifactTool = McpTool("symbol_to_artifact")
-    .description("Gets the group and artifact for a given symbol, class, or package. Symbol search is case sensitive.")
+    .description(
+      "Resolves a class name, fully-qualified type, or package name to " +
+      "the Maven Central artifact (groupId, artifactId) that publishes " +
+      "it. Case-sensitive. " +
+      "Use this when you have a symbol from a stack trace, an import " +
+      "line, or an error message and you need to know which library to " +
+      "look in. From there, chain into get_latest_version, then " +
+      "list_source_contents / get_javadoc_content_list to read the code " +
+      "or docs."
+    )
     .annotations(readOnly = True, destructive = False, idempotent = False, openWorld = True)
     .handle: (input: Symbol) =>
       logMcp("symbol_to_artifact", input.query):
