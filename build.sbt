@@ -61,7 +61,7 @@ libraryDependencies ++= Seq(
 
   "org.jsoup" % "jsoup" % "1.22.2",
 
-  "dev.kreuzberg" % "html-to-markdown" % "3.4.1",
+  "dev.kreuzberg" % "html-to-markdown" % "3.5.7",
 
   "dev.zio" %% "zio-test"           % zioVersion % Test,
   "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,
