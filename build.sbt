@@ -68,7 +68,7 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-test-magnolia"  % zioVersion % Test,
   "dev.zio" %% "zio-redis-embedded" % "1.2.1" % Test,
 
-  "io.modelcontextprotocol.sdk" % "mcp-core"           % "1.1.2" % Test,
+  "io.modelcontextprotocol.sdk" % "mcp-core"           % "1.1.3" % Test,
   "io.modelcontextprotocol.sdk" % "mcp-json-jackson2"  % "1.1.3" % Test,
 )
 
