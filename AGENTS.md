@@ -10,6 +10,9 @@ JavaDoc Central — a Scala web app that serves javadocs from Maven Central arti
 
 Run sbt with `./sbt`
 
+Use Java 25 when running sbt/tests. `build.sbt` requires Java 25+ and
+`.sbtopts` includes JDK 25-only JVM flags.
+
 Start the test server with: `./sbt ~reStartTest` (for auto-reloading) or `./sbt runTest` for non-auto-reloading
 
 ## MCP tool descriptions
