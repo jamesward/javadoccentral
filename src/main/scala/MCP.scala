@@ -23,14 +23,14 @@ object MCP:
   given latestError: McpError[GroupIdOrArtifactIdNotFoundError | Extractor.LatestNotFound] with
     def message(e: GroupIdOrArtifactIdNotFoundError | Extractor.LatestNotFound): String = e.toString
 
-  given notFoundError: McpError[NotFoundError] with
-    def message(e: NotFoundError): String = e.toString
+  given notFoundError: McpError[Extractor.JarError] with
+    def message(e: Extractor.JarError): String = e.toString
 
-  given fileNotFoundError: McpError[NotFoundError | Extractor.JavadocFileNotFound] with
-    def message(e: NotFoundError | Extractor.JavadocFileNotFound): String = e.toString
+  given fileNotFoundError: McpError[Extractor.JarError | Extractor.JavadocFileNotFound] with
+    def message(e: Extractor.JarError | Extractor.JavadocFileNotFound): String = e.toString
 
-  given fileNotFoundOrContentError: McpError[NotFoundError | Extractor.JavadocFileNotFound | Extractor.JavadocContentError] with
-    def message(e: NotFoundError | Extractor.JavadocFileNotFound | Extractor.JavadocContentError): String = e.toString
+  given fileNotFoundOrContentError: McpError[Extractor.JarError | Extractor.JavadocFileNotFound | Extractor.JavadocContentError] with
+    def message(e: Extractor.JarError | Extractor.JavadocFileNotFound | Extractor.JavadocContentError): String = e.toString
 
   given searchError: McpError[SearchError] with
     def message(e: SearchError): String = e.message

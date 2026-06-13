@@ -1,4 +1,5 @@
 import com.jamesward.zio_http_guard.{BadActor, BadActorMiddleware, CrawlerLimiter}
+import com.jamesward.zio_mavencentral.JarCache
 import com.jamesward.zio_mavencentral.{GavCacheMiddleware, MavenCentral}
 import com.jamesward.zio_mavencentral.MavenCentral.MavenCentralRepo
 import zio.*
@@ -96,7 +97,7 @@ object Web:
             .mkString("\n")
           markdownResponse(md)
         .catchAll:
-          case _: MavenCentral.NotFoundError =>
+          case _: MavenCentral.NotFoundError | _: JarCache.UpstreamCorruptError =>
             ZIO.succeed:
               Response.notFound(groupArtifactVersion.toPath.toString)
     else if request.header(Accept).exists(_.mimeTypes.exists(_.mediaType.matches(MediaType.application.json))) then
@@ -106,7 +107,7 @@ object Web:
           import zio.json.*
           Response.json(contents.toJson)
         .catchAll:
-          case _: MavenCentral.NotFoundError =>
+          case _: MavenCentral.NotFoundError | _: JarCache.UpstreamCorruptError =>
             ZIO.succeed:
               Response.notFound(groupArtifactVersion.toPath.toString)
     else
@@ -127,7 +128,7 @@ object Web:
               val versions = MavenCentral.searchVersions(groupId, artifactId).map(_.value).orElseSucceed(Seq.empty).run
               Response.html(UI.page("javadocs.dev", UI.javadocFileList(groupId, artifactId, version, versions, files)))
       .catchAll:
-        case _: MavenCentral.NotFoundError =>
+        case _: MavenCentral.NotFoundError | _: JarCache.UpstreamCorruptError =>
           Handler.fromZIO:
             MavenCentral.searchVersions(groupId, artifactId)
           .flatMap: versions =>
@@ -162,7 +163,7 @@ object Web:
           val content = Extractor.javadocSymbolContents(groupArtifactVersion, file.toString).run
           markdownResponse(content)
         .catchAll:
-          case _: MavenCentral.NotFoundError =>
+          case _: MavenCentral.NotFoundError | _: JarCache.UpstreamCorruptError =>
             ZIO.succeed:
               Response.redirect(URL(groupArtifactVersion.toPath))
           case _: Extractor.JavadocFileNotFound =>
@@ -185,7 +186,7 @@ object Web:
               headers = Headers(Header.ContentType(contentTypeFor(file.toString))),
             )
         .catchAll:
-          case _: MavenCentral.NotFoundError =>
+          case _: MavenCentral.NotFoundError | _: JarCache.UpstreamCorruptError =>
             ZIO.succeed:
               Response.redirect(URL(groupArtifactVersion.toPath))
           case _: Extractor.JavadocFileNotFound =>
@@ -390,7 +391,7 @@ object Web:
             .mkString("\n") + "\n"
           Response.text(md)
       .catchAll:
-        case _: MavenCentral.NotFoundError =>
+        case _: MavenCentral.NotFoundError | _: JarCache.UpstreamCorruptError =>
           ZIO.succeed:
             Response.notFound(groupArtifactVersion.toPath.toString)
 
