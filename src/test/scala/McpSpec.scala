@@ -117,7 +117,7 @@ object McpSpec extends ZIOSpecDefault:
             schema == null || schema.get("type").asInstanceOf[String] == "object"
           ) &&
           // inputSchema must have type "object"
-          assertTrue(toolList.forall(_.inputSchema().`type`() == "object"))
+          assertTrue(toolList.forall(_.inputSchema().get("type").asInstanceOf[String] == "object"))
       ,
 
       // --- get_latest_version ---
