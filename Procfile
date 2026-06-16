@@ -1,1 +1,0 @@
-web: target/universal/stage/bin/javadoccentral -J-XshowSettings:vm -J-XX:+ExitOnOutOfMemoryError -J-XX:MaxDirectMemorySize=96m -J-XX:MaxMetaspaceSize=96m -J-XX:ReservedCodeCacheSize=48m -J-XX:CICompilerCount=2

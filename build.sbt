@@ -6,7 +6,7 @@ val zioMavenCentralDir = file("../zio-mavencentral")
 val zioHttpGuardDir = file("../zio-http-guard")
 
 lazy val root = {
-  val base = (project in file(".")).enablePlugins(LauncherJarPlugin)
+  val base = (project in file(".")).enablePlugins(JavaAppPackaging)
   val withMcp = if (useLocalSubprojects && zioHttpMcpDir.exists()) base.dependsOn(RootProject(zioHttpMcpDir)) else base
   val withMaven = if (useLocalSubprojects && zioMavenCentralDir.exists()) withMcp.dependsOn(RootProject(zioMavenCentralDir)) else withMcp
   if (useLocalSubprojects && zioHttpGuardDir.exists()) withMaven.dependsOn(RootProject(zioHttpGuardDir)) else withMaven
