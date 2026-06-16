@@ -1,4 +1,4 @@
-val _ = require(sys.props("java.specification.version").toInt >= 25, s"Java 25+ is required, but found ${sys.props("java.version")}")
+val _javaCheck: Unit = require(sys.props("java.specification.version").toInt >= 25, s"Java 25+ is required, but found ${sys.props("java.version")}")
 
 val useLocalSubprojects = sys.props.get("local").isDefined
 val zioHttpMcpDir = file("../zio-http-mcp")
@@ -108,23 +108,8 @@ javaOptions ++= Seq(
   "--sun-misc-unsafe-memory-access=allow",
 )
 
-lazy val runTest = taskKey[Unit]("run AppTest")
+@transient lazy val runTest = taskKey[Unit]("run AppTest")
 
 runTest := (Test / runMain).toTask(" AppTest").value
 
-lazy val reStartTest =
-  inputKey[spray.revolver.AppProcess]("re-start, but test")
-
-reStartTest :=
-  Def.inputTask {
-    spray.revolver.Actions.restartApp(
-      streams.value,
-      reLogTag.value,
-      thisProjectRef.value,
-      reForkOptions.value,
-      Some("AppTest"),
-      (Test / fullClasspath).value,
-      reStartArgs.value,
-      spray.revolver.Actions.startArgsParser.parsed
-    )
-  }.dependsOn(Compile / products).evaluated
+Test / run / mainClass := Some("AppTest")
