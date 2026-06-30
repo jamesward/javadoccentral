@@ -5,7 +5,6 @@ import zio.*
 import zio.concurrent.ConcurrentMap
 import zio.direct.*
 import zio.http.*
-import zio.redis.embedded.EmbeddedRedis
 import zio.redis.{CodecSupplier, Redis}
 import zio.test.*
 
@@ -314,7 +313,7 @@ object AppSpec extends ZIOSpecDefault:
     App.latestCacheLayer,
     Client.default,
     MavenCentral.MavenCentralRepo.live,
-    EmbeddedRedis.layer,
+    ValkeyContainer.layer,
     Redis.singleNode,
     ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
     SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
