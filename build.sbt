@@ -66,7 +66,7 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-test"           % zioVersion % Test,
   "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,
   "dev.zio" %% "zio-test-magnolia"  % zioVersion % Test,
-  "dev.zio" %% "zio-redis-embedded" % "1.2.1" % Test,
+  "com.dimafeng" %% "testcontainers-scala-core" % "0.44.1" % Test,
 
   "io.modelcontextprotocol.sdk" % "mcp-core"           % "2.0.0" % Test,
   "io.modelcontextprotocol.sdk" % "mcp-json-jackson2"  % "2.0.0" % Test,
@@ -74,7 +74,7 @@ libraryDependencies ++= Seq(
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioHttpMcpDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-http-mcp" % "0.1.2")
+  else Seq("com.jamesward" %% "zio-http-mcp" % "0.1.4")
 }
 
 libraryDependencies ++= {
@@ -108,8 +108,12 @@ javaOptions ++= Seq(
   "--sun-misc-unsafe-memory-access=allow",
 )
 
-@transient lazy val runTest = taskKey[Unit]("run AppTest")
-
-runTest := (Test / runMain).toTask(" AppTest").value
+// The Metaspace/direct-memory caps above emulate the 512MB Heroku dyno for the
+// app itself. Forked test JVMs additionally load Testcontainers + docker-java
+// (which back the Valkey-based Redis suites and AppTest), far exceeding the 96m
+// Metaspace cap and OOMing. Raise the cap for the Test scope only; production
+// run flags are unaffected. A later -XX:MaxMetaspaceSize on the command line
+// wins, so this overrides the inherited 96m.
+Test / javaOptions += "-XX:MaxMetaspaceSize=512m"
 
 Test / run / mainClass := Some("AppTest")
