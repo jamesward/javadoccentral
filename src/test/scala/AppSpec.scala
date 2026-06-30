@@ -179,6 +179,20 @@ object AppSpec extends ZIOSpecDefault:
           locationNF.contains("&color=red"),
           notFound.header(Header.CacheControl).exists(_.renderedValue.contains("max-age=300")),
         )
+    , test("latest with Accept: application/json returns just the latest version"):
+      val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
+      defer:
+        val resp = Web.appWithMiddleware.runZIO(
+          Request.get(URL(Path.root / "org.webjars" / "jquery" / "latest"))
+            .addHeader(forwardedForHeader)
+            .addHeader(Header.Accept(MediaType.application.json))
+        ).run
+        val body = resp.body.asString.run
+        assertTrue(
+          resp.status.isSuccess,
+          resp.header(Header.ContentType).exists(_.mediaType.matches(MediaType.application.json)),
+          body == """{"version":"4.0.0"}""",
+        )
     , test("rate limit bad actors"):
       defer:
         val forwardedBadActorHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")

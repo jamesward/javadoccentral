@@ -101,15 +101,27 @@ object Web:
             ZIO.succeed:
               Response.notFound(groupArtifactVersion.toPath.toString)
     else if request.header(Accept).exists(_.mimeTypes.exists(_.mediaType.matches(MediaType.application.json))) then
-      Handler.fromResponseZIO:
-        defer:
-          val contents = Extractor.javadocContents(groupArtifactVersion).run
-          import zio.json.*
-          Response.json(contents.toJson)
-        .catchAll:
-          case _: MavenCentral.NotFoundError | _: JarCache.UpstreamCorruptError =>
+      if groupArtifactVersion.version == MavenCentral.Version.latest then
+        // For `/{g}/{a}/latest` with `Accept: application/json`, return just the
+        // resolved latest version as JSON (e.g. `{"version":"4.0.0"}`) rather
+        // than redirecting / listing symbols.
+        Handler.fromResponseZIO:
+          ZIO.serviceWithZIO[Extractor.LatestCache](_.cache.get(groupArtifactVersion.noVersion)).map: latest =>
+            import zio.json.*
+            Response.json(Map("version" -> latest.toString).toJson)
+          .catchAll: _ =>
             ZIO.succeed:
-              Response.notFound(groupArtifactVersion.toPath.toString)
+              Response.notFound(groupArtifactVersion.noVersion.toPath.toString)
+      else
+        Handler.fromResponseZIO:
+          defer:
+            val contents = Extractor.javadocContents(groupArtifactVersion).run
+            import zio.json.*
+            Response.json(contents.toJson)
+          .catchAll:
+            case _: MavenCentral.NotFoundError | _: JarCache.UpstreamCorruptError =>
+              ZIO.succeed:
+                Response.notFound(groupArtifactVersion.toPath.toString)
     else
       Handler.fromZIO:
         if groupArtifactVersion.version == MavenCentral.Version.latest then
