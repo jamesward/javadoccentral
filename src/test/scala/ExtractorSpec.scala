@@ -52,22 +52,22 @@ object ExtractorSpec extends ZIOSpecDefault:
       )
     },
     test("javadoc file not found") {
-      val groupArtifactVersion = gav("com.jamesward", "zio-mavencentral_3", "0.0.21")
+      val groupArtifactVersion = gav("com.jamesward", "zio-mavencentral_3", "0.12.0")
       assertZIO(Extractor.javadocEntryBytes(groupArtifactVersion, "asdf").exit)(
         failsWithA[Extractor.JavadocFileNotFound]
       )
     },
     test("scaladoc - zio-mavencentral_3") {
       defer:
-        val scaladoc = Extractor.javadocContents(gav("com.jamesward", "zio-mavencentral_3", "0.0.21")).run
+        val scaladoc = Extractor.javadocContents(gav("com.jamesward", "zio-mavencentral_3", "0.12.0")).run
         assertTrue(
-          scaladoc.size == 48,
+          scaladoc.size == 128,
           scaladoc.exists { contents =>
             contents.link == "com/jamesward/zio_mavencentral/MavenCentral$.html#" &&
               contents.fqn == "com.jamesward.zio_mavencentral.MavenCentral" &&
               contents.kind == "object"
           },
-          scaladoc.exists(_.`type` == "searchArtifacts(groupId: GroupId): ZIO[Client & Scope, GroupIdNotFoundError | Throwable, Seq[ArtifactId]]")
+          scaladoc.exists(_.`type` == "searchArtifacts(groupId: GroupId): ZIO[MavenCentralRepo, GroupIdNotFoundError | TemporaryServerError | Throwable, WithCacheInfo[Seq[ArtifactId]]]")
         )
     },
     test("scaladoc - zio_3") {
@@ -103,7 +103,7 @@ object ExtractorSpec extends ZIOSpecDefault:
     },
     test("symbolContents - zio-mavencentral_3") {
       defer:
-        val contents = Extractor.javadocSymbolContents(gav("com.jamesward", "zio-mavencentral_3", "0.0.21"), "com/jamesward/zio_mavencentral/MavenCentral$$GroupId$.html#unapply-fffffd22").run
+        val contents = Extractor.javadocSymbolContents(gav("com.jamesward", "zio-mavencentral_3", "0.12.0"), "com/jamesward/zio_mavencentral/MavenCentral$$GroupId$.html#unapply-fffffd22").run
         assertTrue(
           contents.contains("com.jamesward.zio_mavencentral.MavenCentral.GroupId")
         )
@@ -119,14 +119,14 @@ object ExtractorSpec extends ZIOSpecDefault:
     },
     test("sourceContents - zio-mavencentral_3") {
       defer:
-        val contents = Extractor.sourceFileContents(gav("com.jamesward", "zio-mavencentral_3", "0.0.21"), "com/jamesward/zio_mavencentral/MavenCentral.scala").run
+        val contents = Extractor.sourceFileContents(gav("com.jamesward", "zio-mavencentral_3", "0.12.0"), "com/jamesward/zio_mavencentral/MavenCentral.scala").run
         assertTrue(
           contents.contains("object MavenCentral:")
         )
     },
     test("listSourceContents - zio-mavencentral_3") {
       defer:
-        val contents = Extractor.sourceContents(gav("com.jamesward", "zio-mavencentral_3", "0.0.21")).run
+        val contents = Extractor.sourceContents(gav("com.jamesward", "zio-mavencentral_3", "0.12.0")).run
         assertTrue(
           // jar entries: META-INF/MANIFEST.MF + the source file (directory entries
           // are filtered by sourceContents).
@@ -137,7 +137,7 @@ object ExtractorSpec extends ZIOSpecDefault:
     test("concurrent javadocJar calls for the same GAV deduplicate") {
       // The library's `JarCache` provides single-flight via a `Promise`-keyed
       // map; concurrent `get`s for the same GAV all observe the same handle.
-      val g = gav("com.jamesward", "zio-mavencentral_3", "0.0.21")
+      val g = gav("com.jamesward", "zio-mavencentral_3", "0.12.0")
       defer:
         val handles = ZIO.foreachPar(1 to 10)(_ => Extractor.javadocJar(g)).run
         assertTrue(
@@ -147,7 +147,7 @@ object ExtractorSpec extends ZIOSpecDefault:
     } @@ TestAspect.timeout(2.minutes) @@ TestAspect.withLiveClock,
     test("parallel downloads: 20 artifacts concurrently") {
       val gavs = Seq(
-        gav("com.jamesward", "zio-mavencentral_3", "0.0.21"),
+        gav("com.jamesward", "zio-mavencentral_3", "0.12.0"),
         gav("dev.zio", "zio_3", "2.1.9"),
         gav("dev.zio", "zio_2.13", "2.1.9"),
         gav("io.ktor", "ktor-io-jvm", "3.2.3"),
