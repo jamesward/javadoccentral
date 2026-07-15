@@ -5,7 +5,6 @@ import zio.*
 import zio.concurrent.ConcurrentMap
 import zio.direct.*
 import zio.http.*
-import zio.redis.embedded.EmbeddedRedis
 import zio.redis.{CodecSupplier, Redis}
 import zio.test.*
 
@@ -179,6 +178,20 @@ object AppSpec extends ZIOSpecDefault:
           locationNF.contains("&color=red"),
           notFound.header(Header.CacheControl).exists(_.renderedValue.contains("max-age=300")),
         )
+    , test("latest with Accept: application/json returns just the latest version"):
+      val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
+      defer:
+        val resp = Web.appWithMiddleware.runZIO(
+          Request.get(URL(Path.root / "org.webjars" / "jquery" / "latest"))
+            .addHeader(forwardedForHeader)
+            .addHeader(Header.Accept(MediaType.application.json))
+        ).run
+        val body = resp.body.asString.run
+        assertTrue(
+          resp.status.isSuccess,
+          resp.header(Header.ContentType).exists(_.mediaType.matches(MediaType.application.json)),
+          body == """{"version":"4.0.0"}""",
+        )
     , test("rate limit bad actors"):
       defer:
         val forwardedBadActorHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
@@ -300,7 +313,7 @@ object AppSpec extends ZIOSpecDefault:
     App.latestCacheLayer,
     Client.default,
     MavenCentral.MavenCentralRepo.live,
-    EmbeddedRedis.layer,
+    ValkeyContainer.layer,
     Redis.singleNode,
     ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
     SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),

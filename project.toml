@@ -1,6 +1,0 @@
-name = "BP_JVM_VERSION"
-value = "21"
-
-[[build.env]]
-name = "BPE_OVERRIDE_BPL_JVM_THREAD_COUNT"
-value = "50"

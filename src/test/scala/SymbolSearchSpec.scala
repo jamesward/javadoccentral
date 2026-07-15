@@ -5,7 +5,6 @@ import zio.cache.Cache
 import zio.concurrent.ConcurrentMap
 import zio.direct.*
 import zio.http.Client
-import zio.redis.embedded.EmbeddedRedis
 import zio.redis.{CodecSupplier, Redis}
 import zio.test.*
 
@@ -100,7 +99,7 @@ object SymbolSearchSpec extends ZIOSpecDefault:
       Client.default,
       MavenCentral.MavenCentralRepo.live,
       App.javadocCacheLayer,
-      EmbeddedRedis.layer,
+      ValkeyContainer.layer,
       Redis.singleNode,
       ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
       SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),

@@ -174,13 +174,22 @@ cache reference must live until the last reader is done.
 - `App.scala` contains routes, middleware, layer wiring, and `run`
 - `Extractor.scala` contains Maven Central download/extraction logic
 - Tests in `src/test/scala/`, using `ZIOSpecDefault`
-- `AppTest.scala` is a runnable dev server (not a test suite) using embedded Redis
+- `AppTest.scala` is a runnable dev server (not a test suite) that spins up a
+  Valkey container via `ValkeyContainer.layer` for Redis
 
 ### Testing
 
 - ZIO Test with `ZIOSpecDefault`
 - Tests provide their own layers (no shared test fixtures)
-- `EmbeddedRedis.layer` for tests needing Redis
+- `ValkeyContainer.layer` for tests needing Redis. It runs Valkey
+  (Redis-compatible) in a Testcontainers-managed Docker container and yields a
+  `RedisConfig`, so `Redis.singleNode` builds the client on top unchanged. This
+  replaced `zio-redis-embedded`, whose bundled native `redis-server` binary was
+  extracted and fork/exec'd per test and intermittently failed with ETXTBSY
+  ("Text file busy") when suites ran in parallel. Requires Docker (available on
+  CI and locally). Forked test JVMs raise `-XX:MaxMetaspaceSize` to 512m
+  (`Test / javaOptions` in `build.sbt`) because Testcontainers + docker-java
+  load far more classes than the production 96m cap allows.
 - `MockInference.layer` as fallback when Heroku inference is unavailable
 - `TestAspect.withLiveClock`, `TestAspect.withLiveRandom`, `TestAspect.withLiveSystem` as needed
 - `TestAspect.sequential` for tests with shared state
