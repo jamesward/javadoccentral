@@ -74,7 +74,7 @@ libraryDependencies ++= Seq(
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioHttpMcpDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-http-mcp" % "0.1.4")
+  else Seq("com.jamesward" %% "zio-http-mcp" % "0.2.0")
 }
 
 libraryDependencies ++= {
