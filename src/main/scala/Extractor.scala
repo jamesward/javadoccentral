@@ -38,7 +38,7 @@ object Extractor:
 
   @description("One documented entry (class, object, method, package, or resource) from a library's Javadoc/Scaladoc jar.")
   case class Content(
-    @description("Path/link of this entry within the javadoc jar. Pass it as `link` to get_javadoc_symbol_contents to read the rendered page.")
+    @description("Path/link of this entry within the javadoc jar. Pass it as `link` to get_javadoc_symbol to read the rendered page.")
     link: String,
     @description("True if the entry links to an external site rather than a page inside this jar.")
     external: Boolean,

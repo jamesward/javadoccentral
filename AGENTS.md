@@ -50,15 +50,15 @@ derived from the return type's `zio-schema` `Schema` by `zio-http-mcp`'s
   is nested under a single `result` property. The MCP spec requires
   `outputSchema` to be `{"type":"object"}` and `structuredContent` to be a JSON
   object, so `search_artifacts` / `symbol_to_artifact` (`Set[GroupArtifact]`),
-  `list_source_contents` (`Set[String]`), `get_javadoc_content_list`
+  `list_source_files` (`Set[String]`), `list_javadoc_symbols`
   (`Set[Content]`) and `get_latest_version` (`Version`) all return
   `{"result": …}`.
 - `JsonSchemaGen` auto-generates a `description` for collection schemas from the
   collection kind + element type (e.g. `Set[Foo]` → "a set of Foo") and emits a
   `description` from any `zio-schema` `@description` annotation on records/fields.
 - Returning a bare `String` (or `ToolContent`) is the deliberate opt-out for
-  unstructured/prose output (`get_javadoc_index`, `get_javadoc_symbol_contents`,
-  `get_source_contents`): no `outputSchema`, plain text content.
+  unstructured/prose output (`get_javadoc_index`, `get_javadoc_symbol`,
+  `get_source_file`): no `outputSchema`, plain text content.
 
 This logic lives in `zio-http-mcp` (`McpOutput`, `JsonSchemaGen`), so shipping it
 to production requires **publishing a new `zio-http-mcp` and bumping the version

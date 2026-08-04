@@ -55,39 +55,39 @@ object McpSpec extends ZIOSpecDefault:
   private val kotlinArtifactId = "ktor-io-jvm"
   private val kotlinVersion = "3.2.3"
 
-  private def javadocContentListTest(label: String, gid: String, aid: String, ver: String) =
-    test(s"get_javadoc_content_list returns non-empty contents for $label"):
+  private def listJavadocSymbolsTest(label: String, gid: String, aid: String, ver: String) =
+    test(s"list_javadoc_symbols returns non-empty contents for $label"):
       for
         port   <- Server.install(Web.appWithMiddleware)
         result <- withClient(port): client =>
-          callTool(client, "get_javadoc_content_list", java.util.Map.of("groupId", gid, "artifactId", aid, "version", ver))
+          callTool(client, "list_javadoc_symbols", java.util.Map.of("groupId", gid, "artifactId", aid, "version", ver))
       yield
         val text = resultText(result)
         assertNotError(result) && assertTrue(text.contains("\"link\""), text.contains("\"fqn\""), text != "[]")
 
-  private def javadocSymbolContentsTest(label: String, gid: String, aid: String, ver: String) =
-    test(s"get_javadoc_symbol_contents works for $label"):
+  private def javadocSymbolTest(label: String, gid: String, aid: String, ver: String) =
+    test(s"get_javadoc_symbol works for $label"):
       for
         port   <- Server.install(Web.appWithMiddleware)
         result <- withClient(port): client =>
-          val contentList = resultText(callTool(client, "get_javadoc_content_list", java.util.Map.of("groupId", gid, "artifactId", aid, "version", ver)))
+          val contentList = resultText(callTool(client, "list_javadoc_symbols", java.util.Map.of("groupId", gid, "artifactId", aid, "version", ver)))
           val linkPattern = """"link"\s*:\s*"([^"]+)"""".r
           val link = linkPattern.findFirstMatchIn(contentList).get.group(1)
-          callTool(client, "get_javadoc_symbol_contents", java.util.Map.of("groupId", gid, "artifactId", aid, "version", ver, "link", link))
+          callTool(client, "get_javadoc_symbol", java.util.Map.of("groupId", gid, "artifactId", aid, "version", ver, "link", link))
       yield
         val text = resultText(result)
         assertNotError(result) && assertTrue(text.length > 10)
 
-  private def sourceContentsTest(label: String, gid: String, aid: String, ver: String, ext: String) =
+  private def sourceFilesTest(label: String, gid: String, aid: String, ver: String, ext: String) =
     test(s"list and get source contents for $label"):
       for
         port   <- Server.install(Web.appWithMiddleware)
         result <- withClient(port): client =>
-          val sourceList = resultText(callTool(client, "list_source_contents", java.util.Map.of("groupId", gid, "artifactId", aid, "version", ver)))
+          val sourceList = resultText(callTool(client, "list_source_files", java.util.Map.of("groupId", gid, "artifactId", aid, "version", ver)))
           assertTrue(sourceList.contains(ext) && sourceList != "[]") // assert inline to fail fast
           val filePattern = (""""([^"]+\.""" + ext.stripPrefix(".") + """)"""").r
           val link = filePattern.findFirstMatchIn(sourceList).get.group(1)
-          callTool(client, "get_source_contents", java.util.Map.of("groupId", gid, "artifactId", aid, "version", ver, "link", link))
+          callTool(client, "get_source_file", java.util.Map.of("groupId", gid, "artifactId", aid, "version", ver, "link", link))
       yield
         val text = resultText(result)
         assertNotError(result) && assertTrue(text.length > 50)
@@ -107,8 +107,8 @@ object McpSpec extends ZIOSpecDefault:
           val toolNames = toolList.map(_.name()).toSet
           // all tools present
           assertTrue(
-            toolNames == Set("get_latest_version", "get_javadoc_index", "get_javadoc_content_list", "get_javadoc_symbol_contents",
-              "list_source_contents", "get_source_contents", "search_artifacts", "symbol_to_artifact"),
+            toolNames == Set("get_latest_version", "get_javadoc_index", "list_javadoc_symbols", "get_javadoc_symbol",
+              "list_source_files", "get_source_file", "search_artifacts", "symbol_to_artifact"),
           ) &&
           // outputSchema, if present, must have type "object"
           assertTrue(toolList.forall: tool =>
@@ -117,7 +117,7 @@ object McpSpec extends ZIOSpecDefault:
           ) &&
           // tools that return structured data must advertise an object outputSchema
           assertTrue({
-            val structured = Set("get_latest_version", "get_javadoc_content_list", "list_source_contents", "search_artifacts", "symbol_to_artifact")
+            val structured = Set("get_latest_version", "list_javadoc_symbols", "list_source_files", "search_artifacts", "symbol_to_artifact")
             toolList.filter(t => structured.contains(t.name())).forall: t =>
               t.outputSchema() != null && t.outputSchema().get("type").asInstanceOf[String] == "object"
           }) &&
@@ -125,7 +125,7 @@ object McpSpec extends ZIOSpecDefault:
           assertTrue(toolList.forall(_.inputSchema().get("type").asInstanceOf[String] == "object")) &&
           // data-class field descriptions flow through into the output schemas
           assertTrue(
-            toolList.find(_.name() == "get_javadoc_content_list").exists(_.outputSchema().toString.contains("Fully-qualified name of the documented symbol")),
+            toolList.find(_.name() == "list_javadoc_symbols").exists(_.outputSchema().toString.contains("Fully-qualified name of the documented symbol")),
             toolList.find(_.name() == "search_artifacts").exists(_.outputSchema().toString.contains("The Maven groupId")),
           )
       ,
@@ -150,46 +150,46 @@ object McpSpec extends ZIOSpecDefault:
         yield assertIsError(result)
       ,
 
-      // --- get_javadoc_content_list ---
-      javadocContentListTest("java (modular)", javaGroupId, javaArtifactId, javaVersion),
-      javadocContentListTest("scala", scalaGroupId, scalaArtifactId, scalaVersion),
-      javadocContentListTest("kotlin", kotlinGroupId, kotlinArtifactId, kotlinVersion),
-      test("get_javadoc_content_list errors for nonexistent version"):
+      // --- list_javadoc_symbols ---
+      listJavadocSymbolsTest("java (modular)", javaGroupId, javaArtifactId, javaVersion),
+      listJavadocSymbolsTest("scala", scalaGroupId, scalaArtifactId, scalaVersion),
+      listJavadocSymbolsTest("kotlin", kotlinGroupId, kotlinArtifactId, kotlinVersion),
+      test("list_javadoc_symbols errors for nonexistent version"):
         for
           port   <- Server.install(Web.appWithMiddleware)
           result <- withClient(port): client =>
-            callTool(client, "get_javadoc_content_list", java.util.Map.of("groupId", javaGroupId, "artifactId", javaArtifactId, "version", "0.0.0-does-not-exist"))
+            callTool(client, "list_javadoc_symbols", java.util.Map.of("groupId", javaGroupId, "artifactId", javaArtifactId, "version", "0.0.0-does-not-exist"))
         yield assertIsError(result)
       ,
 
-      // --- get_javadoc_symbol_contents ---
-      javadocSymbolContentsTest("java (modular)", javaGroupId, javaArtifactId, javaVersion),
-      javadocSymbolContentsTest("scala", scalaGroupId, scalaArtifactId, scalaVersion),
-      javadocSymbolContentsTest("kotlin", kotlinGroupId, kotlinArtifactId, kotlinVersion),
-      test("get_javadoc_symbol_contents errors for nonexistent link"):
+      // --- get_javadoc_symbol ---
+      javadocSymbolTest("java (modular)", javaGroupId, javaArtifactId, javaVersion),
+      javadocSymbolTest("scala", scalaGroupId, scalaArtifactId, scalaVersion),
+      javadocSymbolTest("kotlin", kotlinGroupId, kotlinArtifactId, kotlinVersion),
+      test("get_javadoc_symbol errors for nonexistent link"):
         for
           port   <- Server.install(Web.appWithMiddleware)
           result <- withClient(port): client =>
-            callTool(client, "get_javadoc_symbol_contents", java.util.Map.of("groupId", javaGroupId, "artifactId", javaArtifactId, "version", javaVersion, "link", "nonexistent/FakeClass.html"))
+            callTool(client, "get_javadoc_symbol", java.util.Map.of("groupId", javaGroupId, "artifactId", javaArtifactId, "version", javaVersion, "link", "nonexistent/FakeClass.html"))
         yield assertIsError(result)
       ,
 
-      // --- list_source_contents / get_source_contents ---
-      sourceContentsTest("java", javaGroupId, javaArtifactId, javaVersion, ".java"),
-      sourceContentsTest("scala", scalaGroupId, scalaArtifactId, scalaVersion, ".scala"),
-      sourceContentsTest("kotlin", kotlinGroupId, kotlinArtifactId, kotlinVersion, ".kt"),
-      test("list_source_contents errors for nonexistent artifact"):
+      // --- list_source_files / get_source_file ---
+      sourceFilesTest("java", javaGroupId, javaArtifactId, javaVersion, ".java"),
+      sourceFilesTest("scala", scalaGroupId, scalaArtifactId, scalaVersion, ".scala"),
+      sourceFilesTest("kotlin", kotlinGroupId, kotlinArtifactId, kotlinVersion, ".kt"),
+      test("list_source_files errors for nonexistent artifact"):
         for
           port   <- Server.install(Web.appWithMiddleware)
           result <- withClient(port): client =>
-            callTool(client, "list_source_contents", java.util.Map.of("groupId", "com.nonexistent.fake", "artifactId", "does-not-exist", "version", "1.0.0"))
+            callTool(client, "list_source_files", java.util.Map.of("groupId", "com.nonexistent.fake", "artifactId", "does-not-exist", "version", "1.0.0"))
         yield assertIsError(result)
       ,
-      test("get_source_contents errors for nonexistent file"):
+      test("get_source_file errors for nonexistent file"):
         for
           port   <- Server.install(Web.appWithMiddleware)
           result <- withClient(port): client =>
-            callTool(client, "get_source_contents", java.util.Map.of("groupId", javaGroupId, "artifactId", javaArtifactId, "version", javaVersion, "link", "com/fake/NonExistent.java"))
+            callTool(client, "get_source_file", java.util.Map.of("groupId", javaGroupId, "artifactId", javaArtifactId, "version", javaVersion, "link", "com/fake/NonExistent.java"))
         yield assertIsError(result)
       ,
 

@@ -29,7 +29,7 @@ object MCP:
     artifactId: ArtifactId,
     @description("The artifact version, e.g. \"2.1.9\".")
     version: Version,
-    @description("The relative path/link within the jar, as returned by get_javadoc_content_list or list_source_contents.")
+    @description("The relative path/link within the jar, as returned by list_javadoc_symbols or list_source_files.")
     link: String,
   ) derives Schema
 
@@ -80,44 +80,43 @@ object MCP:
       "Works against the live Maven Central catalog — you do not need to " +
       "download the javadoc jar."
 
-    val getClasses: String =
-      "Lists every entry in the Javadoc/Scaladoc jar of a Maven Central " +
-      "artifact version (HTML pages for classes/methods/packages, plus " +
-      "search-index files and resources). Each returned `link` can be " +
-      "passed to get_javadoc_symbol_contents to read the rendered API doc " +
-      "as text/markdown. " +
-      "Use this when you need to discover what a library documents and " +
-      "then read those docs without leaving the agent loop. " +
-      "If this returns NotFoundError (some libraries don't publish a " +
-      "javadoc jar — e.g. some ZIO releases) fall back to " +
-      "list_source_contents to read the raw source instead."
+    val listJavadocSymbols: String =
+      "Enumerates the public API a library documents — classes, " +
+      "interfaces, traits, objects, enums, and annotations — for a Maven " +
+      "Central artifact version. Each entry includes the fully-qualified " +
+      "class name (`fqn`) and a `link` that can be passed to " +
+      "get_javadoc_symbol to read the rendered API documentation. " +
+      "Use this to answer 'which classes/types does library X have?' or " +
+      "'find classes related to <topic>' — it is the fastest way to list " +
+      "the API by name without reading code. Prefer this over " +
+      "list_source_files whenever you only need class/type names. Only " +
+      "if this returns NotFoundError because no javadoc jar was published, " +
+      "fall back to list_source_files. Works against the live Maven " +
+      "Central catalog with no local install, build, or checkout required."
 
-    val getSymbolContents: String =
+    val getJavadocSymbol: String =
       "Reads one Javadoc/Scaladoc page from a Maven Central artifact, " +
       "already converted to plain text/markdown so you don't have to parse " +
-      "HTML. Pass the `link` value returned by get_javadoc_content_list. " +
+      "HTML. Pass the `link` value returned by list_javadoc_symbols. " +
       "Use this when you need to know what a class, method, or field does " +
       "and what its parameters mean for any library on Maven Central — " +
       "without downloading or unzipping the javadoc jar yourself."
 
-    val listSource: String =
-      "Lists every file inside the **sources jar** (the `-sources.jar` " +
-      "publishers attach alongside the binary) of a Maven Central artifact " +
-      "version. Each returned path can be fed to get_source_contents to " +
-      "read the file. " +
-      "Prefer this any time you would otherwise locate a `-sources.jar` " +
-      "in your local Coursier/Ivy/Maven cache and `unzip` it: this tool " +
-      "works directly against Maven Central, requires no local install or " +
-      "build, and works for libraries you've never depended on. " +
-      "Use it whenever you need to read the actual source of a JVM library " +
-      "(Java, Kotlin, Scala) — for example to understand an implementation " +
-      "detail, find where a method is defined, see how a feature is wired " +
-      "internally, or work with a library that doesn't publish javadocs."
+    val listSourceFiles: String =
+      "Lists the raw source files (`.java`, `.kt`, and `.scala`) in a Maven " +
+      "Central artifact version's `-sources.jar`. Each returned path can be " +
+      "passed to get_source_file to read the actual source code. Use " +
+      "this only when you need the implementation — for example, to trace " +
+      "behavior or see how something is wired. To discover which classes " +
+      "exist, or to find classes by topic or name, use " +
+      "list_javadoc_symbols instead; do not use this tool just to " +
+      "enumerate classes. Works against the live Maven Central catalog " +
+      "with no local install, build, or checkout required."
 
-    val getSource: String =
+    val getSourceFile: String =
       "Reads one source file from a Maven Central library's sources jar " +
       "(the `-sources.jar` artifact). Pass the `link` value returned by " +
-      "list_source_contents. " +
+      "list_source_files. " +
       "Use this whenever you need the exact source text of a JVM library " +
       "— tracing behavior into a dependency, confirming a public API's " +
       "implementation, finding a definition, or comparing two library " +
@@ -140,7 +139,7 @@ object MCP:
       "Use this when you have a symbol from a stack trace, an import " +
       "line, or an error message and you need to know which library to " +
       "look in. From there, chain into get_latest_version, then " +
-      "list_source_contents / get_javadoc_content_list to read the code " +
+      "list_source_files / list_javadoc_symbols to read the code " +
       "or docs."
 
   val getLatestTool = McpTool("get_latest_version")
@@ -160,39 +159,39 @@ object MCP:
             SymbolSearch.indexJavadocContents(input).run
             Extractor.index(input).run
 
-  val getClassesTool = McpTool("get_javadoc_content_list")
-    .description(Descriptions.getClasses)
+  val listJavadocSymbolsTool = McpTool("list_javadoc_symbols")
+    .description(Descriptions.listJavadocSymbols)
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: GroupArtifactVersion) =>
-      logMcp("get_javadoc_content_list", input.toString):
+      logMcp("list_javadoc_symbols", input.toString):
         ZIO.scoped:
           defer:
             SymbolSearch.indexJavadocContents(input).run
             Extractor.javadocContents(input).run
 
-  val getSymbolContentsTool = McpTool("get_javadoc_symbol_contents")
-    .description(Descriptions.getSymbolContents)
+  val getJavadocSymbolTool = McpTool("get_javadoc_symbol")
+    .description(Descriptions.getJavadocSymbol)
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: JavadocSymbol) =>
       val groupArtifactVersion = GroupArtifactVersion(input.groupId, input.artifactId, input.version)
-      logMcp("get_javadoc_symbol_contents", input.toString):
+      logMcp("get_javadoc_symbol", input.toString):
         ZIO.scoped:
           Extractor.javadocSymbolContents(groupArtifactVersion, input.link)
 
-  val listSourceTool = McpTool("list_source_contents")
-    .description(Descriptions.listSource)
+  val listSourceFilesTool = McpTool("list_source_files")
+    .description(Descriptions.listSourceFiles)
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: GroupArtifactVersion) =>
-      logMcp("list_source_contents", input.toString):
+      logMcp("list_source_files", input.toString):
         ZIO.scoped:
           Extractor.sourceContents(input)
 
-  val getSourceTool = McpTool("get_source_contents")
-    .description(Descriptions.getSource)
+  val getSourceFileTool = McpTool("get_source_file")
+    .description(Descriptions.getSourceFile)
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: JavadocSymbol) =>
       val groupArtifactVersion = GroupArtifactVersion(input.groupId, input.artifactId, input.version)
-      logMcp("get_source_contents", input.toString):
+      logMcp("get_source_file", input.toString):
         ZIO.scoped:
           Extractor.sourceFileContents(groupArtifactVersion, input.link)
 
@@ -214,9 +213,9 @@ object MCP:
   val mcpServer = McpServer("javadocs.dev", "0.0.2")
     .tool(getLatestTool)
     .tool(getIndexTool)
-    .tool(getClassesTool)
-    .tool(getSymbolContentsTool)
-    .tool(getSourceTool)
-    .tool(listSourceTool)
+    .tool(listJavadocSymbolsTool)
+    .tool(getJavadocSymbolTool)
+    .tool(getSourceFileTool)
+    .tool(listSourceFilesTool)
     .tool(searchArtifactsTool)
     .tool(symbolToArtifactTool)

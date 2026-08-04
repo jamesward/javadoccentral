@@ -43,43 +43,43 @@ object Api:
       .outError[ApiError](Status.NotFound)
       .??(Doc.p(MCP.Descriptions.getIndex))
 
-  val contentListEndpoint =
-    Endpoint(Method.GET / "api" / "javadoc-content-list")
+  val listJavadocSymbolsEndpoint =
+    Endpoint(Method.GET / "api" / "list-javadoc-symbols")
       .query[GroupId]("groupId")
       .query[ArtifactId]("artifactId")
       .query[Version]("version")
       .out[Set[Extractor.Content]]
       .outError[ApiError](Status.NotFound)
-      .??(Doc.p(MCP.Descriptions.getClasses))
+      .??(Doc.p(MCP.Descriptions.listJavadocSymbols))
 
-  val symbolContentsEndpoint =
-    Endpoint(Method.GET / "api" / "javadoc-symbol-contents")
+  val javadocSymbolEndpoint =
+    Endpoint(Method.GET / "api" / "javadoc-symbol")
       .query[GroupId]("groupId")
       .query[ArtifactId]("artifactId")
       .query[Version]("version")
       .query[String]("link")
       .out[String]
       .outError[ApiError](Status.NotFound)
-      .??(Doc.p(MCP.Descriptions.getSymbolContents))
+      .??(Doc.p(MCP.Descriptions.getJavadocSymbol))
 
-  val listSourceEndpoint =
-    Endpoint(Method.GET / "api" / "list-source-contents")
+  val listSourceFilesEndpoint =
+    Endpoint(Method.GET / "api" / "list-source-files")
       .query[GroupId]("groupId")
       .query[ArtifactId]("artifactId")
       .query[Version]("version")
       .out[Set[String]]
       .outError[ApiError](Status.NotFound)
-      .??(Doc.p(MCP.Descriptions.listSource))
+      .??(Doc.p(MCP.Descriptions.listSourceFiles))
 
-  val sourceEndpoint =
-    Endpoint(Method.GET / "api" / "source-contents")
+  val sourceFileEndpoint =
+    Endpoint(Method.GET / "api" / "source-file")
       .query[GroupId]("groupId")
       .query[ArtifactId]("artifactId")
       .query[Version]("version")
       .query[String]("link")
       .out[String]
       .outError[ApiError](Status.NotFound)
-      .??(Doc.p(MCP.Descriptions.getSource))
+      .??(Doc.p(MCP.Descriptions.getSourceFile))
 
   val searchArtifactsEndpoint =
     Endpoint(Method.GET / "api" / "search-artifacts")
@@ -96,8 +96,8 @@ object Api:
       .??(Doc.p(MCP.Descriptions.symbolToArtifact))
 
   val endpoints = List(
-    latestEndpoint, indexEndpoint, contentListEndpoint, symbolContentsEndpoint,
-    listSourceEndpoint, sourceEndpoint, searchArtifactsEndpoint, symbolToArtifactEndpoint,
+    latestEndpoint, indexEndpoint, listJavadocSymbolsEndpoint, javadocSymbolEndpoint,
+    listSourceFilesEndpoint, sourceFileEndpoint, searchArtifactsEndpoint, symbolToArtifactEndpoint,
   )
 
   // ---- Implementations (call the same Extractor/SymbolSearch logic as MCP) ----
@@ -116,8 +116,8 @@ object Api:
         Extractor.index(gav).run
       ).mapError(toApiError)
 
-  private val contentListRoute =
-    contentListEndpoint.implement: (input: (GroupId, ArtifactId, Version)) =>
+  private val listJavadocSymbolsRoute =
+    listJavadocSymbolsEndpoint.implement: (input: (GroupId, ArtifactId, Version)) =>
       val (g, a, v) = input
       val gav = GroupArtifactVersion(g, a, v)
       ZIO.scoped(defer:
@@ -125,18 +125,18 @@ object Api:
         Extractor.javadocContents(gav).run
       ).mapError(toApiError)
 
-  private val symbolContentsRoute =
-    symbolContentsEndpoint.implement: (input: (GroupId, ArtifactId, Version, String)) =>
+  private val javadocSymbolRoute =
+    javadocSymbolEndpoint.implement: (input: (GroupId, ArtifactId, Version, String)) =>
       val (g, a, v, link) = input
       ZIO.scoped(Extractor.javadocSymbolContents(GroupArtifactVersion(g, a, v), link)).mapError(toApiError)
 
-  private val listSourceRoute =
-    listSourceEndpoint.implement: (input: (GroupId, ArtifactId, Version)) =>
+  private val listSourceFilesRoute =
+    listSourceFilesEndpoint.implement: (input: (GroupId, ArtifactId, Version)) =>
       val (g, a, v) = input
       ZIO.scoped(Extractor.sourceContents(GroupArtifactVersion(g, a, v))).mapError(toApiError)
 
-  private val sourceRoute =
-    sourceEndpoint.implement: (input: (GroupId, ArtifactId, Version, String)) =>
+  private val sourceFileRoute =
+    sourceFileEndpoint.implement: (input: (GroupId, ArtifactId, Version, String)) =>
       val (g, a, v, link) = input
       ZIO.scoped(Extractor.sourceFileContents(GroupArtifactVersion(g, a, v), link)).mapError(toApiError)
 
@@ -153,8 +153,8 @@ object Api:
   val openApi = OpenAPIGen.fromEndpoints(
     title = "javadocs.dev API",
     version = "0.0.2",
-    latestEndpoint, indexEndpoint, contentListEndpoint, symbolContentsEndpoint,
-    listSourceEndpoint, sourceEndpoint, searchArtifactsEndpoint, symbolToArtifactEndpoint,
+    latestEndpoint, indexEndpoint, listJavadocSymbolsEndpoint, javadocSymbolEndpoint,
+    listSourceFilesEndpoint, sourceFileEndpoint, searchArtifactsEndpoint, symbolToArtifactEndpoint,
   )
 
   private val docRoutes: Routes[Any, Response] =
@@ -164,6 +164,6 @@ object Api:
 
   val routes =
     Routes(
-      latestRoute, indexRoute, contentListRoute, symbolContentsRoute,
-      listSourceRoute, sourceRoute, searchArtifactsRoute, symbolToArtifactRoute,
+      latestRoute, indexRoute, listJavadocSymbolsRoute, javadocSymbolRoute,
+      listSourceFilesRoute, sourceFileRoute, searchArtifactsRoute, symbolToArtifactRoute,
     ) ++ docRoutes

@@ -440,18 +440,18 @@ object AppSpec extends ZIOSpecDefault:
         val indexBody = indexResp.body.asString.run
 
         val listResp = Web.appWithMiddleware.runZIO(Request.get(apiUrl(
-          "javadoc-content-list", "groupId" -> gid, "artifactId" -> aid, "version" -> ver,
+          "list-javadoc-symbols", "groupId" -> gid, "artifactId" -> aid, "version" -> ver,
         )).addHeader(ff)).run
         val listBody = listResp.body.asString.run
 
         val symbolResp = Web.appWithMiddleware.runZIO(Request.get(apiUrl(
-          "javadoc-symbol-contents", "groupId" -> gid, "artifactId" -> aid,
+          "javadoc-symbol", "groupId" -> gid, "artifactId" -> aid,
           "version" -> ver, "link" -> "index.html",
         )).addHeader(ff)).run
         val symbolBody = symbolResp.body.asString.run
 
         val sourceListResp = Web.appWithMiddleware.runZIO(Request.get(apiUrl(
-          "list-source-contents", "groupId" -> gid, "artifactId" -> aid, "version" -> ver,
+          "list-source-files", "groupId" -> gid, "artifactId" -> aid, "version" -> ver,
         )).addHeader(ff)).run
         val sourceListBody = sourceListResp.body.asString.run
         val sourcePaths = ZIO.fromEither(sourceListBody.fromJson[Set[String]])
@@ -460,7 +460,7 @@ object AppSpec extends ZIOSpecDefault:
           .orDieWith(_ => new RuntimeException("sources jar contained no Java/Scala source file")).run
 
         val sourceResp = Web.appWithMiddleware.runZIO(Request.get(apiUrl(
-          "source-contents", "groupId" -> gid, "artifactId" -> aid,
+          "source-file", "groupId" -> gid, "artifactId" -> aid,
           "version" -> ver, "link" -> sourceLink,
         )).addHeader(ff)).run
         val sourceBody = sourceResp.body.asString.run
@@ -515,10 +515,10 @@ object AppSpec extends ZIOSpecDefault:
           openApiBody.contains("\"openapi\""),
           openApiBody.contains("/api/latest-version"),
           openApiBody.contains("/api/javadoc-index"),
-          openApiBody.contains("/api/javadoc-content-list"),
-          openApiBody.contains("/api/javadoc-symbol-contents"),
-          openApiBody.contains("/api/list-source-contents"),
-          openApiBody.contains("/api/source-contents"),
+          openApiBody.contains("/api/list-javadoc-symbols"),
+          openApiBody.contains("/api/javadoc-symbol"),
+          openApiBody.contains("/api/list-source-files"),
+          openApiBody.contains("/api/source-file"),
           openApiBody.contains("/api/search-artifacts"),
           openApiBody.contains("/api/symbol-to-artifact"),
           openApiBody.contains(MCP.Descriptions.getLatest.take(40)),
