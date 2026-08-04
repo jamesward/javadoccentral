@@ -24,16 +24,25 @@ object SymbolSearch:
   case class SearchError(message: String)
 
 
+  private def stringToGroupArtifact(s: String): MavenCentral.GroupArtifact =
+    // todo: parse failure handling
+    val parts = s.split(':')
+    MavenCentral.GroupArtifact(MavenCentral.GroupId(parts(0)), MavenCentral.ArtifactId(parts(1)))
+
+  private def groupArtifactToString(ga: MavenCentral.GroupArtifact): String = s"${ga.groupId}:${ga.artifactId}"
+
+  // GroupArtifact is persisted in Redis as a compact `groupId:artifactId`
+  // string. This given MUST live in SymbolSearch's scope (not inside the
+  // CodecSupplier): every Redis op here — `sMembers(...).returning[GroupArtifact]`,
+  // `sAdd(key, groupArtifact)`, `hSet/hGet` with `groupArtifact` as the field —
+  // resolves `Schema[GroupArtifact]` at *this* call site, as does
+  // `CodecSupplier.get[A: Schema]` (its `Schema` comes from the caller, not from
+  // givens defined inside the supplier). So this shadows zio-mavencentral's
+  // ambient *record* schema for Redis. (MCP output still uses the record schema,
+  // resolved in MCP.scala's scope.)
+  given Schema[MavenCentral.GroupArtifact] = Schema.primitive[String].transform(stringToGroupArtifact, groupArtifactToString)
+
   object ProtobufCodecSupplier extends CodecSupplier:
-    def stringToGroupArtifact(s: String): MavenCentral.GroupArtifact =
-      // todo: parse failure handling
-      val parts = s.split(':')
-      MavenCentral.GroupArtifact(MavenCentral.GroupId(parts(0)), MavenCentral.ArtifactId(parts(1)))
-
-    def groupArtifactToString(ga: MavenCentral.GroupArtifact): String = s"${ga.groupId}:${ga.artifactId}"
-
-    given Schema[MavenCentral.GroupArtifact] = Schema.primitive[String].transform(stringToGroupArtifact, groupArtifactToString)
-
     def get[A: Schema]: BinaryCodec[A] = ProtobufCodec.protobufCodec
 
   // for deserializing inference responses
