@@ -366,6 +366,122 @@ object Web:
     Response(body = Body.from(mcpServerCardValue)(using SchemaJsonCodec.schemaBasedBinaryCodec))
       .contentType(MediaType.application.json)
 
+  // ---- Agent Skill (agentskills.io) + Discovery index (Cloudflare RFC v0.2.0) ----
+
+  // Shared so the index `description` matches the SKILL.md frontmatter (SHOULD per spec).
+  private val skillDescription: String =
+    "Get Javadoc/Scaladoc and source for Java, Kotlin, and Scala libraries on Maven Central " +
+      "via javadocs.dev — resolve versions, list and read rendered API docs, and read library " +
+      "source. Use when you need API documentation or source for a Maven Central dependency " +
+      "(an import, a stack-trace class, or a build-file coordinate) without a local checkout."
+
+  // Served at /SKILL.md. Based on jamesward/javadocs-power POWER.md, adapted for javadocs.dev.
+  val skillMd: String =
+    s"""|---
+        |name: javadocs
+        |description: $skillDescription
+        |metadata:
+        |  author: James Ward
+        |  homepage: https://www.javadocs.dev
+        |---
+        |
+        |# javadocs.dev
+        |
+        |Browse Javadoc/Scaladoc and source for any artifact on Maven Central (Java,
+        |Kotlin, Scala) — no local build, checkout, or jar extraction required.
+        |
+        |There are two ways to use it:
+        |
+        |- **MCP server (preferred):** Streamable HTTP at `https://www.javadocs.dev/mcp`.
+        |  Its tools resolve the latest version, list Javadoc/source entries, and read
+        |  rendered API docs or raw source straight from the live Maven Central catalog.
+        |- **HTTP / URLs:** every page also returns Markdown when requested with the
+        |  `Accept: text/markdown` header.
+        |
+        |## Onboarding
+        |
+        |### Step 1: Resolve dependencies
+        |
+        |Before looking anything up, determine the exact Maven Central coordinates
+        |(groupId, artifactId, version) the project uses. Identify the build tool from
+        |its build file and run its dependency listing — prefer the wrapper / launcher
+        |script if one is present:
+        |
+        |- **Maven** (`pom.xml`, wrapper `mvnw`): `./mvnw dependency:list`
+        |- **Gradle** (`build.gradle` or `build.gradle.kts`, wrapper `gradlew`): `./gradlew dependencies`
+        |- **sbt** (`build.sbt`, launcher `sbt`): `./sbt dependencyTree`
+        |
+        |## Best practices
+        |
+        |### Use the project's resolved versions
+        |
+        |When querying javadocs.dev, pass the version resolved above. Only look up the
+        |latest version if the dependency's version isn't known from the resolved set —
+        |API docs and source differ between versions, so using the resolved version
+        |avoids mismatches.
+        |
+        |### Prefer the MCP server
+        |
+        |If an MCP client is available, connect to `https://www.javadocs.dev/mcp` and use
+        |its tools instead of scraping HTML; they return structured results.
+        |
+        |## URL patterns (fallback)
+        |
+        |- `/{groupId}` — list artifacts for a group
+        |- `/{groupId}/{artifactId}` — list versions for an artifact
+        |- `/{groupId}/{artifactId}/{version}` — list classes / symbols
+        |- `/{groupId}/{artifactId}/{version}/{path}` — a specific symbol's Javadoc
+        |- use `latest` as the version to resolve the newest release
+        |
+        |Append the Markdown header to any of these to get Markdown instead of HTML:
+        |
+        |```
+        |curl -H "Accept: text/markdown" https://www.javadocs.dev/dev.zio/zio-schema_3/1.8.5/zio/schema/Schema.html
+        |```
+        |""".stripMargin
+
+  // Serve the exact UTF-8 bytes we also hash, so the discovery digest can never
+  // drift from the served artifact regardless of the default charset.
+  private val skillMdBytes: Array[Byte] = skillMd.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+
+  val skillMarkdown: Response =
+    Response(body = Body.fromArray(skillMdBytes)).contentType(MediaType.text.markdown)
+
+  private val skillDigest: String =
+    "sha256:" + java.security.MessageDigest.getInstance("SHA-256")
+      .digest(skillMdBytes).map(b => f"${b & 0xff}%02x").mkString
+
+  final case class AgentSkill(
+    name: String,
+    @fieldName("type") kind: String,
+    description: String,
+    url: String,
+    digest: String,
+  ) derives Schema
+
+  final case class AgentSkillsIndex(
+    @fieldName("$schema") schema: String,
+    skills: List[AgentSkill],
+  ) derives Schema
+
+  private val agentSkillsIndexValue = AgentSkillsIndex(
+    schema = "https://schemas.agentskills.io/discovery/0.2.0/schema.json",
+    skills = List(
+      AgentSkill(
+        name = "javadocs",
+        kind = "skill-md",
+        description = skillDescription,
+        url = "/SKILL.md",
+        digest = skillDigest,
+      )
+    ),
+  )
+
+  // Served at /.well-known/agent-skills/index.json (Agent Skills Discovery, RFC v0.2.0).
+  val agentSkillsIndex: Response =
+    Response(body = Body.from(agentSkillsIndexValue)(using SchemaJsonCodec.schemaBasedBinaryCodec))
+      .contentType(MediaType.application.json)
+
   private val llmsHeader =
     """# javadocs.dev
       |
@@ -401,6 +517,12 @@ object Web:
       |## MCP
       |
       |An MCP server (Streamable HTTP) is available at: `https://www.javadocs.dev/mcp`
+      |
+      |## Skills
+      |
+      |An Agent Skill for driving this service is published at `https://www.javadocs.dev/SKILL.md`
+      |and is discoverable via the Agent Skills index at
+      |`https://www.javadocs.dev/.well-known/agent-skills/index.json`.
       |""".stripMargin
 
   val llmsTxt: Handler[Redis, Nothing, Request, Response] =
@@ -536,12 +658,14 @@ object Web:
       getOrHead / "favicon.ico" -> Handler.fromResource("favicon.ico").orDie,
       getOrHead / "favicon.png" -> Handler.fromResource("favicon.png").orDie,
       getOrHead / "robots.txt" -> robots.toHandler,
+      getOrHead / "SKILL.md" -> skillMarkdown.toHandler,
       getOrHead / "llms.txt" -> llmsTxt,
       getOrHead / "llms" / groupId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, Request)](llmsGroup),
       getOrHead / "llms" / groupId / artifactId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, Request)](llmsArtifact),
       getOrHead / "llms" / groupId / artifactId / version -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Request)](llmsVersion),
       getOrHead / "sitemap.xml" -> sitemapIndex,
       getOrHead / "sitemap" / groupId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, Request)](sitemapGroup),
+      getOrHead / ".well-known" / "agent-skills" / "index.json" -> agentSkillsIndex.toHandler,
       getOrHead / ".well-known" / "mcp" / "server-card.json" -> mcpServerCard.toHandler,
       getOrHead / ".well-known" / trailing -> Handler.notFound,
       getOrHead / groupId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, Request)](withGroupId),

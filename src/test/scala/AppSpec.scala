@@ -10,6 +10,14 @@ import zio.test.*
 
 object AppSpec extends ZIOSpecDefault:
 
+  // Helpers kept outside `defer` bodies: zio-direct disallows mutable `Array`
+  // vals inside a defer clause, so byte work lives in plain methods.
+  private def utf8(chunk: Chunk[Byte]): String =
+    new String(chunk.toArray, java.nio.charset.StandardCharsets.UTF_8)
+  private def sha256Hex(chunk: Chunk[Byte]): String =
+    "sha256:" + java.security.MessageDigest.getInstance("SHA-256")
+      .digest(chunk.toArray).map(b => f"${b & 0xff}%02x").mkString
+
   def spec = suite("App")(
     test("routing"):
       val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
@@ -347,13 +355,52 @@ object AppSpec extends ZIOSpecDefault:
           // (3) Homepage advertises a Link HEADER (what scanners read) ...
           linkHeader.exists(_.contains("mcp-server-card")),
           linkHeader.exists(_.contains("alternate")),
+          linkHeader.exists(_.contains("agent-skills")),
           // ... and also emits the links as <link> tags in the page <head>
           homeBody.contains("rel=\"mcp-server-card\""),
           homeBody.contains("rel=\"alternate\""),
+          homeBody.contains("rel=\"agent-skills\""),
           // (4) HEAD / carries the same Link header, with an empty body
           headResp.rawHeader("Link").exists(_.contains("mcp-server-card")),
           headResp.rawHeader("Link") == linkHeader,
           headBody.isEmpty,
+        )
+
+    , test("agent skills: /SKILL.md and discovery index with a matching digest"):
+      val ff = Header.Custom("X-Forwarded-For", "192.168.1.100")
+      defer:
+        val skillResp  = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root / "SKILL.md")).addHeader(ff)).run
+        val skillChunk = skillResp.body.asChunk.run
+        val skillBody  = utf8(skillChunk)
+
+        val idxResp = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root / ".well-known" / "agent-skills" / "index.json")).addHeader(ff)).run
+        val idxBody = idxResp.body.asString.run
+
+        val llmsResp = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root / "llms.txt")).addHeader(ff)).run
+        val llmsBody = llmsResp.body.asString.run
+
+        // Independently recompute the digest of the served SKILL.md bytes.
+        val digest = sha256Hex(skillChunk)
+
+        assertTrue(
+          // /SKILL.md is a valid Agent Skill (markdown + required frontmatter)
+          skillResp.status.isSuccess,
+          skillResp.header(Header.ContentType).exists(_.renderedValue.contains("markdown")),
+          skillBody.contains("name: javadocs"),
+          skillBody.contains("description:"),
+          // discovery index has the v0.2.0 shape and required per-skill fields
+          idxResp.status.isSuccess,
+          idxResp.header(Header.ContentType).exists(_.renderedValue.contains("application/json")),
+          idxBody.contains("\"$schema\":\"https://schemas.agentskills.io/discovery/0.2.0/schema.json\""),
+          idxBody.contains("\"type\":\"skill-md\""),
+          idxBody.contains("\"url\":\"/SKILL.md\""),
+          idxBody.contains("\"name\":\"javadocs\""),
+          // the index digest matches the exact bytes served at /SKILL.md
+          idxBody.contains(s"\"digest\":\"$digest\""),
+          // llms.txt advertises the skill + discovery index
+          llmsResp.status.isSuccess,
+          llmsBody.contains("https://www.javadocs.dev/SKILL.md"),
+          llmsBody.contains("/.well-known/agent-skills/index.json"),
         )
 
   ).provide(

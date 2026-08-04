@@ -41,6 +41,7 @@ object UI:
   private val discoveryLinks: Seq[(String, String, Option[String])] = Seq(
     ("alternate", "/llms.txt", Some("text/markdown")),
     ("mcp-server-card", "/.well-known/mcp/server-card.json", None),
+    ("agent-skills", "/.well-known/agent-skills/index.json", None),
     ("sitemap", "/sitemap.xml", None),
   )
 
