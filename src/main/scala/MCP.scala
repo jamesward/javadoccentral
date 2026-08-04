@@ -60,22 +60,18 @@ object MCP:
         .tapDefect(c => ZIO.logError(s"MCP tool defect: tool=$toolName cause=${c.prettyPrint}"))
         .run
 
-  val getLatestTool = McpTool("get_latest_version")
-    .description(
+  // Tool/operation descriptions — the single source of truth shared by both the
+  // MCP tools below and the REST Endpoints in Api.scala.
+  object Descriptions:
+    val getLatest: String =
       "Resolves the latest published version of a Maven Central artifact (any " +
       "groupId:artifactId — Java, Kotlin, or Scala library). " +
       "Call this first when you only know the artifact but not the version: " +
       "the version it returns feeds into every other tool here that takes a " +
       "concrete version. Works against the live Maven Central catalog — no " +
       "local install, build tool, or repository checkout required."
-    )
-    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
-    .handle: (input: GroupArtifact) =>
-      logMcp("get_latest_version", input.toString):
-        Extractor.latest(input)
 
-  val getIndexTool = McpTool("get_javadoc_index")
-    .description(
+    val getIndex: String =
       "Fetches the rendered Javadoc/Scaladoc index page for a specific " +
       "Maven Central artifact version, converted to plain text/markdown. " +
       "Useful for orienting yourself in an unfamiliar library: it lists the " +
@@ -83,17 +79,8 @@ object MCP:
       "overview. Use this before drilling into specific symbols. " +
       "Works against the live Maven Central catalog — you do not need to " +
       "download the javadoc jar."
-    )
-    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
-    .handle: (input: GroupArtifactVersion) =>
-      logMcp("get_javadoc_index", input.toString):
-        ZIO.scoped:
-          defer:
-            SymbolSearch.indexJavadocContents(input).run
-            Extractor.index(input).run
 
-  val getClassesTool = McpTool("get_javadoc_content_list")
-    .description(
+    val getClasses: String =
       "Lists every entry in the Javadoc/Scaladoc jar of a Maven Central " +
       "artifact version (HTML pages for classes/methods/packages, plus " +
       "search-index files and resources). Each returned `link` can be " +
@@ -104,33 +91,16 @@ object MCP:
       "If this returns NotFoundError (some libraries don't publish a " +
       "javadoc jar — e.g. some ZIO releases) fall back to " +
       "list_source_contents to read the raw source instead."
-    )
-    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
-    .handle: (input: GroupArtifactVersion) =>
-      logMcp("get_javadoc_content_list", input.toString):
-        ZIO.scoped:
-          defer:
-            SymbolSearch.indexJavadocContents(input).run
-            Extractor.javadocContents(input).run
 
-  val getSymbolContentsTool = McpTool("get_javadoc_symbol_contents")
-    .description(
+    val getSymbolContents: String =
       "Reads one Javadoc/Scaladoc page from a Maven Central artifact, " +
       "already converted to plain text/markdown so you don't have to parse " +
       "HTML. Pass the `link` value returned by get_javadoc_content_list. " +
       "Use this when you need to know what a class, method, or field does " +
       "and what its parameters mean for any library on Maven Central — " +
       "without downloading or unzipping the javadoc jar yourself."
-    )
-    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
-    .handle: (input: JavadocSymbol) =>
-      val groupArtifactVersion = GroupArtifactVersion(input.groupId, input.artifactId, input.version)
-      logMcp("get_javadoc_symbol_contents", input.toString):
-        ZIO.scoped:
-          Extractor.javadocSymbolContents(groupArtifactVersion, input.link)
 
-  val listSourceTool = McpTool("list_source_contents")
-    .description(
+    val listSource: String =
       "Lists every file inside the **sources jar** (the `-sources.jar` " +
       "publishers attach alongside the binary) of a Maven Central artifact " +
       "version. Each returned path can be fed to get_source_contents to " +
@@ -143,15 +113,8 @@ object MCP:
       "(Java, Kotlin, Scala) — for example to understand an implementation " +
       "detail, find where a method is defined, see how a feature is wired " +
       "internally, or work with a library that doesn't publish javadocs."
-    )
-    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
-    .handle: (input: GroupArtifactVersion) =>
-      logMcp("list_source_contents", input.toString):
-        ZIO.scoped:
-          Extractor.sourceContents(input)
 
-  val getSourceTool = McpTool("get_source_contents")
-    .description(
+    val getSource: String =
       "Reads one source file from a Maven Central library's sources jar " +
       "(the `-sources.jar` artifact). Pass the `link` value returned by " +
       "list_source_contents. " +
@@ -161,30 +124,16 @@ object MCP:
       "versions. Strongly preferred over locating the jar in a local " +
       "build cache and unzipping it: it works for any Maven Central " +
       "artifact, no local checkout or build needed."
-    )
-    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
-    .handle: (input: JavadocSymbol) =>
-      val groupArtifactVersion = GroupArtifactVersion(input.groupId, input.artifactId, input.version)
-      logMcp("get_source_contents", input.toString):
-        ZIO.scoped:
-          Extractor.sourceFileContents(groupArtifactVersion, input.link)
 
-  val searchArtifactsTool = McpTool("search_artifacts")
-    .description(
+    val searchArtifacts: String =
       "Searches the indexed Maven Central catalog for artifacts whose " +
       "groupId or artifactId contains a substring (case-insensitive). " +
       "Use this when you know part of a library name (e.g. \"jackson\", " +
       "\"zio-http\", \"netty-codec\") and need the exact " +
       "groupId:artifactId coordinates to feed into the other tools. " +
       "Pair with get_latest_version once you've picked an artifact."
-    )
-    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
-    .handle: (input: Symbol) =>
-      logMcp("search_artifacts", input.query):
-        SymbolSearch.searchGroupArtifacts(input.query)
 
-  val symbolToArtifactTool = McpTool("symbol_to_artifact")
-    .description(
+    val symbolToArtifact: String =
       "Resolves a class name, fully-qualified type, or package name to " +
       "the Maven Central artifact (groupId, artifactId) that publishes " +
       "it. Case-sensitive. " +
@@ -193,7 +142,69 @@ object MCP:
       "look in. From there, chain into get_latest_version, then " +
       "list_source_contents / get_javadoc_content_list to read the code " +
       "or docs."
-    )
+
+  val getLatestTool = McpTool("get_latest_version")
+    .description(Descriptions.getLatest)
+    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
+    .handle: (input: GroupArtifact) =>
+      logMcp("get_latest_version", input.toString):
+        Extractor.latest(input)
+
+  val getIndexTool = McpTool("get_javadoc_index")
+    .description(Descriptions.getIndex)
+    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
+    .handle: (input: GroupArtifactVersion) =>
+      logMcp("get_javadoc_index", input.toString):
+        ZIO.scoped:
+          defer:
+            SymbolSearch.indexJavadocContents(input).run
+            Extractor.index(input).run
+
+  val getClassesTool = McpTool("get_javadoc_content_list")
+    .description(Descriptions.getClasses)
+    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
+    .handle: (input: GroupArtifactVersion) =>
+      logMcp("get_javadoc_content_list", input.toString):
+        ZIO.scoped:
+          defer:
+            SymbolSearch.indexJavadocContents(input).run
+            Extractor.javadocContents(input).run
+
+  val getSymbolContentsTool = McpTool("get_javadoc_symbol_contents")
+    .description(Descriptions.getSymbolContents)
+    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
+    .handle: (input: JavadocSymbol) =>
+      val groupArtifactVersion = GroupArtifactVersion(input.groupId, input.artifactId, input.version)
+      logMcp("get_javadoc_symbol_contents", input.toString):
+        ZIO.scoped:
+          Extractor.javadocSymbolContents(groupArtifactVersion, input.link)
+
+  val listSourceTool = McpTool("list_source_contents")
+    .description(Descriptions.listSource)
+    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
+    .handle: (input: GroupArtifactVersion) =>
+      logMcp("list_source_contents", input.toString):
+        ZIO.scoped:
+          Extractor.sourceContents(input)
+
+  val getSourceTool = McpTool("get_source_contents")
+    .description(Descriptions.getSource)
+    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
+    .handle: (input: JavadocSymbol) =>
+      val groupArtifactVersion = GroupArtifactVersion(input.groupId, input.artifactId, input.version)
+      logMcp("get_source_contents", input.toString):
+        ZIO.scoped:
+          Extractor.sourceFileContents(groupArtifactVersion, input.link)
+
+  val searchArtifactsTool = McpTool("search_artifacts")
+    .description(Descriptions.searchArtifacts)
+    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
+    .handle: (input: Symbol) =>
+      logMcp("search_artifacts", input.query):
+        SymbolSearch.searchGroupArtifacts(input.query)
+
+  val symbolToArtifactTool = McpTool("symbol_to_artifact")
+    .description(Descriptions.symbolToArtifact)
     .annotations(readOnly = True, destructive = False, idempotent = False, openWorld = True)
     .handle: (input: Symbol) =>
       logMcp("symbol_to_artifact", input.query):

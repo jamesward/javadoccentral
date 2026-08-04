@@ -5,6 +5,7 @@ import zio.*
 import zio.concurrent.ConcurrentMap
 import zio.direct.*
 import zio.http.*
+import zio.json.*
 import zio.redis.{CodecSupplier, Redis}
 import zio.test.*
 
@@ -17,6 +18,9 @@ object AppSpec extends ZIOSpecDefault:
   private def sha256Hex(chunk: Chunk[Byte]): String =
     "sha256:" + java.security.MessageDigest.getInstance("SHA-256")
       .digest(chunk.toArray).map(b => f"${b & 0xff}%02x").mkString
+
+  private def apiUrl(endpoint: String, first: (String, String), rest: (String, String)*): URL =
+    URL(Path.root / "api" / endpoint, queryParams = QueryParams(first, rest*))
 
   def spec = suite("App")(
     test("routing"):
@@ -355,10 +359,13 @@ object AppSpec extends ZIOSpecDefault:
           // (3) Homepage advertises a Link HEADER (what scanners read) ...
           linkHeader.exists(_.contains("mcp-server-card")),
           linkHeader.exists(_.contains("alternate")),
+          linkHeader.exists(_.contains("service-desc")),
+          linkHeader.exists(_.contains("openapi.json")),
           linkHeader.exists(_.contains("agent-skills")),
           // ... and also emits the links as <link> tags in the page <head>
           homeBody.contains("rel=\"mcp-server-card\""),
           homeBody.contains("rel=\"alternate\""),
+          homeBody.contains("rel=\"service-desc\""),
           homeBody.contains("rel=\"agent-skills\""),
           // (4) HEAD / carries the same Link header, with an empty body
           headResp.rawHeader("Link").exists(_.contains("mcp-server-card")),
@@ -401,6 +408,128 @@ object AppSpec extends ZIOSpecDefault:
           llmsResp.status.isSuccess,
           llmsBody.contains("https://www.javadocs.dev/SKILL.md"),
           llmsBody.contains("/.well-known/agent-skills/index.json"),
+          llmsBody.contains("https://www.javadocs.dev/openapi.json"),
+          llmsBody.contains("https://www.javadocs.dev/api/doc"),
+        )
+
+    , test("REST API mirrors all eight MCP operations with GET query parameters"):
+      val ff = Header.Custom("X-Forwarded-For", "192.168.1.100")
+      val gid = "org.webjars"
+      val aid = "webjars-locator-core"
+      val ver = "0.52"
+      defer:
+        // Deterministic Redis data for both search endpoints; no inference needed.
+        val seededGav = MavenCentral.GroupArtifactVersion(
+          MavenCentral.GroupId("com.example"),
+          MavenCentral.ArtifactId("api-fixture"),
+          MavenCentral.Version("1.0.0"),
+        )
+        SymbolSearch.update(
+          seededGav,
+          Set(Extractor.Content("com/example/ApiFixture.html", false, "com.example.ApiFixture", "class ApiFixture", "class", "")),
+        ).run
+
+        val latestResp = Web.appWithMiddleware.runZIO(Request.get(apiUrl(
+          "latest-version", "groupId" -> "org.webjars", "artifactId" -> "jquery",
+        )).addHeader(ff)).run
+        val latestBody = latestResp.body.asString.run
+
+        val indexResp = Web.appWithMiddleware.runZIO(Request.get(apiUrl(
+          "javadoc-index", "groupId" -> gid, "artifactId" -> aid, "version" -> ver,
+        )).addHeader(ff)).run
+        val indexBody = indexResp.body.asString.run
+
+        val listResp = Web.appWithMiddleware.runZIO(Request.get(apiUrl(
+          "javadoc-content-list", "groupId" -> gid, "artifactId" -> aid, "version" -> ver,
+        )).addHeader(ff)).run
+        val listBody = listResp.body.asString.run
+
+        val symbolResp = Web.appWithMiddleware.runZIO(Request.get(apiUrl(
+          "javadoc-symbol-contents", "groupId" -> gid, "artifactId" -> aid,
+          "version" -> ver, "link" -> "index.html",
+        )).addHeader(ff)).run
+        val symbolBody = symbolResp.body.asString.run
+
+        val sourceListResp = Web.appWithMiddleware.runZIO(Request.get(apiUrl(
+          "list-source-contents", "groupId" -> gid, "artifactId" -> aid, "version" -> ver,
+        )).addHeader(ff)).run
+        val sourceListBody = sourceListResp.body.asString.run
+        val sourcePaths = ZIO.fromEither(sourceListBody.fromJson[Set[String]])
+          .orDieWith(message => new RuntimeException(message)).run
+        val sourceLink = ZIO.fromOption(sourcePaths.find(path => path.endsWith(".java") || path.endsWith(".scala")))
+          .orDieWith(_ => new RuntimeException("sources jar contained no Java/Scala source file")).run
+
+        val sourceResp = Web.appWithMiddleware.runZIO(Request.get(apiUrl(
+          "source-contents", "groupId" -> gid, "artifactId" -> aid,
+          "version" -> ver, "link" -> sourceLink,
+        )).addHeader(ff)).run
+        val sourceBody = sourceResp.body.asString.run
+
+        val searchResp = Web.appWithMiddleware.runZIO(Request.get(apiUrl(
+          "search-artifacts", "query" -> "api-fixture",
+        )).addHeader(ff)).run
+        val searchBody = searchResp.body.asString.run
+
+        val symbolToArtifactResp = Web.appWithMiddleware.runZIO(Request.get(apiUrl(
+          "symbol-to-artifact", "query" -> "com.example.ApiFixture",
+        )).addHeader(ff)).run
+        val symbolToArtifactBody = symbolToArtifactResp.body.asString.run
+
+        assertTrue(
+          // The old global redirect middleware would turn this into a redirect;
+          // 200 proves /api query params reach the Endpoint decoder.
+          latestResp.status.isSuccess,
+          latestResp.header(Header.ContentType).exists(_.renderedValue.contains("application/json")),
+          latestBody.startsWith("\"") && latestBody.endsWith("\""),
+          indexResp.status.isSuccess,
+          indexBody.length > 2,
+          listResp.status.isSuccess,
+          listBody.contains("\"link\""),
+          symbolResp.status.isSuccess,
+          symbolBody.length > 2,
+          sourceListResp.status.isSuccess,
+          sourcePaths.nonEmpty,
+          sourceResp.status.isSuccess,
+          sourceBody.contains("class") || sourceBody.contains("package"),
+          searchResp.status.isSuccess,
+          searchBody.contains("api-fixture"),
+          symbolToArtifactResp.status.isSuccess,
+          symbolToArtifactBody.contains("api-fixture"),
+        )
+
+    , test("OpenAPI, SwaggerUI, and RFC 9264 API catalog describe the REST API"):
+      val ff = Header.Custom("X-Forwarded-For", "192.168.1.100")
+      defer:
+        val openApiResp = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root / "openapi.json")).addHeader(ff)).run
+        val openApiBody = openApiResp.body.asString.run
+
+        val swaggerResp = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root / "api" / "doc")).addHeader(ff)).run
+        val swaggerBody = swaggerResp.body.asString.run
+
+        val catalogResp = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root / ".well-known" / "api-catalog")).addHeader(ff)).run
+        val catalogBody = catalogResp.body.asString.run
+
+        assertTrue(
+          openApiResp.status.isSuccess,
+          openApiResp.header(Header.ContentType).exists(_.renderedValue.contains("application/json")),
+          openApiBody.contains("\"openapi\""),
+          openApiBody.contains("/api/latest-version"),
+          openApiBody.contains("/api/javadoc-index"),
+          openApiBody.contains("/api/javadoc-content-list"),
+          openApiBody.contains("/api/javadoc-symbol-contents"),
+          openApiBody.contains("/api/list-source-contents"),
+          openApiBody.contains("/api/source-contents"),
+          openApiBody.contains("/api/search-artifacts"),
+          openApiBody.contains("/api/symbol-to-artifact"),
+          openApiBody.contains(MCP.Descriptions.getLatest.take(40)),
+          swaggerResp.status.isSuccess,
+          swaggerBody.toLowerCase.contains("swagger"),
+          catalogResp.status.isSuccess,
+          catalogResp.header(Header.ContentType).exists(_.renderedValue.contains("application/linkset+json")),
+          catalogBody.contains("\"service-desc\""),
+          catalogBody.contains("https://www.javadocs.dev/openapi.json"),
+          catalogBody.contains("\"service-doc\""),
+          catalogBody.contains("https://www.javadocs.dev/llms.txt"),
         )
 
   ).provide(

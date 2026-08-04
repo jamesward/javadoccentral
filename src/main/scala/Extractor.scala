@@ -130,9 +130,17 @@ object Extractor:
         ZIO.fromEither(parseKotlindoc(contents)).orElseFail(JavadocFormatFailure())
 
   // could be better based on index-all.html
+  //
+  // Modern javadocs (Java 9+) ship an `element-list` (module-aware). Older,
+  // frames-based javadocs (Java 8 and earlier — e.g. jackson-databind, still
+  // built with an old doclet) instead ship a `package-list` with the exact
+  // same one-package-per-line format (minus `module:` prefixes). Read whichever
+  // exists so old javadocs get real FQNs instead of falling through to
+  // `bruteForce` (which only knows the simple class name).
   def javadocJavaFormat(gav: GroupArtifactVersion, handle: JarCache.JarHandle):
       ZIO[Any, JavadocFormatFailure, Set[Content]] =
     handle.readEntryString("element-list")
+      .orElse(handle.readEntryString("package-list"))
       .mapError(_ => JavadocFormatFailure())
       .flatMap: raw =>
         val lines = raw.linesIterator.toVector

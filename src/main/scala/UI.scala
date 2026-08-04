@@ -40,6 +40,7 @@ object UI:
   // homepage sends — the header is what agent-readiness scanners look for.
   private val discoveryLinks: Seq[(String, String, Option[String])] = Seq(
     ("alternate", "/llms.txt", Some("text/markdown")),
+    ("service-desc", "/openapi.json", Some("application/vnd.oai.openapi+json")),
     ("mcp-server-card", "/.well-known/mcp/server-card.json", None),
     ("agent-skills", "/.well-known/agent-skills/index.json", None),
     ("sitemap", "/sitemap.xml", None),

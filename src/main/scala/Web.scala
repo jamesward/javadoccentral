@@ -30,7 +30,19 @@ object Web:
   private def markdownResponse(content: String): Response =
     Response.text(content).contentType(MediaType.text.markdown)
 
+  // Browse redirects belong to browse handlers rather than a global aspect;
+  // REST endpoints use the same query parameter names without redirecting.
+  private def trailingSlashRedirect(request: Request): Option[Response] =
+    Option.when(request.url.path.hasTrailingSlash && request.url.path != Path.root):
+      Response.redirect(request.url.dropTrailingSlash)
+
+  private def appendQueryParamRedirect(request: Request, name: String): Option[Response] =
+    request.url.queryParam(name).map: value =>
+      Response.redirect(request.url.path(request.path / value).setQueryParams(), true)
+    .orElse(trailingSlashRedirect(request))
+
   def withGroupId(groupId: MavenCentral.GroupId, request: Request): Handler[MavenCentralRepo, Nothing, (MavenCentral.GroupId, Request), Response] =
+    appendQueryParamRedirect(request, "artifactId").map(_.toHandler).getOrElse {
     Handler.fromZIO:
       MavenCentral.searchArtifacts(groupId)
     .flatMap: artifacts =>
@@ -45,8 +57,10 @@ object Web:
         markdownResponse(s"# $groupId\n\nGroupId not found.").toHandler
       else
         Response.html(UI.page("javadocs.dev", UI.invalidGroupId(groupId)), Status.NotFound).toHandler
+    }
 
   def withArtifactId(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, request: Request): Handler[MavenCentralRepo, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, Request), Response] =
+    appendQueryParamRedirect(request, "version").map(_.toHandler).getOrElse {
     Handler.fromZIO:
       defer:
         val isArtifact = MavenCentral.isArtifact(groupId, artifactId).run
@@ -83,6 +97,7 @@ object Web:
         Response.html(UI.page("javadocs.dev", UI.needArtifactId(groupId, artifactIds.value)), Status.NotFound).toHandler // todo: message
       .orElse:
         Response.html(UI.page("javadocs.dev", UI.invalidGroupArtifact(groupId, artifactId, groupIdValid = false)), Status.NotFound).toHandler
+    }
 
   given zio.json.JsonEncoder[Extractor.Content] = zio.json.DeriveJsonEncoder.gen[Extractor.Content]
 
@@ -279,15 +294,27 @@ object Web:
     string("version").transformOrFailLeft(versionExtractor)(_.toString)
 
   def withVersionAndFile(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, path: Path, request: Request):
-      Handler[BadActor & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Client & MavenCentralRepo & Redis & HerokuInference & SymbolSearch.SymbolSearchGuard, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] = {
-    if (path.isEmpty)
-      withVersion(groupId, artifactId, version, request)
-    else
-      withFile(groupId, artifactId, version, path, request)
-  }
+      Handler[BadActor & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Client & MavenCentralRepo & Redis & HerokuInference & SymbolSearch.SymbolSearchGuard, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
+    trailingSlashRedirect(request).map(_.toHandler).getOrElse:
+      if path.isEmpty then
+        withVersion(groupId, artifactId, version, request)
+      else
+        withFile(groupId, artifactId, version, path, request)
 
+
+  // Browse-UI form GETs submit their value as a query param; redirect it into a
+  // path segment. These used to live in a global middleware, but that clashed
+  // with the REST /api query params, so each browse handler owns its redirect.
+  private def indexQueryRedirect(request: Request): Option[Response] =
+    request.url.queryParam("groupId").map: groupId =>
+      Response.redirect(request.url.path(Path.root / groupId).setQueryParams(), true)
+    .orElse:
+      request.url.queryParam("q").map: q =>
+        val param = URL.root.setQueryParams(q).toString.stripSuffix("=")
+        Response(Status.MovedPermanently, Headers(Header.Location.name -> param))
 
   def index(request: Request): Handler[Redis & HerokuInference & Client & MavenCentralRepo & Extractor.JavadocCache & Extractor.SourcesCache & SymbolSearch.SymbolSearchGuard, Nothing, Request, Response] =
+    indexQueryRedirect(request).map(_.toHandler).getOrElse {
     request.queryParameters.map.keys.filterNot(_ == "groupId").headOption.fold(Response.html(UI.page("javadocs.dev", UI.index)).addHeader("Link", UI.linkHeaderValue).toHandler):
       query =>
         // todo: rate limit
@@ -311,6 +338,7 @@ object Web:
               markdownResponse(s"# Search results for: $query\n\nNo results found.").toHandler
             else
               Response.html(UI.page("javadocs.dev", UI.symbolSearchResults(query, Set.empty))).toHandler
+    }
 
   val robots = Response.text:
     """# As a condition of accessing this website, you agree to abide by the
@@ -390,11 +418,15 @@ object Web:
         |Browse Javadoc/Scaladoc and source for any artifact on Maven Central (Java,
         |Kotlin, Scala) — no local build, checkout, or jar extraction required.
         |
-        |There are two ways to use it:
+        |There are three ways to use it:
         |
-        |- **MCP server (preferred):** Streamable HTTP at `https://www.javadocs.dev/mcp`.
+        |- **MCP server (preferred for agents):** Streamable HTTP at `https://www.javadocs.dev/mcp`.
         |  Its tools resolve the latest version, list Javadoc/source entries, and read
         |  rendered API docs or raw source straight from the live Maven Central catalog.
+        |- **REST API:** read-only GET+query endpoints under `https://www.javadocs.dev/api/`
+        |  mirror the MCP operations and return JSON. Discover them via OpenAPI at
+        |  `https://www.javadocs.dev/openapi.json` or SwaggerUI at
+        |  `https://www.javadocs.dev/api/doc`.
         |- **HTTP / URLs:** every page also returns Markdown when requested with the
         |  `Accept: text/markdown` header.
         |
@@ -482,6 +514,27 @@ object Web:
     Response(body = Body.from(agentSkillsIndexValue)(using SchemaJsonCodec.schemaBasedBinaryCodec))
       .contentType(MediaType.application.json)
 
+  // ---- API Catalog: RFC 9727 well-known URI, body is an RFC 9264 linkset ----
+  final case class CatalogLink(href: String, @fieldName("type") kind: String) derives Schema
+  final case class CatalogContext(
+    anchor: String,
+    @fieldName("service-desc") serviceDesc: List[CatalogLink],
+    @fieldName("service-doc") serviceDoc: List[CatalogLink],
+  ) derives Schema
+  final case class Linkset(linkset: List[CatalogContext]) derives Schema
+
+  private val apiCatalogValue = Linkset(List(
+    CatalogContext(
+      anchor = "https://www.javadocs.dev/",
+      serviceDesc = List(CatalogLink("https://www.javadocs.dev/openapi.json", "application/vnd.oai.openapi+json")),
+      serviceDoc = List(CatalogLink("https://www.javadocs.dev/llms.txt", "text/markdown")),
+    )
+  ))
+
+  val apiCatalog: Response =
+    Response(body = Body.from(apiCatalogValue)(using SchemaJsonCodec.schemaBasedBinaryCodec))
+      .contentType(MediaType("application", "linkset+json"))
+
   private val llmsHeader =
     """# javadocs.dev
       |
@@ -517,6 +570,13 @@ object Web:
       |## MCP
       |
       |An MCP server (Streamable HTTP) is available at: `https://www.javadocs.dev/mcp`
+      |
+      |## REST API
+      |
+      |A read-only JSON REST API mirroring the MCP tools is available under
+      |`https://www.javadocs.dev/api/`. It uses GET requests with query parameters.
+      |The generated OpenAPI document is at `https://www.javadocs.dev/openapi.json`,
+      |and interactive SwaggerUI documentation is at `https://www.javadocs.dev/api/doc`.
       |
       |## Skills
       |
@@ -667,6 +727,7 @@ object Web:
       getOrHead / "sitemap" / groupId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, Request)](sitemapGroup),
       getOrHead / ".well-known" / "agent-skills" / "index.json" -> agentSkillsIndex.toHandler,
       getOrHead / ".well-known" / "mcp" / "server-card.json" -> mcpServerCard.toHandler,
+      getOrHead / ".well-known" / "api-catalog" -> apiCatalog.toHandler,
       getOrHead / ".well-known" / trailing -> Handler.notFound,
       getOrHead / groupId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, Request)](withGroupId),
       getOrHead / groupId / artifactId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, Request)](withArtifactId),
@@ -677,28 +738,7 @@ object Web:
       getOrHead / groupId / artifactId / version / trailing -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request)](withVersionAndFile),
     )
 
-    mcpRoutes ++ appRoutes
-
-  private val redirectQueryParams = HandlerAspect.intercept: (request, response) =>
-    request.url.queryParam("q").map: q =>
-      // manual redirect because the URL type really wants to encode the query param as ?query= but we just want ?query
-      val param = URL.root.setQueryParams(q).toString.stripSuffix("=")
-      Response(Status.MovedPermanently, Headers(Header.Location.name -> param))
-    .orElse:
-      request.url.queryParam("groupId").map: groupId =>
-        Response.redirect(request.url.path(Path.root / groupId).setQueryParams(), true)
-    .orElse:
-      request.url.queryParam("artifactId").map: artifactId =>
-        Response.redirect(request.url.path(request.path / artifactId).setQueryParams(), true)
-    .orElse:
-      request.url.queryParam("version").map: version =>
-        Response.redirect(request.url.path(request.path / version).setQueryParams(), true)
-    .getOrElse(
-      if request.url.path.hasTrailingSlash && request.url.path != Path.root then
-        Response.redirect(request.url.dropTrailingSlash)
-      else
-        response
-    )
+    mcpRoutes ++ Api.routes ++ appRoutes
 
   private val badActorMiddleware: HandlerAspect[BadActor, Unit] = BadActorMiddleware()
 
@@ -742,4 +782,4 @@ object Web:
     )
 
   val appWithMiddleware: Routes[CrawlerLimiter[MavenCentral.GroupArtifactVersion] & BadActor & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.LatestCache & Client & MavenCentralRepo & Redis & HerokuInference & SymbolSearch.SymbolSearchGuard, Response] =
-    app @@ badActorMiddleware @@ crawlerRateLimitMiddleware @@ redirectQueryParams @@ immutableAssetNotModified @@ immutableAssetCacheHeaders @@ Middleware.requestLogging(loggedRequestHeaders = Set(Header.UserAgent)) @@ headStripBody
+    app @@ badActorMiddleware @@ crawlerRateLimitMiddleware @@ immutableAssetNotModified @@ immutableAssetCacheHeaders @@ Middleware.requestLogging(loggedRequestHeaders = Set(Header.UserAgent)) @@ headStripBody

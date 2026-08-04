@@ -46,23 +46,31 @@ object App extends ZIOAppDefault:
   // access into that handle. There is no eviction in normal operation —
   // Heroku's daily dyno restart is the natural reset, and we have far more
   // ephemeral disk (281 GB observed) than 24h of jars need (~25 GB worst-case).
-  val jarCacheRoot: java.io.File = Files.createTempDirectory("jar-cache").nn.toFile
-
+  // Each layer instance owns a distinct directory. This matters in tests, where
+  // multiple suites construct cache layers concurrently in one JVM: a shared
+  // directory would let independent JarCache instances write/delete the same
+  // GAV filename without sharing a single-flight map.
   val javadocCacheLayer: ZLayer[Client, Nothing, Extractor.JavadocCache] =
     ZLayer.scoped:
-      JarCache.make(
-        java.io.File(jarCacheRoot, "javadoc"),
-        JarCache.httpDownloader(gav => MavenCentral.javadocUri(gav.groupId, gav.artifactId, gav.version)),
-        label = "javadoc",
-      ).map(new Extractor.JavadocCache(_))
+      defer:
+        val cacheDir = ZIO.attemptBlockingIO(Files.createTempDirectory("jar-cache-javadoc").nn.toFile).orDie.run
+        val cache = JarCache.make(
+          cacheDir,
+          JarCache.httpDownloader(gav => MavenCentral.javadocUri(gav.groupId, gav.artifactId, gav.version)),
+          label = "javadoc",
+        ).run
+        new Extractor.JavadocCache(cache)
 
   val sourcesCacheLayer: ZLayer[Client, Nothing, Extractor.SourcesCache] =
     ZLayer.scoped:
-      JarCache.make(
-        java.io.File(jarCacheRoot, "sources"),
-        JarCache.httpDownloader(gav => MavenCentral.sourcesUri(gav.groupId, gav.artifactId, gav.version)),
-        label = "sources",
-      ).map(new Extractor.SourcesCache(_))
+      defer:
+        val cacheDir = ZIO.attemptBlockingIO(Files.createTempDirectory("jar-cache-sources").nn.toFile).orDie.run
+        val cache = JarCache.make(
+          cacheDir,
+          JarCache.httpDownloader(gav => MavenCentral.sourcesUri(gav.groupId, gav.artifactId, gav.version)),
+          label = "sources",
+        ).run
+        new Extractor.SourcesCache(cache)
 
   val symbolSearchGuardLayer: ZLayer[Any, Nothing, SymbolSearch.SymbolSearchGuard] =
     ZLayer.fromZIO:

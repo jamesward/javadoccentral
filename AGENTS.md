@@ -65,6 +65,24 @@ to production requires **publishing a new `zio-http-mcp` and bumping the version
 pin in `build.sbt`** — production builds resolve the published artifact, not the
 local `../zio-http-mcp` subproject (which is only used under `-Dlocal`).
 
+## REST API and OpenAPI
+
+`Api.scala` exposes read-only `GET` + query-parameter endpoints under `/api`
+that mirror the eight MCP tools. Define these with zio-http `Endpoint`, not
+hand-written `Route` JSON responses: the Endpoint input/output codecs reuse the
+same zio-schema `Schema`s as MCP, and `OpenAPIGen.fromEndpoints` generates
+`/openapi.json`; SwaggerUI is served at `/api/doc`.
+
+Keep each operation description in `MCP.Descriptions` and reuse it from both the
+`McpTool.description` and Endpoint `Doc`, so the MCP and OpenAPI surfaces cannot
+drift. The RFC 9727 API catalog at `/.well-known/api-catalog` is an RFC 9264
+linkset whose `service-desc` points to `/openapi.json`.
+
+Browse-form redirects (`?groupId`, `?artifactId`, `?version`, `?q`) and
+trailing-slash normalization belong in the relevant browse handlers, **not in a
+global middleware**. Global query redirect middleware can hijack the REST API,
+which legitimately uses the same parameter names.
+
 ## Tech Stack
 
 - Scala 3 (3.8.x) with `-language:strictEquality`
