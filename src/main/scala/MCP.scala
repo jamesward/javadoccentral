@@ -3,21 +3,35 @@ import com.jamesward.ziohttp.mcp.*
 import com.jamesward.zio_mavencentral.MavenCentral.*
 import zio.*
 import zio.direct.*
-import zio.schema.{DeriveSchema, Schema, derived}
+import zio.schema.{Schema, derived}
+import zio.schema.annotation.description
 import com.jamesward.ziohttp.mcp.OptBool.*
 
 object MCP:
 
-  // Schema instances for MavenCentral opaque types (for MCP tool input deserialization)
-  given Schema[GroupId] = Schema.primitive[String].transform(GroupId(_), _.toString)
-  given Schema[ArtifactId] = Schema.primitive[String].transform(ArtifactId(_), _.toString)
-  given Schema[Version] = Schema.primitive[String].transform(Version(_), _.toString)
-  given Schema[GroupArtifact] = DeriveSchema.gen[GroupArtifact]
-  given Schema[GroupArtifactVersion] = DeriveSchema.gen[GroupArtifactVersion]
-  given Schema[Extractor.Content] = DeriveSchema.gen[Extractor.Content]
+  // Opaque-type + coordinate record schemas come from zio-mavencentral:
+  // GroupId/ArtifactId/Version via MavenCentralSchemas, GroupArtifact/
+  // GroupArtifactVersion (record, with field descriptions) via their companions.
+  // Content (its own non-obvious fields) is a described record from Extractor.scala.
+  import com.jamesward.zio_mavencentral.MavenCentralSchemas.given
 
-  case class Symbol(query: String) derives Schema
-  case class JavadocSymbol(groupId: GroupId, artifactId: ArtifactId, version: Version, link: String) derives Schema
+  @description("A search query.")
+  case class Symbol(
+    @description("The text to search for — e.g. a class/type name, a package, or part of a groupId/artifactId.")
+    query: String,
+  ) derives Schema
+
+  @description("A pointer to one documented page or source file inside an artifact's jar.")
+  case class JavadocSymbol(
+    @description("The Maven groupId, e.g. \"dev.zio\".")
+    groupId: GroupId,
+    @description("The Maven artifactId, e.g. \"zio_3\".")
+    artifactId: ArtifactId,
+    @description("The artifact version, e.g. \"2.1.9\".")
+    version: Version,
+    @description("The relative path/link within the jar, as returned by get_javadoc_content_list or list_source_contents.")
+    link: String,
+  ) derives Schema
 
   // McpError instances for domain error types
   given latestError: McpError[GroupIdOrArtifactIdNotFoundError | Extractor.LatestNotFound] with

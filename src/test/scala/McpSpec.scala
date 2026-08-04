@@ -115,8 +115,19 @@ object McpSpec extends ZIOSpecDefault:
             val schema = tool.outputSchema()
             schema == null || schema.get("type").asInstanceOf[String] == "object"
           ) &&
+          // tools that return structured data must advertise an object outputSchema
+          assertTrue({
+            val structured = Set("get_latest_version", "get_javadoc_content_list", "list_source_contents", "search_artifacts", "symbol_to_artifact")
+            toolList.filter(t => structured.contains(t.name())).forall: t =>
+              t.outputSchema() != null && t.outputSchema().get("type").asInstanceOf[String] == "object"
+          }) &&
           // inputSchema must have type "object"
-          assertTrue(toolList.forall(_.inputSchema().get("type").asInstanceOf[String] == "object"))
+          assertTrue(toolList.forall(_.inputSchema().get("type").asInstanceOf[String] == "object")) &&
+          // data-class field descriptions flow through into the output schemas
+          assertTrue(
+            toolList.find(_.name() == "get_javadoc_content_list").exists(_.outputSchema().toString.contains("Fully-qualified name of the documented symbol")),
+            toolList.find(_.name() == "search_artifacts").exists(_.outputSchema().toString.contains("The Maven groupId")),
+          )
       ,
 
       // --- get_latest_version ---
@@ -127,7 +138,9 @@ object McpSpec extends ZIOSpecDefault:
             callTool(client, "get_latest_version", java.util.Map.of("groupId", javaGroupId, "artifactId", javaArtifactId))
         yield
           val text = resultText(result)
-          assertNotError(result) && assertTrue(text.matches("\\d+\\.\\d+.*"))
+          // Output is now structured: `{"result":"<version>"}` (McpOutput wraps
+          // a non-object value under `result`), so match a version anywhere.
+          assertNotError(result) && assertTrue(text.matches(".*\\d+\\.\\d+.*"), result.structuredContent() != null)
       ,
       test("get_latest_version errors for nonexistent artifact"):
         for
@@ -188,7 +201,7 @@ object McpSpec extends ZIOSpecDefault:
             callTool(client, "symbol_to_artifact", java.util.Map.of[String, Object]("query", "zio.cache.Cache"))
         yield
           val text = resultText(result)
-          assertNotError(result) && assertTrue(text.contains("\"groupId\""), text.contains("\"artifactId\""), text.contains("zio-cache"))
+          assertNotError(result) && assertTrue(text.contains("\"groupId\""), text.contains("\"artifactId\""), text.contains("zio-cache"), result.structuredContent() != null)
       ,
 
     ).provide(

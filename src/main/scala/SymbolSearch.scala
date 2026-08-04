@@ -23,23 +23,21 @@ object SymbolSearch:
   case class InferenceError(message: String)
   case class SearchError(message: String)
 
+
   object ProtobufCodecSupplier extends CodecSupplier:
+    def stringToGroupArtifact(s: String): MavenCentral.GroupArtifact =
+      // todo: parse failure handling
+      val parts = s.split(':')
+      MavenCentral.GroupArtifact(MavenCentral.GroupId(parts(0)), MavenCentral.ArtifactId(parts(1)))
+
+    def groupArtifactToString(ga: MavenCentral.GroupArtifact): String = s"${ga.groupId}:${ga.artifactId}"
+
+    given Schema[MavenCentral.GroupArtifact] = Schema.primitive[String].transform(stringToGroupArtifact, groupArtifactToString)
+
     def get[A: Schema]: BinaryCodec[A] = ProtobufCodec.protobufCodec
 
-  def stringToGroupArtifact(s: String): MavenCentral.GroupArtifact =
-    // todo: parse failure handling
-    val parts = s.split(':')
-    MavenCentral.GroupArtifact(MavenCentral.GroupId(parts(0)), MavenCentral.ArtifactId(parts(1)))
-
-  def groupArtifactToString(ga: MavenCentral.GroupArtifact): String = s"${ga.groupId}:${ga.artifactId}"
-
-  given Schema[MavenCentral.GroupArtifact] = Schema.primitive[String].transform(stringToGroupArtifact, groupArtifactToString)
-
-  given Schema[MavenCentral.GroupId] = Schema.primitive[String].transform(MavenCentral.GroupId.apply, _.toString)
-  given Schema[MavenCentral.ArtifactId] = Schema.primitive[String].transform(MavenCentral.ArtifactId.apply, _.toString)
-  private val groupArtifactSchemaForJson = DeriveSchema.gen[MavenCentral.GroupArtifact]
-
-  given JsonCodec[MavenCentral.GroupArtifact] = zio.schema.codec.JsonCodec.jsonCodec(groupArtifactSchemaForJson)
+  // for deserializing inference responses
+  given JsonCodec[MavenCentral.GroupArtifact] = zio.schema.codec.JsonCodec.jsonCodec(MavenCentral.GroupArtifact.schema)
 
   case class Message(role: String = "user", content: String) derives Schema
 
@@ -197,10 +195,9 @@ object SymbolSearch:
       val redis = ZIO.service[Redis].run
       val guard = ZIO.service[SymbolSearchGuard].run.active
       val groupArtifact = groupArtifactVersion.noVersion
-      val gaKey = groupArtifactToString(groupArtifact)
       val version = groupArtifactVersion.version.toString
 
-      val cached = redis.hGet(gavCacheKey, gaKey).returning[String].run
+      val cached = redis.hGet(gavCacheKey, groupArtifact).returning[String].run
       if cached.contains(version) then
         ZIO.unit.run
       else
@@ -216,7 +213,7 @@ object SymbolSearch:
                 redis.sAdd(symbol.fqn, groupArtifact)
               .withParallelism(50).unit.run
               redis.sAdd(groupArtifactsKey, groupArtifact).unit.run
-              redis.hSet(gavCacheKey, gaKey -> version).unit.run
+              redis.hSet(gavCacheKey, groupArtifact -> version).unit.run
               ZIO.logInfo(s"Updated symbol index: $groupArtifactVersion symbols=${symbols.size}").run
             work.ensuring(guard.remove(groupArtifactVersion)).run
 

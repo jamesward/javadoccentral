@@ -59,7 +59,7 @@ libraryDependencies ++= Seq(
 
   "org.slf4j" % "slf4j-simple" % "2.0.18",
 
-  "org.jsoup" % "jsoup" % "1.22.2",
+  "org.jsoup" % "jsoup" % "1.23.1",
 
   "dev.kreuzberg" % "html-to-markdown" % "3.7.2",
 
@@ -74,12 +74,12 @@ libraryDependencies ++= Seq(
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioHttpMcpDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-http-mcp" % "0.2.0")
+  else Seq("com.jamesward" %% "zio-http-mcp" % "0.4.0")
 }
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioMavenCentralDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-mavencentral" % "0.12.0")
+  else Seq("com.jamesward" %% "zio-mavencentral" % "0.13.1")
 }
 
 libraryDependencies ++= {

@@ -8,6 +8,8 @@ import zio.direct.*
 import zio.http.Client
 import zio.prelude.data.Optional.AllValuesAreNullable
 import zio.{IO, ZIO}
+import zio.schema.{Schema, derived}
+import zio.schema.annotation.description
 
 import MavenCentral.MavenCentralRepo
 
@@ -34,7 +36,21 @@ object Extractor:
   type LatestNotFound = MavenCentral.LatestNotFound
   val LatestNotFound = MavenCentral.LatestNotFound
 
-  case class Content(link: String, external: Boolean, fqn: String, `type`: String, kind: String, extra: String)
+  @description("One documented entry (class, object, method, package, or resource) from a library's Javadoc/Scaladoc jar.")
+  case class Content(
+    @description("Path/link of this entry within the javadoc jar. Pass it as `link` to get_javadoc_symbol_contents to read the rendered page.")
+    link: String,
+    @description("True if the entry links to an external site rather than a page inside this jar.")
+    external: Boolean,
+    @description("Fully-qualified name of the documented symbol.")
+    fqn: String,
+    @description("The symbol's declared type/signature when the doc format provides one; may be empty.")
+    `type`: String,
+    @description("The kind of symbol, e.g. \"class\", \"object\", \"def\"; may be empty.")
+    kind: String,
+    @description("Extra doc-format-specific metadata; may be empty.")
+    extra: String,
+  ) derives Schema
 
   /** Caches `GroupArtifact -> latest Version` lookups so a single resolution
    *  is shared by concurrent callers and reused across requests for an hour. */

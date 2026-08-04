@@ -38,6 +38,33 @@ cache." When editing them, keep the agent-steering posture:
   terse-and-ambiguous when the cost of an agent picking the wrong path
   is "shells out for several tool calls and burns context."
 
+## MCP tool output schemas
+
+A tool's return type becomes its MCP `outputSchema` + `structuredContent`,
+derived from the return type's `zio-schema` `Schema` by `zio-http-mcp`'s
+`McpOutput`:
+
+- An **object-typed** schema (a case class, a `Map`) is advertised verbatim and
+  returned as-is in `structuredContent`.
+- Any **non-object** value — a `Set`/`List` (array) or a scalar like `Version` —
+  is nested under a single `result` property. The MCP spec requires
+  `outputSchema` to be `{"type":"object"}` and `structuredContent` to be a JSON
+  object, so `search_artifacts` / `symbol_to_artifact` (`Set[GroupArtifact]`),
+  `list_source_contents` (`Set[String]`), `get_javadoc_content_list`
+  (`Set[Content]`) and `get_latest_version` (`Version`) all return
+  `{"result": …}`.
+- `JsonSchemaGen` auto-generates a `description` for collection schemas from the
+  collection kind + element type (e.g. `Set[Foo]` → "a set of Foo") and emits a
+  `description` from any `zio-schema` `@description` annotation on records/fields.
+- Returning a bare `String` (or `ToolContent`) is the deliberate opt-out for
+  unstructured/prose output (`get_javadoc_index`, `get_javadoc_symbol_contents`,
+  `get_source_contents`): no `outputSchema`, plain text content.
+
+This logic lives in `zio-http-mcp` (`McpOutput`, `JsonSchemaGen`), so shipping it
+to production requires **publishing a new `zio-http-mcp` and bumping the version
+pin in `build.sbt`** — production builds resolve the published artifact, not the
+local `../zio-http-mcp` subproject (which is only used under `-Dlocal`).
+
 ## Tech Stack
 
 - Scala 3 (3.8.x) with `-language:strictEquality`
