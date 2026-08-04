@@ -283,12 +283,16 @@ object AppSpec extends ZIOSpecDefault:
         // Wait up to 30s for the daemon fiber to finish indexing. The artifact
         // id `zio_3` appears in the Redis `_groupArtifacts` set as soon as the
         // index write completes.
-        val redis = ZIO.service[Redis].run
         val groupArtifact = com.jamesward.zio_mavencentral.MavenCentral.GroupArtifact(
           com.jamesward.zio_mavencentral.MavenCentral.GroupId(gid),
           com.jamesward.zio_mavencentral.MavenCentral.ArtifactId(aid),
         )
-        redis.sIsMember(SymbolSearch.groupArtifactsKey, groupArtifact)
+        // Poll via SymbolSearch's own read path, which decodes with the compact
+        // string schema Redis is actually written with. (Checking membership
+        // with `redis.sIsMember` here would encode `groupArtifact` with the
+        // ambient *record* schema and never match the stored string bytes.)
+        SymbolSearch.allGroupArtifacts
+          .map(_.contains(groupArtifact))
           .repeatUntil(identity)
           .timeoutFail(new RuntimeException("index never populated"))(30.seconds)
           .orDie.run
@@ -305,6 +309,51 @@ object AppSpec extends ZIOSpecDefault:
           indexResp.status.isSuccess,
           searchResp.status.isSuccess,
           searchBody.contains(s"$gid:$aid"),
+        )
+
+    , test("agent-readiness endpoints: Content-Signal, MCP server card, homepage Link header"):
+      val ff = Header.Custom("X-Forwarded-For", "192.168.1.100")
+      defer:
+        val robotsResp = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root / "robots.txt")).addHeader(ff)).run
+        val robotsBody = robotsResp.body.asString.run
+
+        val cardResp = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root / ".well-known" / "mcp" / "server-card.json")).addHeader(ff)).run
+        val cardBody = cardResp.body.asString.run
+
+        val homeResp = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root)).addHeader(ff)).run
+        val linkHeader = homeResp.rawHeader("Link")
+        val homeBody = homeResp.body.asString.run
+
+        // Agents may probe with HEAD; per RFC 9110 it must return the same
+        // headers as GET (minus body). Same handler + headStripBody should do this.
+        val headResp = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root)).copy(method = Method.HEAD).addHeader(ff)).run
+        val headBody = headResp.body.asString.run
+
+        assertTrue(
+          // (1) Content Signals declared in robots.txt -> reaches "Bot-Aware"
+          robotsResp.status.isSuccess,
+          robotsBody.contains("Content-Signal:"),
+          robotsBody.contains("search=yes"),
+          robotsBody.contains("ai-input=yes"),
+          robotsBody.contains("ai-train=yes"),
+          // (2) MCP Server Card discoverable at the well-known path; schema-derived
+          //     record still emits the non-identifier keys via @fieldName
+          cardResp.status.isSuccess,
+          cardResp.header(Header.ContentType).exists(_.renderedValue.contains("application/json")),
+          cardBody.contains("\"$schema\""),
+          cardBody.contains("\"type\":\"streamable-http\"") || cardBody.contains("\"type\": \"streamable-http\""),
+          cardBody.contains("https://www.javadocs.dev/mcp"),
+          cardBody.contains("server-card.schema.json"),
+          // (3) Homepage advertises a Link HEADER (what scanners read) ...
+          linkHeader.exists(_.contains("mcp-server-card")),
+          linkHeader.exists(_.contains("alternate")),
+          // ... and also emits the links as <link> tags in the page <head>
+          homeBody.contains("rel=\"mcp-server-card\""),
+          homeBody.contains("rel=\"alternate\""),
+          // (4) HEAD / carries the same Link header, with an empty body
+          headResp.rawHeader("Link").exists(_.contains("mcp-server-card")),
+          headResp.rawHeader("Link") == linkHeader,
+          headBody.isEmpty,
         )
 
   ).provide(

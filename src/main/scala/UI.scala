@@ -34,22 +34,46 @@ object UI:
     )
   )
 
+  // Discovery links for agents and browsers. `rel`, relative `href`, optional
+  // `type`. Rendered as <link> elements in every page <head> below, and reused
+  // to build the HTTP `Link` response header (`linkHeaderValue`) that the
+  // homepage sends — the header is what agent-readiness scanners look for.
+  private val discoveryLinks: Seq[(String, String, Option[String])] = Seq(
+    ("alternate", "/llms.txt", Some("text/markdown")),
+    ("mcp-server-card", "/.well-known/mcp/server-card.json", None),
+    ("sitemap", "/sitemap.xml", None),
+  )
+
+  private val discoveryLinkTags: Seq[Html] =
+    discoveryLinks.map:
+      case (rel, href, Some(t)) => (link(relAttr := rel, hrefAttr := href, typeAttr := t): Html)
+      case (rel, href, None)    => (link(relAttr := rel, hrefAttr := href): Html)
+
+  val linkHeaderValue: String =
+    discoveryLinks
+      .map:
+        case (rel, href, Some(t)) => s"""<$href>; rel="$rel"; type="$t""""
+        case (rel, href, None)    => s"""<$href>; rel="$rel""""
+      .mkString(", ")
+
   def page(heading: String, element: Html): Html =
     html(
       head(
-        title(heading),
-        link(relAttr := "icon", hrefAttr := "/favicon.ico", sizesAttr := "any"),
-        link(relAttr := "icon", hrefAttr := "/favicon.png", typeAttr := "image/png"),
-        link(relAttr := "apple-touch-icon", hrefAttr := "/favicon.png", typeAttr := "image/png"),
-        style(
-          """
-            | body {
-            |   font-family: monospace;
-            |   font-size: 16px;
-            |   background-color: #edede0;
-            |   padding-bottom: 80px;
-            | }
-            |""".stripMargin),
+        (Seq[Html](
+          title(heading),
+          link(relAttr := "icon", hrefAttr := "/favicon.ico", sizesAttr := "any"),
+          link(relAttr := "icon", hrefAttr := "/favicon.png", typeAttr := "image/png"),
+          link(relAttr := "apple-touch-icon", hrefAttr := "/favicon.png", typeAttr := "image/png"),
+          style(
+            """
+              | body {
+              |   font-family: monospace;
+              |   font-size: 16px;
+              |   background-color: #edede0;
+              |   padding-bottom: 80px;
+              | }
+              |""".stripMargin),
+        ) ++ discoveryLinkTags)*
       ),
       body(
         div(

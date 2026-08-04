@@ -9,6 +9,9 @@ import zio.http.*
 import zio.http.Header.Accept
 import zio.http.codec.PathCodec
 import zio.redis.Redis
+import zio.schema.*
+import zio.schema.annotation.fieldName
+import zio.schema.codec.JsonCodec as SchemaJsonCodec
 
 import scala.annotation.unused
 
@@ -285,7 +288,7 @@ object Web:
 
 
   def index(request: Request): Handler[Redis & HerokuInference & Client & MavenCentralRepo & Extractor.JavadocCache & Extractor.SourcesCache & SymbolSearch.SymbolSearchGuard, Nothing, Request, Response] =
-    request.queryParameters.map.keys.filterNot(_ == "groupId").headOption.fold(Response.html(UI.page("javadocs.dev", UI.index)).toHandler):
+    request.queryParameters.map.keys.filterNot(_ == "groupId").headOption.fold(Response.html(UI.page("javadocs.dev", UI.index)).addHeader("Link", UI.linkHeaderValue).toHandler):
       query =>
         // todo: rate limit
         Handler.fromZIO:
@@ -310,10 +313,58 @@ object Web:
               Response.html(UI.page("javadocs.dev", UI.symbolSearchResults(query, Set.empty))).toHandler
 
   val robots = Response.text:
-    """User-agent: *
+    """# As a condition of accessing this website, you agree to abide by the
+      |# following content signals:
+      |# (a) If a content-signal = yes, you may collect content for that use.
+      |# (b) If a content-signal = no, you may not collect content for that use.
+      |# (c) If a signal is omitted, permission is neither granted nor restricted.
+      |# Signals: search = build a search index; ai-input = use content as input
+      |# to AI models at inference time (RAG / grounding); ai-train = train or
+      |# fine-tune AI models. javadocs.dev serves public Maven Central
+      |# documentation and is built for agent use, so all three are allowed.
+      |User-agent: *
+      |Content-Signal: search=yes, ai-input=yes, ai-train=yes
       |Allow: /
       |Sitemap: https://www.javadocs.dev/sitemap.xml
       |""".stripMargin
+
+  // MCP Server Card (SEP-2127 / experimental-ext-server-card) served at
+  // /.well-known/mcp/server-card.json so agents can discover the Streamable
+  // HTTP MCP endpoint at /mcp via a single static GET, without a handshake.
+  // Modeled as a schema-derived record (like the rest of the app) and encoded
+  // with zio-schema-json; `@fieldName` maps the two non-identifier JSON keys
+  // (`$schema`, and the reserved word `type`).
+  final case class McpRemote(
+    @fieldName("type") transport: String,
+    url: String,
+  ) derives Schema
+
+  final case class McpServerCard(
+    @fieldName("$schema") schema: String,
+    name: String,
+    version: String,
+    title: String,
+    description: String,
+    websiteUrl: String,
+    remotes: List[McpRemote],
+  ) derives Schema
+
+  private val mcpServerCardValue = McpServerCard(
+    schema = "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json",
+    name = "dev.javadocs/javadoc-central",
+    version = "1.0.0",
+    title = "JavaDoc Central",
+    description = "Browse and read Javadoc/Scaladoc and source for any Maven Central artifact (Java, Kotlin, Scala): resolve versions, list and read rendered API docs, and read library source — all against the live Maven Central catalog, no local build or checkout required.",
+    websiteUrl = "https://www.javadocs.dev",
+    remotes = List(McpRemote("streamable-http", "https://www.javadocs.dev/mcp")),
+  )
+
+  // Value-based JSON: zio-http's `Body.from` encodes the record with the
+  // schema-derived JSON `BinaryCodec` (no intermediate string); `contentType`
+  // sets `application/json`.
+  val mcpServerCard: Response =
+    Response(body = Body.from(mcpServerCardValue)(using SchemaJsonCodec.schemaBasedBinaryCodec))
+      .contentType(MediaType.application.json)
 
   private val llmsHeader =
     """# javadocs.dev
@@ -491,6 +542,7 @@ object Web:
       getOrHead / "llms" / groupId / artifactId / version -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Request)](llmsVersion),
       getOrHead / "sitemap.xml" -> sitemapIndex,
       getOrHead / "sitemap" / groupId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, Request)](sitemapGroup),
+      getOrHead / ".well-known" / "mcp" / "server-card.json" -> mcpServerCard.toHandler,
       getOrHead / ".well-known" / trailing -> Handler.notFound,
       getOrHead / groupId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, Request)](withGroupId),
       getOrHead / groupId / artifactId -> Handler.fromFunctionHandler[(MavenCentral.GroupId, MavenCentral.ArtifactId, Request)](withArtifactId),

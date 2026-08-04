@@ -197,7 +197,19 @@ object SymbolSearch:
   def allGroupArtifacts: ZIO[Redis, Throwable, Set[MavenCentral.GroupArtifact]] =
     defer:
       val redis = ZIO.service[Redis].run
-      redis.sMembers(groupArtifactsKey).returning[MavenCentral.GroupArtifact].run.toSet
+      // `sMembers.returning` decodes the whole set atomically, so a single
+      // member written with an incompatible schema fails the entire read — and
+      // thus all of search. Degrade to empty (search falls through to the
+      // per-symbol / AI paths) instead of hard-failing. We deliberately do NOT
+      // delete the set: it typically holds far more good entries than bad
+      // (in the one incident, 1238 good vs 2 bad), so wiping it would discard
+      // all the good ones and force a full re-index. The few corrupt members
+      // are removed surgically out-of-band (SSCAN for the record-marker byte,
+      // then SREM); this handler just keeps search available until then.
+      redis.sMembers(groupArtifactsKey).returning[MavenCentral.GroupArtifact].catchAll: e =>
+        ZIO.logError(s"Failed to decode $groupArtifactsKey; search degraded to empty until the corrupt members are removed: $e")
+          .as(Chunk.empty[MavenCentral.GroupArtifact])
+      .run.toSet
 
   def update(groupArtifactVersion: MavenCentral.GroupArtifactVersion, symbols: Set[Extractor.Content]): ZIO[Redis & SymbolSearchGuard, Throwable, Unit] =
     defer:
