@@ -54,7 +54,7 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-direct"            % "1.0.0-RC7",
   "dev.zio" %% "zio-redis"             % "1.2.1",
   "dev.zio" %% "zio-schema-protobuf"   % "1.8.6",
-  "dev.zio" %% "zio-schema-json"       % "1.8.5",
+  "dev.zio" %% "zio-schema-json"       % "1.8.6",
   "dev.zio" %% "zio-schema-derivation" % "1.8.6",
 
   "org.slf4j" % "slf4j-simple" % "2.0.18",
