@@ -41,7 +41,30 @@ object AppLogging:
     slf4jLevel: LogLevel,
     debugLoggers: Map[String, LogLevel],
   ): ZLayer[Any, Nothing, Unit] =
-    val cfg     = ConsoleLoggerConfig(LogFormat.default, LogFilter.LogLevelByNameConfig(consoleLevel, Map.empty))
+    val format  = if jsonConsole then jsonLogFormat else textLogFormat
+    val cfg     = ConsoleLoggerConfig(format, LogFilter.LogLevelByNameConfig(consoleLevel, Map.empty))
     val console = if jsonConsole then consoleJsonLogger(cfg) else consoleLogger(cfg)
     val slf4j   = Slf4jBridge.init(LogFilter.logLevelByName[Any](slf4jLevel, debugLoggers.toSeq*))
     Runtime.removeDefaultLoggers >>> console >>> slf4j
+
+  // Dev/text: the aligned default columns, plus any `ZIO.logAnnotate` key/values
+  // appended as ` key=value` (logfmt style). `lazy` so it is initialized when
+  // `build` first reads it, not by object-init order (the `json`/`debug` vals
+  // above call `build`, which would otherwise see this as a null forward ref).
+  private lazy val textLogFormat: LogFormat =
+    LogFormat.default + LogFormat.space + LogFormat.annotations
+
+  // Prod/JSON: `LogFormat.default` without the `timestamp.fixed(32)` padding
+  // (which would leak trailing spaces into the JSON string value), plus
+  // `annotations` so `ZIO.logAnnotate` key/values become first-class JSON fields
+  // instead of being crammed into `message`. Otherwise identical (level, thread,
+  // quoted message, and cause when non-empty). `lazy` for the same init-order
+  // reason as `textLogFormat`.
+  private lazy val jsonLogFormat: LogFormat =
+    import LogFormat.*
+    label("timestamp", timestamp) |-|
+      label("level", level) |-|
+      label("thread", fiberId) |-|
+      label("message", quoted(line)) +
+      (space + label("cause", cause)).filter(LogFilter.causeNonEmpty) +
+      annotations

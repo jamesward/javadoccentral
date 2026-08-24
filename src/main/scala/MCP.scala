@@ -52,13 +52,14 @@ object MCP:
   given throwableError: McpError[Throwable] with
     def message(e: Throwable): String = e.getMessage
 
+  // The info-level "tool call" log now comes from zio-http-mcp's own
+  // `MCP tools/call` log (tool name + arguments as structured fields), so we no
+  // longer emit one here — just app-side error/defect logging, with the params
+  // for debugging context.
   private def logMcp[R, E, A](toolName: String, params: String)(effect: ZIO[R, E, A]): ZIO[R, E, A] =
-    defer:
-      ZIO.logInfo(s"MCP tool call: tool=$toolName params=$params").run
-      effect
-        .tapError(e => ZIO.logWarning(s"MCP tool error: tool=$toolName error=$e"))
-        .tapDefect(c => ZIO.logError(s"MCP tool defect: tool=$toolName cause=${c.prettyPrint}"))
-        .run
+    effect
+      .tapError(e => ZIO.logWarning(s"MCP tool error: tool=$toolName params=$params error=$e"))
+      .tapDefect(c => ZIO.logError(s"MCP tool defect: tool=$toolName params=$params cause=${c.prettyPrint}"))
 
   // Tool/operation descriptions — the single source of truth shared by both the
   // MCP tools below and the REST Endpoints in Api.scala.
