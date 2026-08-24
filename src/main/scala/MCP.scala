@@ -58,8 +58,15 @@ object MCP:
   // for debugging context.
   private def logMcp[R, E, A](toolName: String, params: String)(effect: ZIO[R, E, A]): ZIO[R, E, A] =
     effect
-      .tapError(e => ZIO.logWarning(s"MCP tool error: tool=$toolName params=$params error=$e"))
-      .tapDefect(c => ZIO.logError(s"MCP tool defect: tool=$toolName params=$params cause=${c.prettyPrint}"))
+      .tapError(e => ZIO.logAnnotate(
+        LogAnnotation("tool", toolName),
+        LogAnnotation("params", params),
+        LogAnnotation("error", e.toString),
+      )(ZIO.logWarning("MCP tool error")))
+      .tapDefect(c => ZIO.logAnnotate(
+        LogAnnotation("tool", toolName),
+        LogAnnotation("params", params),
+      )(ZIO.logErrorCause("MCP tool defect", c)))
 
   // Tool/operation descriptions — the single source of truth shared by both the
   // MCP tools below and the REST Endpoints in Api.scala.

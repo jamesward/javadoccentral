@@ -321,7 +321,7 @@ object Web:
         Handler.fromZIO:
           SymbolSearch.search(query).tapError:
             e =>
-              ZIO.logErrorCause(s"SymbolSearch.search failed for query: $query", Cause.fail(e))
+              ZIO.logAnnotate(LogAnnotation("query", query))(ZIO.logErrorCause("SymbolSearch.search failed", Cause.fail(e)))
         .flatMap:
           results =>
             if acceptsMarkdown(request) then

@@ -130,13 +130,19 @@ object App extends ZIOAppDefault:
       finally stream.close()
       total
 
-  private def jvmMemStats: String =
+  private def jvmMemAnnotations: List[LogAnnotation] =
     val mxBean = java.lang.management.ManagementFactory.getMemoryMXBean
     val heap = mxBean.getHeapMemoryUsage
     val nonHeap = mxBean.getNonHeapMemoryUsage
     val threadCount = java.lang.management.ManagementFactory.getThreadMXBean.getThreadCount
     val mb = (b: Long) => b / 1024 / 1024
-    s"heap_used=${mb(heap.getUsed)}MB heap_committed=${mb(heap.getCommitted)}MB nonheap_used=${mb(nonHeap.getUsed)}MB nonheap_committed=${mb(nonHeap.getCommitted)}MB threads=$threadCount"
+    List(
+      LogAnnotation("heapUsedMb", mb(heap.getUsed).toString),
+      LogAnnotation("heapCommittedMb", mb(heap.getCommitted).toString),
+      LogAnnotation("nonheapUsedMb", mb(nonHeap.getUsed).toString),
+      LogAnnotation("nonheapCommittedMb", mb(nonHeap.getCommitted).toString),
+      LogAnnotation("threads", threadCount.toString),
+    )
 
   private val logCacheStats: ZIO[Extractor.JavadocCache & Extractor.SourcesCache, Nothing, Unit] =
     defer:
@@ -145,7 +151,12 @@ object App extends ZIOAppDefault:
       val javadocCacheBytes = ZIO.serviceWithZIO[Extractor.JavadocCache](_.cache.totalBytes).run
       val sourcesCacheBytes = ZIO.serviceWithZIO[Extractor.SourcesCache](_.cache.totalBytes).run
       val totalMB = (javadocCacheBytes + sourcesCacheBytes) / 1024 / 1024
-      ZIO.logInfo(s"cache stats: javadoc=$javadocCacheSize sources=$sourcesCacheSize disk=${totalMB}MB $jvmMemStats").run
+      val statsAnnotations = List(
+        LogAnnotation("javadocEntries", javadocCacheSize.toString),
+        LogAnnotation("sourcesEntries", sourcesCacheSize.toString),
+        LogAnnotation("diskMb", totalMB.toString),
+      ) ++ jvmMemAnnotations
+      ZIO.logAnnotate(statsAnnotations.head, statsAnnotations.tail*)(ZIO.logInfo("cache stats")).run
 
   // How often to sample cache / memory stats for the logs.
   private val statsInterval: Duration = 1.minute

@@ -116,7 +116,7 @@ object SymbolSearch:
         ZIO.fail(InferenceError(s"Inference request failed with status ${resp.status}: $errorBody")).run
 
       val body = resp.body.asJson[MessageResponse].tapError: e =>
-        ZIO.logError(s"Failed to parse inference response: ${e.getMessage}")
+        ZIO.logAnnotate(LogAnnotation("error", e.getMessage))(ZIO.logError("Failed to parse inference response"))
       .mapError(e => InferenceError(s"Failed to parse inference response: ${e.getMessage}"))
       .run
       val choice = ZIO.fromOption(body.choices.headOption).orElseFail(InferenceError("no llm messages found in response")).run
@@ -140,13 +140,19 @@ object SymbolSearch:
               (keys, next)
         .runCollect.mapError(e => SearchError(e.toString)).run.flatten.filter(!_.startsWith("_"))
 
-        ZIO.logInfo(s"Symbol search: pattern=$pattern keys=${allKeys.size}").run
+        ZIO.logAnnotate(
+          LogAnnotation("pattern", pattern),
+          LogAnnotation("keys", allKeys.size.toString),
+        )(ZIO.logInfo("Symbol search")).run
 
         // this should be a very small number of groupArtifacts
         ZIO.foreachPar(allKeys): key =>
           redis.sMembers(key).returning[MavenCentral.GroupArtifact].catchAll: e =>
             defer:
-              ZIO.logError(e.toString).run
+              ZIO.logAnnotate(
+                LogAnnotation("key", key),
+                LogAnnotation("error", e.toString),
+              )(ZIO.logError("Removing unparsable symbol key")).run
               redis.del(key).run // unparsable keys shouldn't be in there
               Chunk.empty
         .mapError(e => SearchError(e.toString))
@@ -161,9 +167,15 @@ object SymbolSearch:
         // scope is local to the AI call (the body is fully materialized
         // here) so we don't propagate `Scope` out of `search`.
         val aiResults = ZIO.scoped(aiSearch(symbol)).mapError(e => SearchError(e.message)).tapError: e =>
-          ZIO.logError(s"aiSearch failed for symbol: $symbol: ${e.message}")
+          ZIO.logAnnotate(
+            LogAnnotation("symbol", symbol),
+            LogAnnotation("error", e.message),
+          )(ZIO.logError("aiSearch failed"))
         .run
-        ZIO.logInfo(s"AI search: symbol=$symbol results=${aiResults.size}").run
+        ZIO.logAnnotate(
+          LogAnnotation("symbol", symbol),
+          LogAnnotation("results", aiResults.size.toString),
+        )(ZIO.logInfo("AI search")).run
         val validatedResults = ZIO.filterPar(aiResults): ga =>
           MavenCentral.isArtifact(ga.groupId, ga.artifactId).orElseSucceed(false)
         .run
@@ -173,7 +185,10 @@ object SymbolSearch:
               latest =>
                 indexJavadocContents(MavenCentral.GroupArtifactVersion(groupArtifact.groupId, groupArtifact.artifactId, latest))
             .ignore
-        ZIO.logInfo(s"Scheduling index load: symbol=$symbol artifacts=${validatedResults.size}").run
+        ZIO.logAnnotate(
+          LogAnnotation("symbol", symbol),
+          LogAnnotation("artifacts", validatedResults.size.toString),
+        )(ZIO.logInfo("Scheduling index load")).run
         // `indexJavadocContents` already owns its Scope internally (it
         // `ZIO.scoped`s the payload before `forkDaemon`), and
         // `Extractor.latest` no longer requires `Scope`, so the forked
@@ -207,7 +222,10 @@ object SymbolSearch:
       // are removed surgically out-of-band (SSCAN for the record-marker byte,
       // then SREM); this handler just keeps search available until then.
       redis.sMembers(groupArtifactsKey).returning[MavenCentral.GroupArtifact].catchAll: e =>
-        ZIO.logError(s"Failed to decode $groupArtifactsKey; search degraded to empty until the corrupt members are removed: $e")
+        ZIO.logAnnotate(
+          LogAnnotation("key", groupArtifactsKey),
+          LogAnnotation("error", e.toString),
+        )(ZIO.logError("Failed to decode group-artifacts set; search degraded to empty until the corrupt members are removed"))
           .as(Chunk.empty[MavenCentral.GroupArtifact])
       .run.toSet
 
@@ -229,13 +247,19 @@ object SymbolSearch:
             ZIO.unit.run
           case None =>
             val work = defer:
-              ZIO.logInfo(s"Updating symbol index: $groupArtifactVersion symbols=${symbols.size}").run
+              ZIO.logAnnotate(
+                LogAnnotation("gav", groupArtifactVersion.toString),
+                LogAnnotation("symbols", symbols.size.toString),
+              )(ZIO.logInfo("Updating symbol index")).run
               ZIO.foreachPar(symbols): symbol =>
                 redis.sAdd(symbol.fqn, groupArtifact)
               .withParallelism(50).unit.run
               redis.sAdd(groupArtifactsKey, groupArtifact).unit.run
               redis.hSet(gavCacheKey, groupArtifact -> version).unit.run
-              ZIO.logInfo(s"Updated symbol index: $groupArtifactVersion symbols=${symbols.size}").run
+              ZIO.logAnnotate(
+                LogAnnotation("gav", groupArtifactVersion.toString),
+                LogAnnotation("symbols", symbols.size.toString),
+              )(ZIO.logInfo("Updated symbol index")).run
             work.ensuring(guard.remove(groupArtifactVersion)).run
 
   // We only want to trigger symbol cache loading when the index page is loaded;
@@ -247,10 +271,14 @@ object SymbolSearch:
 
     val getContentsAndUpdateIndex =
       defer:
-        ZIO.logInfo(s"Index load started: $groupArtifactVersion").run
+        ZIO.logAnnotate(LogAnnotation("gav", groupArtifactVersion.toString))(ZIO.logInfo("Index load started")).run
         val (parseDuration, contents) = Extractor.javadocContents(groupArtifactVersion).timed.run
-        ZIO.logInfo(s"Index load parsed: $groupArtifactVersion symbols=${contents.size} duration=${parseDuration.toMillis}ms").run
+        ZIO.logAnnotate(
+          LogAnnotation("gav", groupArtifactVersion.toString),
+          LogAnnotation("symbols", contents.size.toString),
+          LogAnnotation("durationMs", parseDuration.toMillis.toString),
+        )(ZIO.logInfo("Index load parsed")).run
         SymbolSearch.update(groupArtifactVersion, contents).run
-        ZIO.logInfo(s"Index load complete: $groupArtifactVersion").run
+        ZIO.logAnnotate(LogAnnotation("gav", groupArtifactVersion.toString))(ZIO.logInfo("Index load complete")).run
 
     getContentsAndUpdateIndex.forkDaemon.unit
