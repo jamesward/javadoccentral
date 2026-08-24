@@ -50,14 +50,16 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio"                   % zioVersion,
   "dev.zio" %% "zio-concurrent"        % zioVersion,
   "dev.zio" %% "zio-cache"             % "0.2.8",
-  "dev.zio" %% "zio-logging"           % "2.5.3",
+  "dev.zio" %% "zio-logging"                % "2.5.3",
+  // The slf4j2 bridge is the sole slf4j provider (replaces slf4j-simple): Java
+  // library logs (Netty, Redis client, jsoup, ...) route through ZIO's logger
+  // and pick up the JSON (prod) / text (dev) format from `AppLogging`.
+  "dev.zio" %% "zio-logging-slf4j2-bridge" % "2.5.3",
   "dev.zio" %% "zio-direct"            % "1.0.0-RC7",
   "dev.zio" %% "zio-redis"             % "1.2.1",
   "dev.zio" %% "zio-schema-protobuf"   % "1.8.6",
   "dev.zio" %% "zio-schema-json"       % "1.8.6",
   "dev.zio" %% "zio-schema-derivation" % "1.8.6",
-
-  "org.slf4j" % "slf4j-simple" % "2.0.18",
 
   "org.jsoup" % "jsoup" % "1.23.1",
 
@@ -74,7 +76,7 @@ libraryDependencies ++= Seq(
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioHttpMcpDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-http-mcp" % "0.4.0")
+  else Seq("com.jamesward" %% "zio-http-mcp" % "0.5.1")
 }
 
 libraryDependencies ++= {

@@ -31,6 +31,7 @@ object App extends ZIOAppDefault:
   // `Extractor.scala`; subtracting the two tells you body+extract wall time.
   val clientLayer: ZLayer[Any, Throwable, Client] =
     Client.default.update(_ @@ ZClientAspect.requestLogging(
+      level = _ => LogLevel.Debug,
       loggedRequestHeaders = Set(Header.UserAgent),
       loggedResponseHeaders = Set(Header.ContentLength, Header.ContentType)
     ))
@@ -154,9 +155,10 @@ object App extends ZIOAppDefault:
   // cleanly during blocking I/O, so we avoid the pthread_create EAGAIN risk of
   // the default ZIO cached thread pool without artificially capping concurrency.
   // Must be applied via `bootstrap` so fibers forked by the server inherit the
-  // FiberRef.
+  // FiberRef. `AppLogging.json` installs structured (JSON) logging at an INFO
+  // floor for prod — see AppLogging.scala.
   override val bootstrap =
-    Runtime.enableLoomBasedBlockingExecutor
+    AppLogging.json ++ Runtime.enableLoomBasedBlockingExecutor
 
   def run =
     // `JarCache` is append-only for the dyno's lifetime; ZipFile handles

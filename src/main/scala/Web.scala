@@ -782,4 +782,4 @@ object Web:
     )
 
   val appWithMiddleware: Routes[CrawlerLimiter[MavenCentral.GroupArtifactVersion] & BadActor & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.LatestCache & Client & MavenCentralRepo & Redis & HerokuInference & SymbolSearch.SymbolSearchGuard, Response] =
-    app @@ badActorMiddleware @@ crawlerRateLimitMiddleware @@ immutableAssetNotModified @@ immutableAssetCacheHeaders @@ Middleware.requestLogging(loggedRequestHeaders = Set(Header.UserAgent)) @@ headStripBody
+    app @@ badActorMiddleware @@ crawlerRateLimitMiddleware @@ immutableAssetNotModified @@ immutableAssetCacheHeaders @@ Middleware.requestLogging(level = _ => LogLevel.Debug, loggedRequestHeaders = Set(Header.UserAgent)) @@ headStripBody

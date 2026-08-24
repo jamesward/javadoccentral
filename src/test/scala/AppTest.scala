@@ -6,6 +6,12 @@ import zio.redis.{CodecSupplier, Redis}
 
 object AppTest extends ZIOAppDefault:
 
+  // Dev: human-readable text logs at a DEBUG floor (mirrors prod's Loom
+  // executor) so the debug-level request / MCP tools-list / notification logs
+  // are visible locally. See AppLogging.scala.
+  override val bootstrap =
+    AppLogging.debug ++ Runtime.enableLoomBasedBlockingExecutor
+
   def run =
     Server.serve(Web.appWithMiddleware).provide(
       App.server,
