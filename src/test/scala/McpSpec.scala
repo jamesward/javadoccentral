@@ -20,7 +20,7 @@ object McpSpec extends ZIOSpecDefault:
         .build()
       val client = McpClient.sync(transport)
         .requestTimeout(JDuration.ofSeconds(30))
-        .clientInfo(JMcpSchema.Implementation("test-client", "1.0.0"))
+        .clientInfo(JMcpSchema.Implementation("javadoccentral-mcp-spec", "1.0.0"))
         .build()
       try
         client.initialize()

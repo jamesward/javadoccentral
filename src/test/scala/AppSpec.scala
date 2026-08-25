@@ -146,6 +146,50 @@ object AppSpec extends ZIOSpecDefault:
           headResp.status == Status.MethodNotAllowed,
           headBody.isEmpty,
         )
+    , test("GET /mcp serves MCP setup instructions to browsers (Accept: text/html)"):
+      val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
+      defer:
+        val resp = Web.appWithMiddleware.runZIO(
+          Request.get(URL(Path.root / "mcp"))
+            .addHeader(forwardedForHeader)
+            .addHeader(Header.Accept(MediaType.text.html))
+        ).run
+        val body = resp.body.asString.run
+        assertTrue(
+          resp.status.isSuccess,
+          resp.header(Header.ContentType).exists(_.renderedValue.contains("text/html")),
+          // The endpoint and per-agent setup snippets are all present.
+          body.contains("https://www.javadocs.dev/mcp"),
+          body.contains("Kiro"),
+          body.contains("Claude Code"),
+          body.contains("Cursor"),
+          body.contains("VS Code"),
+          body.contains("Windsurf"),
+          body.contains("mcp-remote"),
+          // Copy-to-clipboard affordance on the code blocks.
+          body.contains("copyCode"),
+          body.contains(">Copy<"),
+        )
+    , test("GET /mcp returns 405 to MCP clients (no text/html in Accept)"):
+      val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
+      defer:
+        // An MCP client opening the server->client SSE stream sends text/event-stream.
+        val sseResp = Web.appWithMiddleware.runZIO(
+          Request.get(URL(Path.root / "mcp"))
+            .addHeader(forwardedForHeader)
+            .addHeader("Accept", "application/json, text/event-stream")
+        ).run
+        // A bare request (curl-style, no Accept) must also stay 405.
+        val plainResp = Web.appWithMiddleware.runZIO(
+          Request.get(URL(Path.root / "mcp")).addHeader(forwardedForHeader)
+        ).run
+        val sseBody = sseResp.body.asString.run
+        assertTrue(
+          sseResp.status == Status.MethodNotAllowed,
+          plainResp.status == Status.MethodNotAllowed,
+          // Must not accidentally serve the HTML page to a protocol client.
+          !sseBody.contains("Claude Code"),
+        )
     , test("HEAD for unknown path returns 404 like GET (no body)"):
       val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
       defer:

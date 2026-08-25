@@ -83,6 +83,29 @@ trailing-slash normalization belong in the relevant browse handlers, **not in a
 global middleware**. Global query redirect middleware can hijack the REST API,
 which legitimately uses the same parameter names.
 
+## `GET /mcp` browser landing page
+
+`zio-http-mcp`'s `statelessRoutes` registers a `GET /mcp` that unconditionally
+returns 405 (the stateless transport has no server→client SSE stream). Humans
+who paste `/mcp` into a browser would just see that 405. Instead, in
+`Web.scala`'s `app`, we **filter out that exact `GET /mcp`** (matched by
+`route.routePattern.render == (Method.GET / "mcp").render`, which leaves the
+`GET /mcp/{trailing}` catch-all and POST/DELETE/PRM routes untouched) and
+register our own `GET /mcp`:
+
+- **Browser** (`Accept` contains `text/html`) → an HTML setup page
+  (`UI.mcpSetup`) with per-agent MCP config snippets.
+- **MCP client** (`Accept: text/event-stream`) or **curl** (`*/*`, or no
+  `Accept`) → still 405, preserving protocol compatibility.
+
+`Web.prefersHtml` is the discriminator — `text/html` in `Accept` is more
+reliable than User-Agent sniffing. Filtering the library route (rather than
+letting `Routes.++` pick the last of two conflicting `GET /mcp` routes) avoids
+the startup "Duplicate routes detected" warning. `HEAD /mcp` stays an explicit
+405. When adding a new agent to `UI.mcpSetup`, remember MCP client config
+formats drift; keep the endpoint + Streamable HTTP transport as the stable fact
+and note that agent docs are authoritative.
+
 ## Tech Stack
 
 - Scala 3 (3.8.x) with `-language:strictEquality`

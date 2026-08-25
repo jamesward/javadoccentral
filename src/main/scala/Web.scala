@@ -27,6 +27,14 @@ object Web:
       val types = accept.mimeTypes.map(_.mediaType)
       types.exists(_ == MediaType.text.markdown) && !types.exists(mt => mt == MediaType.text.html || mt == MediaType.any)
 
+  // A human opening a URL in a browser sends `Accept: text/html`. MCP clients
+  // that GET /mcp to open the (unsupported) server→client SSE stream send
+  // `Accept: text/event-stream`, and CLI tools like curl send `*/*`; neither
+  // lists `text/html`. So the presence of `text/html` cleanly distinguishes a
+  // browser from an MCP client — more reliable than User-Agent sniffing.
+  private def prefersHtml(request: Request): Boolean =
+    request.header(Accept).exists(_.mimeTypes.exists(_.mediaType == MediaType.text.html))
+
   private def markdownResponse(content: String): Response =
     Response.text(content).contentType(MediaType.text.markdown)
 
@@ -700,10 +708,25 @@ object Web:
 
   val app: Routes[BadActor & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Client & MavenCentralRepo & Redis & HerokuInference & SymbolSearch.SymbolSearchGuard, Response] =
     // `statelessRoutes` from zio-http-mcp only registers POST/GET/DELETE on /mcp.
+    // Its `GET /mcp` unconditionally 405s (the stateless transport offers no
+    // server→client SSE stream). We replace *only* that exact `GET /mcp` with a
+    // handler that serves a human-friendly setup page when a browser opens the
+    // URL (Accept: text/html), while still returning 405 to MCP clients (which
+    // send Accept: text/event-stream) so protocol compatibility is preserved.
+    // POST/DELETE and the PRM well-known routes are left untouched.
     // A HEAD request would otherwise throw inside the route tree (turning into a
     // 500 via `.sandbox`). Register HEAD /mcp explicitly so it mirrors GET's 405.
-    val mcpRoutes = MCP.mcpServer.statelessRoutes ++ Routes(
-      Method.HEAD / "mcp" -> Handler.fromResponse(Response.status(Status.MethodNotAllowed))
+    val mcpGetRender = (Method.GET / "mcp").render
+    val mcpBaseRoutes = MCP.mcpServer.statelessRoutes
+    val mcpRoutes = Routes.fromIterable(
+      mcpBaseRoutes.routes.filterNot(_.routePattern.render == mcpGetRender)
+    ) ++ Routes(
+      Method.GET / "mcp" -> Handler.fromFunction[Request]: request =>
+        if prefersHtml(request) then
+          Response.html(UI.page("Connect to the javadocs.dev MCP server", UI.mcpSetup))
+        else
+          Response.status(Status.MethodNotAllowed),
+      Method.HEAD / "mcp" -> Handler.fromResponse(Response.status(Status.MethodNotAllowed)),
     )
 
     // All read endpoints respond to both GET and HEAD. Per RFC 9110, HEAD must

@@ -74,6 +74,16 @@ object UI:
               |   background-color: #edede0;
               |   padding-bottom: 80px;
               | }
+              | code {
+              |   background-color: #dcdcd0;
+              |   padding: 1px 5px;
+              |   border-radius: 4px;
+              | }
+              | pre code {
+              |   background-color: transparent;
+              |   padding: 0;
+              |   border-radius: 0;
+              | }
               |""".stripMargin),
         ) ++ discoveryLinkTags)*
       ),
@@ -230,6 +240,165 @@ object UI:
         files.map: file =>
           li(a(href := s"/$groupId/$artifactId/$version/$file", file))
       )
+    )
+
+  // The one fact that stays constant no matter how each agent's config format
+  // drifts: the Streamable HTTP endpoint. Referenced throughout the setup page.
+  private val mcpEndpoint = "https://www.javadocs.dev/mcp"
+
+  private def codeBlock(content: String): Html =
+    div(
+      styleAttr := "position: relative; margin: 0.5em 0;",
+      button(
+        typeAttr := "button",
+        Dom.attr("onclick", "copyCode(this)"),
+        styleAttr := "position: absolute; top: 8px; right: 8px; font-family: monospace; font-size: 0.85em; background-color: #adada0; color: #000; border: none; border-radius: 4px; padding: 4px 10px; cursor: pointer;",
+        "Copy",
+      ),
+      pre(
+        styleAttr := "background-color: #dcdcd0; padding: 12px 70px 12px 16px; border-radius: 6px; overflow-x: auto; white-space: pre; margin: 0;",
+        code(content),
+      ),
+    )
+
+  private def agentSection(name: String, where: Html, config: String): Html =
+    div(
+      styleAttr := "margin: 1.5em 0;",
+      h3(name),
+      p(where),
+      codeBlock(config),
+    )
+
+  // Rendered when a human opens /mcp in a browser (Accept: text/html). MCP
+  // clients issue their GET with `Accept: text/event-stream` and still get the
+  // spec-permitted 405, so this page never interferes with the protocol.
+  val mcpSetup: Html =
+    div(
+      p(
+        "This is the ", strong("javadocs.dev"), " MCP server. It gives AI coding agents ",
+        "tools to resolve Maven Central versions, list and read Javadoc/Scaladoc, and read ",
+        "library source - for any Java, Kotlin, or Scala artifact, with no local build or ",
+        "checkout required.",
+      ),
+      p(
+        styleAttr := "font-size: 1.1em; margin-top: 1em;",
+        "Endpoint (Streamable HTTP): ",
+        code(mcpEndpoint),
+      ),
+
+      agentSection(
+        "Claude Code",
+        span("Run in your project (add ", code("--scope user"), " to enable it in every project):"),
+        s"claude mcp add --transport http javadocs $mcpEndpoint",
+      ),
+
+      agentSection(
+        "Cursor",
+        span("Add to ", code("~/.cursor/mcp.json"), " (global) or ", code(".cursor/mcp.json"), " (per-project):"),
+        s"""{
+           |  "mcpServers": {
+           |    "javadocs": {
+           |      "url": "$mcpEndpoint"
+           |    }
+           |  }
+           |}""".stripMargin,
+      ),
+
+      agentSection(
+        "Kiro / Kiro CLI",
+        span("Add to ", code(".kiro/settings/mcp.json"), " (workspace) or ", code("~/.kiro/settings/mcp.json"), " (global):"),
+        s"""{
+           |  "mcpServers": {
+           |    "javadocs": {
+           |      "url": "$mcpEndpoint"
+           |    }
+           |  }
+           |}""".stripMargin,
+      ),
+
+      agentSection(
+        "VS Code (GitHub Copilot)",
+        span("Add to ", code(".vscode/mcp.json"), " in your workspace (or run ", code("MCP: Add Server"), " from the Command Palette):"),
+        s"""{
+           |  "servers": {
+           |    "javadocs": {
+           |      "type": "http",
+           |      "url": "$mcpEndpoint"
+           |    }
+           |  }
+           |}""".stripMargin,
+      ),
+
+      agentSection(
+        "Windsurf",
+        span("Add to ", code("~/.codeium/windsurf/mcp_config.json"), ":"),
+        s"""{
+           |  "mcpServers": {
+           |    "javadocs": {
+           |      "serverUrl": "$mcpEndpoint"
+           |    }
+           |  }
+           |}""".stripMargin,
+      ),
+
+      agentSection(
+        "Cline / Roo Code",
+        span("Edit the MCP settings JSON (", code("cline_mcp_settings.json"), ") or use the MCP Servers UI:"),
+        s"""{
+           |  "mcpServers": {
+           |    "javadocs": {
+           |      "type": "streamableHttp",
+           |      "url": "$mcpEndpoint"
+           |    }
+           |  }
+           |}""".stripMargin,
+      ),
+
+      agentSection(
+        "Gemini CLI",
+        span("Add to ", code("~/.gemini/settings.json"), " (use ", code("httpUrl"), " for Streamable HTTP):"),
+        s"""{
+           |  "mcpServers": {
+           |    "javadocs": {
+           |      "httpUrl": "$mcpEndpoint"
+           |    }
+           |  }
+           |}""".stripMargin,
+      ),
+
+      agentSection(
+        "Claude Desktop, Zed, and other stdio-only clients",
+        span("For clients that only speak stdio, bridge to the remote server with ", a(href := "https://github.com/geelen/mcp-remote", "mcp-remote"), " (requires Node.js):"),
+        s"""{
+           |  "mcpServers": {
+           |    "javadocs": {
+           |      "command": "npx",
+           |      "args": ["-y", "mcp-remote", "$mcpEndpoint"]
+           |    }
+           |  }
+           |}""".stripMargin,
+      ),
+
+      div(
+        styleAttr := "margin-top: 2em; padding-top: 1em; border-top: 1px solid #adada0;",
+        p(
+          "Prefer not to use MCP? The same operations are available as a read-only ",
+          a(href := "/openapi.json", "REST API"), " (", a(href := "/api/doc", "SwaggerUI"),
+          "), and every page returns Markdown with an ", code("Accept: text/markdown"), " header. ",
+          "There's also an ", a(href := "/SKILL.md", "Agent Skill"), " describing how to drive this service.",
+        ),
+      ),
+
+      // Clipboard helper for the Copy buttons above. Reads the sibling <code>
+      // text and writes it to the clipboard, with brief "Copied!" feedback.
+      script(
+        "function copyCode(btn){" +
+          "var el=btn.parentElement.querySelector('code');" +
+          "navigator.clipboard.writeText(el.innerText).then(function(){" +
+          "var o=btn.textContent;btn.textContent='Copied!';" +
+          "setTimeout(function(){btn.textContent=o;},1500);" +
+          "});}"
+      ),
     )
 
   def symbolSearchResults(query: String, groupArtifacts: Set[MavenCentral.GroupArtifact]): Html =
