@@ -86,7 +86,7 @@ libraryDependencies ++= {
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioHttpGuardDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-http-guard" % "0.0.1")
+  else Seq("com.jamesward" %% "zio-http-guard" % "0.0.2")
 }
 
 Compile / packageDoc / publishArtifact := false

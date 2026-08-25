@@ -250,6 +250,26 @@ cache reference must live until the last reader is done.
 - `-XX:+ExitOnOutOfMemoryError` — OOM kills the process immediately
 - When running the `heroku` command you must not specify an app name
 
+
+### Security probe filtering
+
+`Web.appWithMiddleware` applies `zio-http-guard`'s `BadActorMiddleware` before
+browse routes can interpret arbitrary paths as Maven coordinates. Keep generic
+probe classification in `zio-http-guard`'s `defaultSuspect`, not as a growing
+list of javadoccentral routes:
+
+- Match stable path shapes/segments (hidden files such as `.env*` anywhere in
+  the path, dynamic scripts, CMS/debug probes), rather than only exact paths.
+- A suspect request must return a cheap 404 before the protected handler runs;
+  repeated probes still escalate to the guard's tarpit response.
+- Include negative matcher tests for valid Maven coordinates and nested javadoc
+  resources. In particular, preserve root `/.well-known` endpoints and avoid
+  treating group IDs such as `com.php` or classes such as `Environment.html`,
+  `Dockerfile.html`, and `Actuator.html` as probes.
+- Validate guard changes here with `./sbt -Dlocal ...`. Production still uses
+  the published `zio-http-guard` version pinned in `build.sbt`, so deployment
+  requires publishing the library and bumping that pin.
+
 ### Caching disk-backed values
 
 `JavadocCache` and `SourcesCache` wrap `zio.cache.ScopedCache`, not the plain
