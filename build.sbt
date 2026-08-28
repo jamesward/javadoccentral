@@ -70,7 +70,7 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-test-magnolia"  % zioVersion % Test,
   "com.dimafeng" %% "testcontainers-scala-core" % "0.44.1" % Test,
 
-  "io.modelcontextprotocol.sdk" % "mcp-core"           % "2.0.0" % Test,
+  "io.modelcontextprotocol.sdk" % "mcp-core"           % "2.0.1" % Test,
   "io.modelcontextprotocol.sdk" % "mcp-json-jackson2"  % "2.0.0" % Test,
 )
 
