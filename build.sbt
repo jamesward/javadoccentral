@@ -44,7 +44,7 @@ scalacOptions ++= {
   }
 }
 
-scalaVersion := "3.8.4"
+scalaVersion := "3.9.0"
 
 libraryDependencies ++= Seq(
   "dev.zio" %% "zio"                   % zioVersion,
