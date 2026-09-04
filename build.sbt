@@ -81,7 +81,7 @@ libraryDependencies ++= {
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioMavenCentralDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-mavencentral" % "0.13.4")
+  else Seq("com.jamesward" %% "zio-mavencentral" % "0.14.0")
 }
 
 libraryDependencies ++= {
