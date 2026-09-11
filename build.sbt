@@ -49,17 +49,20 @@ scalaVersion := "3.9.0"
 libraryDependencies ++= Seq(
   "dev.zio" %% "zio"                   % zioVersion,
   "dev.zio" %% "zio-concurrent"        % zioVersion,
-  "dev.zio" %% "zio-cache"             % "0.2.8",
+  "dev.zio" %% "zio-cache"             % "0.3.0",
   "dev.zio" %% "zio-logging"                % "2.5.3",
   // The slf4j2 bridge is the sole slf4j provider (replaces slf4j-simple): Java
   // library logs (Netty, Redis client, jsoup, ...) route through ZIO's logger
   // and pick up the JSON (prod) / text (dev) format from `AppLogging`.
   "dev.zio" %% "zio-logging-slf4j2-bridge" % "2.5.3",
   "dev.zio" %% "zio-direct"            % "1.0.0-RC7",
-  "dev.zio" %% "zio-redis"             % "1.2.1",
-  "dev.zio" %% "zio-schema-protobuf"   % "1.8.6",
-  "dev.zio" %% "zio-schema-json"       % "1.8.6",
-  "dev.zio" %% "zio-schema-derivation" % "1.8.6",
+  "dev.zio" %% "zio-redis"             % "1.3.0",
+  // zio-http-mcp 0.8.0 is compiled against zio-schema 1.8.6 / zio-json
+  // 0.10.0. zio-schema 1.9.0 pulls zio-json 1.1.0, which removed
+  // JsonEncoderDerivation and is not binary compatible with that release.
+  "dev.zio" %% "zio-schema-protobuf"   % "1.9.0",
+  "dev.zio" %% "zio-schema-json"       % "1.9.0",
+  "dev.zio" %% "zio-schema-derivation" % "1.9.0",
 
   "org.jsoup" % "jsoup" % "1.23.2",
 
@@ -76,7 +79,7 @@ libraryDependencies ++= Seq(
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioHttpMcpDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-http-mcp" % "0.8.0")
+  else Seq("com.jamesward" %% "zio-http-mcp" % "0.8.1")
 }
 
 libraryDependencies ++= {
