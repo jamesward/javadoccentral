@@ -125,40 +125,16 @@ object SymbolSearch:
 
   def search(symbol: String): ZIO[Redis & HerokuInference & Client & MavenCentralRepo & Extractor.JavadocCache & SymbolSearchGuard, SearchError, Set[MavenCentral.GroupArtifact]] =
     defer:
-      val redis = ZIO.service[Redis].run
-
       val gaResults = searchGroupArtifacts(symbol).mapError(e => SearchError(e.toString)).run
 
       val symbolResults = if gaResults.nonEmpty then Set.empty[MavenCentral.GroupArtifact] else
-        val normalizedSymbol = symbol.replace(' ', '*')
-        val pattern = "*" + normalizedSymbol + "*"
-
-        val allKeys = ZStream.paginateZIO(0L): cursor =>
-          redis.scan(cursor, Some(pattern), Some(Count(10_000L))).returning[String].map:
-            case (nextCursor, keys) =>
-              val next = if (nextCursor == 0L) None else Some(nextCursor)
-              (keys, next)
-        .runCollect.mapError(e => SearchError(e.toString)).run.flatten.filter(!_.startsWith("_"))
-
-        ZIO.logAnnotate(
-          LogAnnotation("pattern", pattern),
-          LogAnnotation("keys", allKeys.size.toString),
-        )(ZIO.logInfo("Symbol search")).run
-
-        // this should be a very small number of groupArtifacts
-        ZIO.foreachPar(allKeys): key =>
-          redis.sMembers(key).returning[MavenCentral.GroupArtifact].catchAll: e =>
-            defer:
-              ZIO.logAnnotate(
-                LogAnnotation("key", key),
-                LogAnnotation("error", e.toString),
-              )(ZIO.logError("Removing unparsable symbol key")).run
-              redis.del(key).run // unparsable keys shouldn't be in there
-              Chunk.empty
-        .mapError(e => SearchError(e.toString))
-        .run
-        .flatten
-        .toSet
+        // Exact case first (precise); agents often lower-case class names
+        // ("jevjudge"), so fall back to a case-insensitive scan before the
+        // (slow, costly) AI search.
+        symbolArtifacts(symbol, caseInsensitive = false)
+          .flatMap(found => if found.nonEmpty then ZIO.succeed(found) else symbolArtifacts(symbol, caseInsensitive = true))
+          .mapError(e => SearchError(e.toString))
+          .run
 
       val cacheResults = gaResults ++ symbolResults
 
@@ -198,16 +174,76 @@ object SymbolSearch:
       else
         cacheResults
 
-  private def queryParts(query: String): List[String] =
+  def queryParts(query: String): List[String] =
     query.toLowerCase.split("\\s+").nn.map(_.nn.replaceAll("[^a-z0-9._:-]", "")).toList.filter(_.nonEmpty)
 
+  private val versionLike = "^v?\\d+([._-][0-9a-z]+)*$".r
+
+  /** A standalone version token such as `3`, `3.0.0`, `2.1.0-m1` or `v1.2`. */
+  def isVersionToken(part: String): Boolean = versionLike.matches(part)
+
+  /** Artifacts whose `groupId:artifactId` contains every part. No parts matches nothing (not the whole catalog). */
+  def matchGroupArtifacts(all: Set[MavenCentral.GroupArtifact], parts: List[String]): Set[MavenCentral.GroupArtifact] =
+    if parts.isEmpty then Set.empty
+    else all.filter: ga =>
+      val combined = ga.groupId.toString.toLowerCase + ":" + ga.artifactId.toString.toLowerCase
+      parts.forall(combined.contains)
+
+  /**
+   * Agents routinely append a version to a name query ("jackson-databind 3.0.0"),
+   * which can never match a `groupId:artifactId`. If the full query finds
+   * nothing, retry without the version-like tokens.
+   */
+  def searchGroupArtifactsIn(all: Set[MavenCentral.GroupArtifact], query: String): Set[MavenCentral.GroupArtifact] =
+    val parts = queryParts(query)
+    val exact = matchGroupArtifacts(all, parts)
+    if exact.nonEmpty then exact
+    else
+      val withoutVersions = parts.filterNot(isVersionToken)
+      if withoutVersions.size == parts.size then exact else matchGroupArtifacts(all, withoutVersions)
+
   def searchGroupArtifacts(query: String): ZIO[Redis, Throwable, Set[MavenCentral.GroupArtifact]] =
+    allGroupArtifacts.map(searchGroupArtifactsIn(_, query))
+
+  /** Redis `SCAN MATCH` glob for `*symbol*`, optionally matching letters in either case (`[jJ][eE]...`). */
+  def symbolPattern(symbol: String, caseInsensitive: Boolean): String =
+    val normalized = symbol.replace(' ', '*')
+    val body =
+      if !caseInsensitive then normalized
+      else normalized.flatMap(c => if c.isLetter then s"[${c.toLower}${c.toUpper}]" else c.toString)
+    "*" + body + "*"
+
+  /** Artifacts indexed under any symbol key matching [[symbolPattern]]. */
+  def symbolArtifacts(symbol: String, caseInsensitive: Boolean): ZIO[Redis, Throwable, Set[MavenCentral.GroupArtifact]] =
     defer:
-      val all = allGroupArtifacts.run
-      val parts = queryParts(query)
-      all.filter: ga =>
-        val combined = ga.groupId.toString.toLowerCase + ":" + ga.artifactId.toString.toLowerCase
-        parts.forall(combined.contains)
+      val redis = ZIO.service[Redis].run
+      val pattern = symbolPattern(symbol, caseInsensitive)
+
+      val allKeys = ZStream.paginateZIO(0L): cursor =>
+        redis.scan(cursor, Some(pattern), Some(Count(10_000L))).returning[String].map:
+          case (nextCursor, keys) =>
+            val next = if (nextCursor == 0L) None else Some(nextCursor)
+            (keys, next)
+      .runCollect.run.flatten.filter(!_.startsWith("_"))
+
+      ZIO.logAnnotate(
+        LogAnnotation("pattern", pattern),
+        LogAnnotation("keys", allKeys.size.toString),
+      )(ZIO.logInfo("Symbol search")).run
+
+      // this should be a very small number of groupArtifacts
+      ZIO.foreachPar(allKeys): key =>
+        redis.sMembers(key).returning[MavenCentral.GroupArtifact].catchAll: e =>
+          defer:
+            ZIO.logAnnotate(
+              LogAnnotation("key", key),
+              LogAnnotation("error", e.toString),
+            )(ZIO.logError("Removing unparsable symbol key")).run
+            redis.del(key).run // unparsable keys shouldn't be in there
+            Chunk.empty
+      .run
+      .flatten
+      .toSet
 
   def allGroupArtifacts: ZIO[Redis, Throwable, Set[MavenCentral.GroupArtifact]] =
     defer:

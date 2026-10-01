@@ -20,4 +20,4 @@ jobs:
         INFERENCE_MODEL_ID: ${{ secrets.INFERENCE_MODEL_ID }}
         INFERENCE_URL: ${{ secrets.INFERENCE_URL }}
       run: |
-        ./sbt test
+        ./sbt "Test / compile; testFull; stage"

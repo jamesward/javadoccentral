@@ -29,7 +29,8 @@ name := "javadoccentral"
 scalacOptions ++= Seq(
   //"-Yexplicit-nulls", // doesn't seem to work anymore
   "-language:strictEquality",
-  // "-Xfatal-warnings", // doesn't seem to work anymore
+  "-deprecation",
+  "-Werror",
   //  "-Wopt:all",
 )
 
@@ -45,6 +46,15 @@ scalacOptions ++= {
 }
 
 scalaVersion := "3.9.0"
+
+// sbt-mcp settings
+mcpEnabled := true
+mcpHost := "127.0.0.1"
+mcpPort := 5106
+
+// SkillsJars
+skillsJarsOutputDir := Some(file(".kiro/skills"))
+libraryDependencies += "com.jamesward" % "skills" % "0.0.4" % Skills
 
 libraryDependencies ++= Seq(
   "dev.zio" %% "zio"                   % zioVersion,
@@ -70,7 +80,6 @@ libraryDependencies ++= Seq(
 
   "dev.zio" %% "zio-test"           % zioVersion % Test,
   "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,
-  "dev.zio" %% "zio-test-magnolia"  % zioVersion % Test,
   "com.dimafeng" %% "testcontainers-scala-core" % "0.44.1" % Test,
 
   "io.modelcontextprotocol.sdk" % "mcp-core"           % "2.0.1" % Test,
@@ -79,12 +88,12 @@ libraryDependencies ++= Seq(
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioHttpMcpDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-http-mcp" % "0.8.2")
+  else Seq("com.jamesward" %% "zio-http-mcp" % "0.8.3")
 }
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioMavenCentralDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-mavencentral" % "0.14.0")
+  else Seq("com.jamesward" %% "zio-mavencentral" % "0.14.1")
 }
 
 libraryDependencies ++= {
@@ -121,4 +130,5 @@ javaOptions ++= Seq(
 // wins, so this overrides the inherited 96m.
 Test / javaOptions += "-XX:MaxMetaspaceSize=512m"
 
-Test / run / mainClass := Some("AppTest")
+Compile / mainClass := Some("App")
+Test / mainClass := Some("AppTest")

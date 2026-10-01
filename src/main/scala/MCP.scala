@@ -21,6 +21,34 @@ object MCP:
     query: String,
   ) derives Schema
 
+  @description("A Maven Central artifact (groupId and artifactId) whose latest version to resolve.")
+  case class LatestVersionQuery(
+    @description("The Maven groupId, e.g. \"dev.zio\".")
+    groupId: GroupId,
+    @description("The Maven artifactId, e.g. \"zio_3\".")
+    artifactId: ArtifactId,
+    @description("Optional, default false. When true, also consider pre-releases (milestones, RCs, betas, " +
+      "alphas, snapshots), e.g. to find a new API that only exists in a milestone. When false, returns the " +
+      "latest release (or the newest pre-release if the artifact has no release at all).")
+    includePreReleases: Option[Boolean] = None,
+  ) derives Schema:
+    def groupArtifact: GroupArtifact = GroupArtifact(groupId, artifactId)
+
+  @description("A Maven Central artifact version whose documented symbols to list, optionally narrowed by name.")
+  case class JavadocSymbolsQuery(
+    @description("The Maven groupId, e.g. \"dev.zio\".")
+    groupId: GroupId,
+    @description("The Maven artifactId, e.g. \"zio_3\".")
+    artifactId: ArtifactId,
+    @description("The artifact version, e.g. \"2.1.9\".")
+    version: Version,
+    @description("Optional. Only return symbols whose fully-qualified name contains this text (case-insensitive; " +
+      "several space-separated terms must all match), e.g. \"PolymorphicTypeValidator\" or \"judge Builder\". " +
+      "Omit to list every symbol.")
+    filter: Option[String] = None,
+  ) derives Schema:
+    def gav: GroupArtifactVersion = GroupArtifactVersion(groupId, artifactId, version)
+
   @description("A pointer to one documented page or source file inside an artifact's jar.")
   case class JavadocSymbol(
     @description("The Maven groupId, e.g. \"dev.zio\".")
@@ -76,7 +104,11 @@ object MCP:
       "groupId:artifactId — Java, Kotlin, or Scala library). " +
       "Call this first when you only know the artifact but not the version: " +
       "the version it returns feeds into every other tool here that takes a " +
-      "concrete version. Works against the live Maven Central catalog — no " +
+      "concrete version. By default it returns the latest release, sorted by " +
+      "Maven version order and skipping pre-releases; set " +
+      "`includePreReleases` to true to get the newest version of any kind " +
+      "(milestone, RC, beta...), e.g. when a class or method you are looking " +
+      "for is missing from the latest release. Works against the live Maven Central catalog — no " +
       "local install, build tool, or repository checkout required."
 
     val getIndex: String =
@@ -97,7 +129,10 @@ object MCP:
       "Use this to answer 'which classes/types does library X have?' or " +
       "'find classes related to <topic>' — it is the fastest way to list " +
       "the API by name without reading code. Prefer this over " +
-      "list_source_files whenever you only need class/type names. Only " +
+      "list_source_files whenever you only need class/type names. Pass " +
+      "`filter` (e.g. a class name) to get only the matching entries: large " +
+      "libraries list hundreds of symbols, so filtering saves a lot of " +
+      "context when you are looking for one type. Only " +
       "if this returns NotFoundError because no javadoc jar was published, " +
       "fall back to list_source_files. Works against the live Maven " +
       "Central catalog with no local install, build, or checkout required."
@@ -133,17 +168,27 @@ object MCP:
       "artifact, no local checkout or build needed."
 
     val searchArtifacts: String =
-      "Searches the indexed Maven Central catalog for artifacts whose " +
-      "groupId or artifactId contains a substring (case-insensitive). " +
+      "Finds Maven coordinates from part of a library name: searches the " +
+      "javadocs.dev index of Maven Central artifacts for groupId:artifactId " +
+      "values containing every word of the query (case-insensitive). " +
       "Use this when you know part of a library name (e.g. \"jackson\", " +
       "\"zio-http\", \"netty-codec\") and need the exact " +
       "groupId:artifactId coordinates to feed into the other tools. " +
-      "Pair with get_latest_version once you've picked an artifact."
+      "Query with name fragments only — versions are not part of the " +
+      "match. The same artifactId can be published under several groupIds " +
+      "(e.g. jackson-databind: com.fasterxml.jackson.core for 2.x, " +
+      "tools.jackson.core for 3.x), so check each candidate with " +
+      "get_latest_version. To find the library that contains a class, use " +
+      "symbol_to_artifact instead."
 
     val symbolToArtifact: String =
-      "Resolves a class name, fully-qualified type, or package name to " +
-      "the Maven Central artifact (groupId, artifactId) that publishes " +
-      "it. Case-sensitive. " +
+      "Finds which Maven artifact contains a given Java/Kotlin/Scala class: " +
+      "resolves a class name, nested type (e.g. Outer.Builder), " +
+      "fully-qualified type, or package name to the Maven Central artifacts " +
+      "(groupId, artifactId) that publish it. Exact case is preferred; a " +
+      "case-insensitive match is tried if that finds nothing. Several " +
+      "artifacts can contain the same simple name (e.g. a Java and a Scala " +
+      "library): check each result rather than assuming the first. " +
       "Use this when you have a symbol from a stack trace, an import " +
       "line, or an error message and you need to know which library to " +
       "look in. From there, chain into get_latest_version, then " +
@@ -153,9 +198,9 @@ object MCP:
   val getLatestTool = McpTool("get_latest_version")
     .description(Descriptions.getLatest)
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
-    .handle: (input: GroupArtifact) =>
+    .handle: (input: LatestVersionQuery) =>
       logMcp("get_latest_version", input.toString):
-        Extractor.latest(input)
+        Extractor.latest(input.groupArtifact, input.includePreReleases.getOrElse(false))
 
   val getIndexTool = McpTool("get_javadoc_index")
     .description(Descriptions.getIndex)
@@ -170,12 +215,12 @@ object MCP:
   val listJavadocSymbolsTool = McpTool("list_javadoc_symbols")
     .description(Descriptions.listJavadocSymbols)
     .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
-    .handle: (input: GroupArtifactVersion) =>
+    .handle: (input: JavadocSymbolsQuery) =>
       logMcp("list_javadoc_symbols", input.toString):
         ZIO.scoped:
           defer:
-            SymbolSearch.indexJavadocContents(input).run
-            Extractor.javadocContents(input).run
+            SymbolSearch.indexJavadocContents(input.gav).run
+            Extractor.filterContents(Extractor.javadocContents(input.gav).run, input.filter)
 
   val getJavadocSymbolTool = McpTool("get_javadoc_symbol")
     .description(Descriptions.getJavadocSymbol)

@@ -8,12 +8,78 @@ JavaDoc Central — a Scala web app that serves javadocs from Maven Central arti
 
 ## Build Instructions
 
-Run sbt with `./sbt`
+Follow the `zen-of-projects` Skill (extract with `./sbt extractSkillsJars`);
+this file records only project-specific facts and exceptions.
 
-Use Java 25 when running sbt/tests. `build.sbt` requires Java 25+ and
-`.sbtopts` includes JDK 25-only JVM flags.
+Run sbt with the project launcher `./sbt` (`sbt.bat` on Windows).
 
-Start the test server with: `./sbt ~reStartTest` (for auto-reloading) or `./sbt runTest` for non-auto-reloading
+This is a **server** project (Heroku). Build plugins: sbt-native-packager
+(`JavaAppPackaging`, `stage`), sbt-reload (`runReload`), sbt-mcp, SkillsJars.
+
+### Exceptions to zen-of-projects
+
+- **Java 25, not 21** (CI uses Temurin 25 too; do not downgrade):
+  `html-to-markdown` 3.x ships Java 25 bytecode, `build.sbt` requires Java 25+,
+  and `.sbtopts` / `javaOptions` include JDK 25-only JVM flags
+  (`--sun-misc-unsafe-memory-access=allow`).
+- **Prerelease:** `zio-direct` has only `1.0.0-RC*` releases; keep the newest RC
+  until a stable release exists.
+- **Compatibility constraint:** keep the zio-schema / zio-json versions binary
+  compatible with the pinned `zio-http-mcp` (see the comment in `build.sbt`).
+- **Extra version to bump:** the Valkey image tag in
+  `src/test/scala/ValkeyContainer.scala` (pinned tag, never `latest`).
+
+- Dev server (Test scope, Valkey via Testcontainers, `MockInference` fallback;
+  needs Docker): `./sbt ~Test/runReload` (auto-reload) or `./sbt Test/run`.
+  `Test / mainClass` is `AppTest`; `Compile / mainClass` is `App`. Set `PORT`
+  to override the default 8080 (after `./sbt shutdown`, since the daemon
+  captures the environment). Add `-Dlocal` to use sibling checkouts of
+  `zio-http-mcp`, `zio-mavencentral`, `zio-http-guard`.
+- Prod-config server: `./sbt ~runReload` (needs `REDIS_URL` (TLS) and
+  `INFERENCE_URL` / `INFERENCE_KEY` / `INFERENCE_MODEL_ID`).
+- Full validation (same as CI in `.github/workflows/test.yml`):
+
+  ```bash
+  ./sbt shutdown
+  ./sbt extractSkillsJars
+  ./sbt "Test / compile; testFull; stage"
+  ./sbt shutdown
+  ```
+
+  Tests hit the live Maven Central and need Docker (Valkey Testcontainers).
+  CI and Heroku builds (`CI` / `STACK` env) additionally enable `-opt`.
+
+### sbt-mcp
+
+The sbt-mcp server is `sbt-mcp-javadoccentral` at `http://127.0.0.1:5106/`
+(loopback only; registered in `.kiro/settings/mcp.json`). It is only alive
+while a long-lived sbt session runs (e.g. `./sbt` or `./sbt ~Test/runReload`);
+reconnect the MCP client after starting it.
+
+- Use `sbt-mcp-javadoccentral` for ALL sbt interactions when it is available:
+  run commands/tasks through its `sbt-task` tool (separate commands with `;`),
+  and use `list-tasks` to discover tasks/settings.
+- After editing Scala sources, validate them with its `check` tool (use
+  `"scope":"module"` after an API change), then run `compile`/`test` through
+  `sbt-task` before declaring work done.
+- Use its `glob-search`, `inspect`, and `symbol-location` tools for
+  Scala/classpath symbol questions instead of text search or jar inspection;
+  JavaDoc/ScalaDoc lookups are proxied through the same server.
+- If the MCP server is unavailable, say so clearly and fall back to `./sbt`.
+- Always finish a session with `./sbt shutdown` so no daemon (or port 5106) is
+  left running.
+
+### Skills
+
+Skills are extracted (git-ignored) into `.kiro/skills/` with
+`./sbt extractSkillsJars`. Read the relevant `SKILL.md` files before working:
+
+- `zen-of-projects` — project conventions and the daily routine.
+- `zen-of-scala` — Scala 3 / ZIO idioms (matches the Coding Style below).
+- `zen-of-james` — general design principles (illegal states
+  unrepresentable, multiversal equality).
+
+`.factory/DAILY.md` is the zen-of-projects bootstrap.
 
 ## MCP tool descriptions
 
@@ -65,6 +131,29 @@ to production requires **publishing a new `zio-http-mcp` and bumping the version
 pin in `build.sbt`** — production builds resolve the published artifact, not the
 local `../zio-http-mcp` subproject (which is only used under `-Dlocal`).
 
+## Lessons from agent evals
+
+Evals of agents using this server (Spring AI agents on gpt-oss-120b, see the
+`exquisite_evals` project) showed where the tools steered agents wrong:
+
+- **`search_artifacts` with a version in the query** (`"jackson-databind 3.0.0"`)
+  matched nothing, and agents retried variants dozens of times. Version-like
+  tokens are now dropped when the full query matches nothing.
+- **Lower-cased class names** (`"jevjudge"`) missed the case-sensitive symbol
+  index and fell through to AI search. `symbol_to_artifact` now retries the
+  index case-insensitively first.
+- **`list_javadoc_symbols` on a big library** (jackson-databind lists hundreds of
+  classes) blew agents' context budgets. It takes an optional `filter`.
+- **"Latest" was the last entry of `maven-metadata.xml`**, which is publish order,
+  not version order, and included pre-releases (Netty resolved to 5.0.0.Alpha2).
+  zio-mavencentral now sorts with Maven's `ComparableVersion` and `latest` skips
+  pre-releases by default. The web UI (`/latest`, badges, `LatestCache`) always
+  uses that default; `get_latest_version` / `/api/latest-version` accept
+  `includePreReleases` so an agent can opt in.
+- Descriptions now say what agents got wrong: pre-releases need opting in; the
+  same artifactId can live under several groupIds (Jackson 2 vs 3); a class name
+  can resolve to several artifacts (a Java and a Scala `JevJudge`).
+
 ## REST API and OpenAPI
 
 `Api.scala` exposes read-only `GET` + query-parameter endpoints under `/api`
@@ -108,7 +197,7 @@ and note that agent docs are authoritative.
 
 ## Tech Stack
 
-- Scala 3 (3.8.x) with `-language:strictEquality`
+- Scala 3 (3.9.x) with `-language:strictEquality`, `-deprecation`, `-Werror`
 - ZIO 2 for effects, concurrency, and application wiring
 - zio-http for HTTP server and client
 - zio-direct (`defer`/`.run`) as the primary effect composition style
@@ -227,6 +316,17 @@ cache reference must live until the last reader is done.
 - Prefer `.delay(duration)` over `ZIO.sleep(duration) *> effect`
 - Prefer `ZIO.foreachDiscard(option)(...)` over `ZIO.whenCase(option) { case Some(x) => ... }` for running an effect on an `Option`
 - Prefer `ZIO.whenCase` only when matching on non-Option types or multiple cases
+
+### `AllValuesAreNullable` gotcha (Extractor.scala)
+
+`Extractor.scala` imports `zio.prelude.data.Optional.AllValuesAreNullable`, an
+implicit conversion from any value to `Optional`. With it in scope, collection
+calls on an `Array` can silently resolve through `Optional` instead of
+`ArrayOps`: `text.split("\\s+").toList` produced `List(theArray)` — it compiled
+only because of an `.nn`, and `filterContents` then matched nothing. In that
+file, avoid `split(...).toList`/`List.from(array)`; use an `Iterator` (e.g.
+`"\\S+".r.findAllIn(text).toList`) and cover such helpers with a pure test
+(`SearchQuerySpec`).
 
 ### Error Handling
 

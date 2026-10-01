@@ -30,6 +30,7 @@ object Api:
     Endpoint(Method.GET / "api" / "latest-version")
       .query[GroupId]("groupId")
       .query[ArtifactId]("artifactId")
+      .query[Option[Boolean]]("includePreReleases")
       .out[Version]
       .outError[ApiError](Status.NotFound)
       .??(Doc.p(MCP.Descriptions.getLatest))
@@ -48,6 +49,7 @@ object Api:
       .query[GroupId]("groupId")
       .query[ArtifactId]("artifactId")
       .query[Version]("version")
+      .query[Option[String]]("filter")
       .out[Set[Extractor.Content]]
       .outError[ApiError](Status.NotFound)
       .??(Doc.p(MCP.Descriptions.listJavadocSymbols))
@@ -103,9 +105,9 @@ object Api:
   // ---- Implementations (call the same Extractor/SymbolSearch logic as MCP) ----
 
   private val latestRoute =
-    latestEndpoint.implement: (input: (GroupId, ArtifactId)) =>
-      val (g, a) = input
-      Extractor.latest(GroupArtifact(g, a)).mapError(toApiError)
+    latestEndpoint.implement: (input: (GroupId, ArtifactId, Option[Boolean])) =>
+      val (g, a, includePreReleases) = input
+      Extractor.latest(GroupArtifact(g, a), includePreReleases.getOrElse(false)).mapError(toApiError)
 
   private val indexRoute =
     indexEndpoint.implement: (input: (GroupId, ArtifactId, Version)) =>
@@ -117,12 +119,12 @@ object Api:
       ).mapError(toApiError)
 
   private val listJavadocSymbolsRoute =
-    listJavadocSymbolsEndpoint.implement: (input: (GroupId, ArtifactId, Version)) =>
-      val (g, a, v) = input
+    listJavadocSymbolsEndpoint.implement: (input: (GroupId, ArtifactId, Version, Option[String])) =>
+      val (g, a, v, filter) = input
       val gav = GroupArtifactVersion(g, a, v)
       ZIO.scoped(defer:
         SymbolSearch.indexJavadocContents(gav).run
-        Extractor.javadocContents(gav).run
+        Extractor.filterContents(Extractor.javadocContents(gav).run, filter)
       ).mapError(toApiError)
 
   private val javadocSymbolRoute =

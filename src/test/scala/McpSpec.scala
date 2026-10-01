@@ -20,7 +20,7 @@ object McpSpec extends ZIOSpecDefault:
         .build()
       val client = McpClient.sync(transport)
         .requestTimeout(JDuration.ofSeconds(30))
-        .clientInfo(JMcpSchema.Implementation("javadoccentral-mcp-spec", "1.0.0"))
+        .clientInfo(JMcpSchema.Implementation.builder("javadoccentral-mcp-spec", "1.0.0").build())
         .build()
       try
         client.initialize()
@@ -191,6 +191,44 @@ object McpSpec extends ZIOSpecDefault:
           result <- withClient(port): client =>
             callTool(client, "get_source_file", java.util.Map.of("groupId", javaGroupId, "artifactId", javaArtifactId, "version", javaVersion, "link", "com/fake/NonExistent.java"))
         yield assertIsError(result)
+      ,
+
+      // --- get_latest_version pre-releases ---
+      test("get_latest_version returns the latest release by default and a pre-release on request"):
+        for
+          port <- Server.install(Web.appWithMiddleware)
+          (stable, any) <- withClient(port): client =>
+            val ga = java.util.Map.of[String, Object]("groupId", "io.netty", "artifactId", "netty-codec")
+            val withPre = java.util.Map.of[String, Object]("groupId", "io.netty", "artifactId", "netty-codec", "includePreReleases", java.lang.Boolean.TRUE)
+            (resultText(callTool(client, "get_latest_version", ga)), resultText(callTool(client, "get_latest_version", withPre)))
+        yield
+          // netty-codec publishes 4.x releases alongside 5.0.0 alphas
+          assertTrue(stable.contains(".Final"), !stable.contains("Alpha"), any.contains("5."))
+      ,
+
+      // --- list_javadoc_symbols filter ---
+      test("list_javadoc_symbols filter narrows the listing and is an optional input"):
+        for
+          port   <- Server.install(Web.appWithMiddleware)
+          tools  <- withClient(port)(_.listTools().tools())
+          (all, filtered) <- withClient(port): client =>
+            val base = java.util.Map.of[String, Object]("groupId", scalaGroupId, "artifactId", scalaArtifactId, "version", scalaVersion)
+            val withFilter = java.util.Map.of[String, Object]("groupId", scalaGroupId, "artifactId", scalaArtifactId, "version", scalaVersion, "filter", "zlayer")
+            (callTool(client, "list_javadoc_symbols", base), callTool(client, "list_javadoc_symbols", withFilter))
+        yield
+          import scala.jdk.CollectionConverters.*
+          val schema = tools.asScala.find(_.name() == "list_javadoc_symbols").get.inputSchema()
+          val required = Option(schema.get("required")).map(_.asInstanceOf[java.util.List[String]].asScala.toSet).getOrElse(Set.empty)
+          val fqns = "\"fqn\"\\s*:\\s*\"([^\"]+)\"".r
+          val allFqns = fqns.findAllMatchIn(resultText(all)).map(_.group(1)).toList
+          val filteredFqns = fqns.findAllMatchIn(resultText(filtered)).map(_.group(1)).toList
+          assertNotError(filtered) && assertTrue(
+            schema.get("properties").toString.contains("filter"),
+            !required.contains("filter"),
+            filteredFqns.nonEmpty,
+            filteredFqns.size < allFqns.size,
+            filteredFqns.forall(_.toLowerCase.contains("zlayer")),
+          )
       ,
 
       // --- symbol_to_artifact ---

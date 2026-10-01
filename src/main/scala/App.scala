@@ -37,7 +37,8 @@ object App extends ZIOAppDefault:
     ))
 
   val latestCacheLayer: ZLayer[MavenCentral.MavenCentralRepo, Nothing, Extractor.LatestCache] = ZLayer.fromZIO:
-    Cache.makeWith(1_000, Lookup(Extractor.latest)):
+    // The web UI's `/latest` and badges resolve to the latest *release* (no pre-releases).
+    Cache.makeWith(1_000, Lookup((ga: MavenCentral.GroupArtifact) => Extractor.latest(ga))):
       case Exit.Success(_) => 1.hour
       case Exit.Failure(_) => Duration.Zero
     .map(Extractor.LatestCache(_))

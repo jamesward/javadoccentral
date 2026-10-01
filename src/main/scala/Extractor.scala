@@ -72,8 +72,8 @@ object Extractor:
 
   /** Re-exported library helper. Kept as a method here so existing call
    *  sites (`Extractor.latest`) compile unchanged. */
-  def latest(groupArtifact: GroupArtifact): ZIO[MavenCentralRepo, GroupIdOrArtifactIdNotFoundError | LatestNotFound, Version] =
-    MavenCentral.latestOrFail(groupArtifact)
+  def latest(groupArtifact: GroupArtifact, includePreReleases: Boolean = false): ZIO[MavenCentralRepo, GroupIdOrArtifactIdNotFoundError | LatestNotFound, Version] =
+    MavenCentral.latestOrFail(groupArtifact, includePreReleases)
 
   /** Strip an `#anchor` fragment so it doesn't disturb jar-entry lookup. */
   private def normalizePath(path: String): String =
@@ -183,6 +183,28 @@ object Extractor:
         .catchAll:
           case _: JavadocFormatFailure => bruteForce(handle)
         .run
+
+  /**
+   * Narrows a symbol listing to entries whose fully-qualified name contains every
+   * whitespace-separated term of `nameFilter` (case-insensitive). A large library
+   * lists hundreds of classes (jackson-databind: ~700), which is most of an agent's
+   * context budget when it only wants one type; no filter (or a blank one) keeps all.
+   */
+  private val term = "\\S+".r
+
+  def filterContents(contents: Set[Content], nameFilter: Option[String]): Set[Content] =
+    val terms: List[String] = nameFilter match
+      // An iterator of matches, not `split(...).toList`: this file imports zio-prelude's
+      // AllValuesAreNullable, under which an Array silently converts to a one-element
+      // Optional, so `array.toList` became List(array) and nothing ever matched.
+      case Some(text) => term.findAllIn(text.toLowerCase).toList
+      case None       => Nil
+    if terms.isEmpty then contents
+    else contents.filter(content => matchesAll(content.fqn, terms))
+
+  private def matchesAll(fqn: String, terms: List[String]): Boolean =
+    val lower = fqn.toLowerCase.nn
+    terms.forall(term => lower.contains(term))
 
   def sourceContents(groupArtifactVersion: GroupArtifactVersion):
       ZIO[SourcesCache & Client & MavenCentralRepo, JarError, Set[String]] =
