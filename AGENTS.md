@@ -52,9 +52,19 @@ This is a **server** project (Heroku). Build plugins: sbt-native-packager
 ### sbt-mcp
 
 The sbt-mcp server is `sbt-mcp-javadoccentral` at `http://127.0.0.1:5106/`
-(loopback only; registered in `.kiro/settings/mcp.json`). It is only alive
-while a long-lived sbt session runs (e.g. `./sbt` or `./sbt ~Test/runReload`);
-reconnect the MCP client after starting it.
+(loopback only). It is only alive while a long-lived sbt session runs (e.g.
+`./sbt` or `./sbt ~Test/runReload`).
+
+- Kiro: registered as an HTTP server in `.kiro/settings/mcp.json`; reconnect the
+  MCP client after starting sbt.
+- Claude Code: `.mcp.json` registers it as a stdio server that runs
+  `.claude/sbt-mcp-stdio.sh`, approved in `.claude/settings.json`. The script
+  bridges stdio to the HTTP endpoint with `mcp-remote`. In cloud sessions
+  (`CLAUDE_CODE_REMOTE=true`) it first starts sbt in the background and waits
+  for port 5106, because Claude Code connects to MCP servers before anything
+  else could start sbt. Locally it only connects to an sbt you already started.
+  Plain `./sbt <task>` commands still work alongside it (they connect to the same
+  server).
 
 - Use `sbt-mcp-javadoccentral` for ALL sbt interactions when it is available:
   run commands/tasks through its `sbt-task` tool (separate commands with `;`),

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "sbt-mcp-javadoccentral": {
+      "type": "http",
+      "url": "http://127.0.0.1:5106/",
+      "timeout": 1800000,
+      "disabled": false
+    }
+  }
+}
