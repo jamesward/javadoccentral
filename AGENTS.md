@@ -62,7 +62,11 @@ The sbt-mcp server is `sbt-mcp-javadoccentral` at `http://127.0.0.1:5106/`
   bridges stdio to the HTTP endpoint with `mcp-remote`. In cloud sessions
   (`CLAUDE_CODE_REMOTE=true`) it first starts sbt in the background and waits
   for port 5106, because Claude Code connects to MCP servers before anything
-  else could start sbt. Locally it only connects to an sbt you already started.
+  else could start sbt. That sbt runs in the foreground (`./sbt --server`)
+  because `sbt-task` needs an attached console channel. A daemon started by a
+  one-off `./sbt <cmd>` answers `no sbt channel available yet`. Its tools are
+  deferred: load them with ToolSearch (search `sbt-mcp-javadoccentral`).
+  Diagnostics go to `/tmp/sbt-mcp-stdio.log` and `/tmp/sbt-mcp-server.log`. Locally it only connects to an sbt you already started.
   Plain `./sbt <task>` commands still work alongside it (they connect to the same
   server).
 
