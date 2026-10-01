@@ -54,7 +54,7 @@ mcpPort := 5106
 
 // SkillsJars
 skillsJarsOutputDir := Some(file(".kiro/skills"))
-libraryDependencies += "com.jamesward" % "skills" % "0.0.4" % Skills
+libraryDependencies += "com.jamesward" % "skills" % "0.0.5" % Skills
 
 libraryDependencies ++= Seq(
   "dev.zio" %% "zio"                   % zioVersion,
