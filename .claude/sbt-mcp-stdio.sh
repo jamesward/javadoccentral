@@ -20,11 +20,10 @@ if ! listening; then
     echo "sbt-mcp is not running on 127.0.0.1:${port}. Start sbt in this project, then reconnect." >&2
     exit 1
   fi
-  # `./sbt --server` runs the sbt server in the foreground; feeding it a stdin that
-  # never closes keeps it (and sbt-mcp) alive. setsid detaches it from this process.
-  setsid nohup bash -c 'tail -f /dev/null | ./sbt --server --no-colors --supershell=false' \
-    > "$log" 2>&1 < /dev/null &
-  for _ in $(seq 1 300); do
+  # In client mode `./sbt` starts the persistent sbt server, which keeps running (with
+  # sbt-mcp) after this command exits. Later `./sbt <task>` calls reuse the same server.
+  timeout 540 ./sbt --no-colors about > "$log" 2>&1 < /dev/null
+  for _ in $(seq 1 30); do
     listening && break
     sleep 2
   done
