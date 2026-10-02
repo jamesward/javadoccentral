@@ -26,8 +26,11 @@ This is a **server** project (Heroku). Build plugins: sbt-native-packager
   until a stable release exists.
 - **Compatibility constraint:** keep the zio-schema / zio-json versions binary
   compatible with the pinned `zio-http-mcp` (see the comment in `build.sbt`).
-- **Extra version to bump:** the Valkey image tag in
-  `src/test/scala/ValkeyContainer.scala` (pinned tag, never `latest`).
+- **Container image tracks production:** the Valkey image in
+  `src/test/scala/ValkeyContainer.scala` (`valkey/valkey:8.1.9`) mirrors the
+  Heroku Key-Value Store add-on on the `javadocs` app. Don't bump it in the maintenance
+  routine; change it only when production's version changes (check with
+  `heroku redis:info --app javadocs`).
 
 - Dev server (Test scope, Valkey via Testcontainers, `MockInference` fallback;
   needs Docker): `./sbt ~Test/runReload` (auto-reload) or `./sbt Test/run`.
@@ -59,7 +62,7 @@ The sbt-mcp server is `sbt-mcp-javadoccentral` at `http://127.0.0.1:5106/`
   MCP client after starting sbt.
 - Claude Code: `.mcp.json` registers it as a stdio server that runs
   `.claude/sbt-mcp-stdio.sh`, approved in `.claude/settings.json`. The script
-  bridges stdio to the HTTP endpoint with `mcp-remote`. In cloud sessions
+  relays stdio to the HTTP endpoint and waits out sbt reloads. In cloud sessions
   (`CLAUDE_CODE_REMOTE=true`) it first starts sbt in the background and waits
   for port 5106, because Claude Code connects to MCP servers before anything
   else could start sbt. That sbt runs in the foreground (`./sbt --server`)
@@ -88,12 +91,12 @@ The sbt-mcp server is `sbt-mcp-javadoccentral` at `http://127.0.0.1:5106/`
 Skills are extracted (git-ignored) into `.kiro/skills/` with
 `./sbt extractSkillsJars`. Read the relevant `SKILL.md` files before working:
 
-- `zen-of-projects` — project conventions and the daily routine.
+- `zen-of-projects` — project conventions and the maintenance routine.
 - `zen-of-scala` — Scala 3 / ZIO idioms (matches the Coding Style below).
 - `zen-of-james` — general design principles (illegal states
   unrepresentable, multiversal equality).
 
-`.factory/DAILY.md` is the zen-of-projects bootstrap.
+`.factory/MAINTENANCE.md` is the zen-of-projects bootstrap.
 
 ## MCP tool descriptions
 

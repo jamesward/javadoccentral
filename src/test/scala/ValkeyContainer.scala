@@ -12,7 +12,9 @@ import zio.redis.RedisConfig
 // so `Redis.singleNode` builds the client on top exactly as it did before.
 object ValkeyContainer:
 
-  val image = "valkey/valkey:9.1.2"
+  // Matches production (Heroku Key-Value Store on the `javadocs` app). Don't bump it to the newest
+  // image; change it only when production changes (heroku redis:info --app javadocs).
+  val image = "valkey/valkey:8.1.9"
   private val redisPort = 6379
 
   // Each suite starts a fresh container per test (ZIO Test `provide`) for state
