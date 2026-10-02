@@ -3,7 +3,10 @@
     "sbt-mcp-javadoccentral": {
       "type": "stdio",
       "command": "bash",
-      "args": [".claude/sbt-mcp-stdio.sh"]
+      "args": [
+        ".claude/sbt-mcp-stdio.sh"
+      ],
+      "timeout": 1800000
     }
   }
 }
