@@ -12,7 +12,7 @@ import zio.redis.RedisConfig
 // so `Redis.singleNode` builds the client on top exactly as it did before.
 object ValkeyContainer:
 
-  val image = "valkey/valkey:8.1.6"
+  val image = "valkey/valkey:9.1.2"
   private val redisPort = 6379
 
   // Each suite starts a fresh container per test (ZIO Test `provide`) for state
