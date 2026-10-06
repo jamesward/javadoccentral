@@ -214,7 +214,7 @@ and note that agent docs are authoritative.
 
 ## Tech Stack
 
-- Scala 3 (3.9.x) with `-language:strictEquality`, `-deprecation`, `-Werror`
+- Scala 3 (3.10.x) with `-language:strictEquality`, `-deprecation`, `-Werror`
 - ZIO 2 for effects, concurrency, and application wiring
 - zio-http for HTTP server and client
 - zio-direct (`defer`/`.run`) as the primary effect composition style
