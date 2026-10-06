@@ -45,7 +45,7 @@ scalacOptions ++= {
   }
 }
 
-scalaVersion := "3.9.0"
+scalaVersion := "3.10.0"
 
 // sbt-mcp settings
 mcpEnabled := true
@@ -54,7 +54,7 @@ mcpPort := 5106
 
 // SkillsJars
 skillsJarsOutputDir := Some(file(".kiro/skills"))
-libraryDependencies += "com.jamesward" % "skills" % "0.0.7" % Skills
+libraryDependencies += "com.jamesward" % "skills" % "0.0.11" % Skills
 
 libraryDependencies ++= Seq(
   "dev.zio" %% "zio"                   % zioVersion,
