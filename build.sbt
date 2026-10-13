@@ -54,7 +54,7 @@ mcpPort := 5106
 
 // SkillsJars
 skillsJarsOutputDir := Some(file(".kiro/skills"))
-libraryDependencies += "com.jamesward" % "skills" % "0.0.11" % Skills
+libraryDependencies += "com.jamesward" % "skills" % "0.0.13" % Skills
 
 libraryDependencies ++= Seq(
   "dev.zio" %% "zio"                   % zioVersion,
@@ -67,9 +67,8 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-logging-slf4j2-bridge" % "2.5.3",
   "dev.zio" %% "zio-direct"            % "1.0.0-RC7",
   "dev.zio" %% "zio-redis"             % "1.3.0",
-  // zio-http-mcp 0.8.0 is compiled against zio-schema 1.8.6 / zio-json
-  // 0.10.0. zio-schema 1.9.0 pulls zio-json 1.1.0, which removed
-  // JsonEncoderDerivation and is not binary compatible with that release.
+  // Keep zio-schema / zio-json binary compatible with the pinned zio-http-mcp
+  // (0.9.0 is compiled against zio-schema 1.9.0).
   "dev.zio" %% "zio-schema-protobuf"   % "1.9.0",
   "dev.zio" %% "zio-schema-json"       % "1.9.0",
   "dev.zio" %% "zio-schema-derivation" % "1.9.0",
@@ -88,7 +87,7 @@ libraryDependencies ++= Seq(
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioHttpMcpDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-http-mcp" % "0.8.3")
+  else Seq("com.jamesward" %% "zio-http-mcp" % "0.9.0")
 }
 
 libraryDependencies ++= {
