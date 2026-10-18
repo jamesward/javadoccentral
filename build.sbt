@@ -47,11 +47,6 @@ scalacOptions ++= {
 
 scalaVersion := "3.10.0"
 
-// sbt-mcp settings
-mcpEnabled := true
-mcpHost := "127.0.0.1"
-mcpPort := 5106
-
 // SkillsJars
 skillsJarsOutputDir := Some(file(".kiro/skills"))
 libraryDependencies += "com.jamesward" % "skills" % "0.0.13" % Skills
