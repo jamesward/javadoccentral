@@ -8,10 +8,10 @@ JavaDoc Central — a Scala web app that serves javadocs from Maven Central arti
 
 ## Build Instructions
 
-Follow the `zen-of-projects` Skill (extract with `./sbt extractSkillsJars`);
+Follow the `zen-of-projects` Skill (extract with `./sbta extractSkillsJars`);
 this file records only project-specific facts and exceptions.
 
-Run sbt with the project launcher `./sbt` (`sbt.bat` on Windows).
+Run sbt with the project launcher `./sbta` (`sbta.bat` on Windows).
 
 This is a **server** project (Heroku). Build plugins: sbt-native-packager
 (`JavaAppPackaging`, `stage`), sbt-reload (`runReload`), sbt-mcp, SkillsJars.
@@ -33,20 +33,20 @@ This is a **server** project (Heroku). Build plugins: sbt-native-packager
   `heroku redis:info --app javadocs`).
 
 - Dev server (Test scope, Valkey via Testcontainers, `MockInference` fallback;
-  needs Docker): `./sbt ~Test/runReload` (auto-reload) or `./sbt Test/run`.
+  needs Docker): `./sbta ~Test/runReload` (auto-reload) or `./sbta Test/run`.
   `Test / mainClass` is `AppTest`; `Compile / mainClass` is `App`. Set `PORT`
-  to override the default 8080 (after `./sbt shutdown`, since the daemon
+  to override the default 8080 (after `./sbta shutdown`, since the daemon
   captures the environment). Add `-Dlocal` to use sibling checkouts of
   `zio-http-mcp`, `zio-mavencentral`, `zio-http-guard`.
-- Prod-config server: `./sbt ~runReload` (needs `REDIS_URL` (TLS) and
+- Prod-config server: `./sbta ~runReload` (needs `REDIS_URL` (TLS) and
   `INFERENCE_URL` / `INFERENCE_KEY` / `INFERENCE_MODEL_ID`).
 - Full validation (same as CI in `.github/workflows/test.yml`):
 
   ```bash
-  ./sbt shutdown
-  ./sbt extractSkillsJars
-  ./sbt "Test / compile; testFull; stage"
-  ./sbt shutdown
+  ./sbta shutdown
+  ./sbta extractSkillsJars
+  ./sbta "Test / compile; testFull; stage"
+  ./sbta shutdown
   ```
 
   Tests hit the live Maven Central and need Docker (Valkey Testcontainers).
@@ -54,9 +54,9 @@ This is a **server** project (Heroku). Build plugins: sbt-native-packager
 
 ### sbt-mcp
 
-The sbt-mcp server is `sbt-mcp-javadoccentral` at `http://127.0.0.1:5106/`
+The sbt-mcp server is `sbta` at `http://127.0.0.1:5106/`
 (loopback only). It is only alive while a long-lived sbt session runs (e.g.
-`./sbt` or `./sbt ~Test/runReload`).
+`./sbta` or `./sbta ~Test/runReload`).
 
 - Kiro: registered as an HTTP server in `.kiro/settings/mcp.json`; reconnect the
   MCP client after starting sbt.
@@ -65,15 +65,15 @@ The sbt-mcp server is `sbt-mcp-javadoccentral` at `http://127.0.0.1:5106/`
   relays stdio to the HTTP endpoint and waits out sbt reloads. In cloud sessions
   (`CLAUDE_CODE_REMOTE=true`) it first starts sbt in the background and waits
   for port 5106, because Claude Code connects to MCP servers before anything
-  else could start sbt. That sbt runs in the foreground (`./sbt --server`)
+  else could start sbt. That sbt runs in the foreground (`./sbta --server`)
   because `sbt-task` needs an attached console channel. A daemon started by a
-  one-off `./sbt <cmd>` answers `no sbt channel available yet`. Its tools are
-  deferred: load them with ToolSearch (search `sbt-mcp-javadoccentral`).
+  one-off `./sbta <cmd>` answers `no sbt channel available yet`. Its tools are
+  deferred: load them with ToolSearch (search `sbta`).
   Diagnostics go to `/tmp/sbt-mcp-stdio.log` and `/tmp/sbt-mcp-server.log`. Locally it only connects to an sbt you already started.
-  Plain `./sbt <task>` commands still work alongside it (they connect to the same
+  Plain `./sbta <task>` commands still work alongside it (they connect to the same
   server).
 
-- Use `sbt-mcp-javadoccentral` for ALL sbt interactions when it is available:
+- Use `sbta` for ALL sbt interactions when it is available:
   run commands/tasks through its `sbt-task` tool (separate commands with `;`),
   and use `list-tasks` to discover tasks/settings.
 - After editing Scala sources, validate them with its `check` tool (use
@@ -82,14 +82,14 @@ The sbt-mcp server is `sbt-mcp-javadoccentral` at `http://127.0.0.1:5106/`
 - Use its `glob-search`, `inspect`, and `symbol-location` tools for
   Scala/classpath symbol questions instead of text search or jar inspection;
   JavaDoc/ScalaDoc lookups are proxied through the same server.
-- If the MCP server is unavailable, say so clearly and fall back to `./sbt`.
-- Always finish a session with `./sbt shutdown` so no daemon (or port 5106) is
+- If the MCP server is unavailable, say so clearly and fall back to `./sbta`.
+- Always finish a session with `./sbta shutdown` so no daemon (or port 5106) is
   left running.
 
 ### Skills
 
 Skills are extracted (git-ignored) into `.kiro/skills/` with
-`./sbt extractSkillsJars`. Read the relevant `SKILL.md` files before working:
+`./sbta extractSkillsJars`. Read the relevant `SKILL.md` files before working:
 
 - `zen-of-projects` — project conventions and the maintenance routine.
 - `zen-of-scala` — Scala 3 / ZIO idioms (matches the Coding Style below).
@@ -406,7 +406,7 @@ list of javadoccentral routes:
   resources. In particular, preserve root `/.well-known` endpoints and avoid
   treating group IDs such as `com.php` or classes such as `Environment.html`,
   `Dockerfile.html`, and `Actuator.html` as probes.
-- Validate guard changes here with `./sbt -Dlocal ...`. Production still uses
+- Validate guard changes here with `./sbta -Dlocal ...`. Production still uses
   the published `zio-http-guard` version pinned in `build.sbt`, so deployment
   requires publishing the library and bumping that pin.
 
