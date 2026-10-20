@@ -12,7 +12,7 @@ lazy val root = {
   if (useLocalSubprojects && zioHttpGuardDir.exists()) withMaven.dependsOn(RootProject(zioHttpGuardDir)) else withMaven
 }
 
-val zioVersion = "2.1.26"
+val zioVersion = "2.1.27"
 
 // Hack Alert: This is the default when not in buildpacks (i.e. `default`)
 // In buildpacks it is javadoccentral which puts it alphabetically after dev.zio.zio-constraintless_3-0.3.1.jar
@@ -49,7 +49,7 @@ scalaVersion := "3.10.0"
 
 // SkillsJars
 skillsJarsOutputDir := Some(file(".kiro/skills"))
-libraryDependencies += "com.jamesward" % "skills" % "0.0.13" % Skills
+libraryDependencies += "com.jamesward" % "skills" % "0.0.17" % Skills
 
 libraryDependencies ++= Seq(
   "dev.zio" %% "zio"                   % zioVersion,
@@ -63,7 +63,7 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-direct"            % "1.0.0-RC7",
   "dev.zio" %% "zio-redis"             % "1.3.0",
   // Keep zio-schema / zio-json binary compatible with the pinned zio-http-mcp
-  // (0.9.0 is compiled against zio-schema 1.9.0).
+  // (0.10.0 validated against zio-schema 1.9.0).
   "dev.zio" %% "zio-schema-protobuf"   % "1.9.0",
   "dev.zio" %% "zio-schema-json"       % "1.9.0",
   "dev.zio" %% "zio-schema-derivation" % "1.9.0",
@@ -76,13 +76,13 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,
   "com.dimafeng" %% "testcontainers-scala-core" % "0.44.1" % Test,
 
-  "io.modelcontextprotocol.sdk" % "mcp-core"           % "2.0.1" % Test,
-  "io.modelcontextprotocol.sdk" % "mcp-json-jackson2"  % "2.0.1" % Test,
+  "io.modelcontextprotocol.sdk" % "mcp-core"           % "2.1.0" % Test,
+  "io.modelcontextprotocol.sdk" % "mcp-json-jackson2"  % "2.1.0" % Test,
 )
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioHttpMcpDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-http-mcp" % "0.9.0")
+  else Seq("com.jamesward" %% "zio-http-mcp" % "0.10.0")
 }
 
 libraryDependencies ++= {
