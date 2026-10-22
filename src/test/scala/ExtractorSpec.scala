@@ -256,19 +256,93 @@ object ExtractorSpec extends ZIOSpecDefault:
     },
     test("symbolContents - zio-mavencentral_3") {
       defer:
-        val contents = Extractor.javadocSymbolContents(gav("com.jamesward", "zio-mavencentral_3", "0.12.0"), "com/jamesward/zio_mavencentral/MavenCentral$$GroupId$.html#unapply-fffffd22").run
+        val contents = Extractor.javadocSymbolContents(gav("com.jamesward", "zio-mavencentral_3", "0.12.0"), "com/jamesward/zio_mavencentral/MavenCentral$$GroupId$.html#unapply-fffffd22", Extractor.LinkBase.Jar).run
         assertTrue(
           contents.contains("com.jamesward.zio_mavencentral.MavenCentral.GroupId")
         )
     },
     test("symbolContents - smaller") {
       defer:
-        val contents = Extractor.javadocSymbolContents(gav("com.vaadin", "vaadin-confirm-dialog-flow", "24.9.0"), "com/vaadin/flow/component/confirmdialog/ConfirmDialog.html").run
+        val contents = Extractor.javadocSymbolContents(gav("com.vaadin", "vaadin-confirm-dialog-flow", "24.9.0"), "com/vaadin/flow/component/confirmdialog/ConfirmDialog.html", Extractor.LinkBase.Jar).run
         assertTrue(
           contents.length < 55_000,
           contents.contains("This method is inherited from"),
           contents.lines().count() > 900,
         )
+    },
+    // --- Page cleanup for agents: link resolution, index shells, javadoc chrome ---
+    test("resolveLink resolves page-relative links to jar paths and drops useless ones") {
+      val page = "org/webjars/WebJarAssetLocator.html"
+      assertTrue(
+        Extractor.resolveLink(page, "../../org/webjars/NotFoundException.html") == Some("org/webjars/NotFoundException.html"),
+        Extractor.resolveLink(page, "WebJarAssetLocator.WebJarInfo.html") == Some("org/webjars/WebJarAssetLocator.WebJarInfo.html"),
+        Extractor.resolveLink(page, "../../index-all.html#I:G") == Some("index-all.html#I:G"),
+        Extractor.resolveLink(page, "class-use/WebJarAssetLocator.html") == Some("org/webjars/class-use/WebJarAssetLocator.html"),
+        // anchors and links back into the same page
+        Extractor.resolveLink(page, "#method.summary").isEmpty,
+        Extractor.resolveLink(page, "../../org/webjars/WebJarAssetLocator.html#getFullPath-java.lang.String-").isEmpty,
+        // external sites, scripts, nothing, and paths above the jar root
+        Extractor.resolveLink(page, "https://docs.oracle.com/javase/8/docs/api/java/lang/String.html?is-external=true").isEmpty,
+        Extractor.resolveLink(page, "javascript:show(1);").isEmpty,
+        Extractor.resolveLink(page, "").isEmpty,
+        Extractor.resolveLink(page, "../../../elsewhere.html").isEmpty,
+        Extractor.resolveLink("index.html", "org/webjars/package-summary.html") == Some("org/webjars/package-summary.html"),
+      )
+    },
+    test("indexTarget follows frameset and Refresh shells, and keeps a real index") {
+      val frameset =
+        """<frameset cols="20%,80%"><frame src="allclasses-frame.html" name="packageFrame">
+          |<frame src="org/webjars/package-summary.html" name="classFrame"></frameset>""".stripMargin
+      val refresh = """<head><meta http-equiv="Refresh" content="0;org.webjars.locator_lite/module-summary.html"></head>"""
+      val real = """<html><body><main><h1>All Packages</h1></main></body></html>"""
+      assertTrue(
+        Extractor.indexTarget(frameset) == Some("org/webjars/package-summary.html"),
+        Extractor.indexTarget(refresh) == Some("org.webjars.locator_lite/module-summary.html"),
+        Extractor.indexTarget(real).isEmpty,
+      )
+    },
+    test("index of frames-era javadoc is the overview, not the Frame Alert") {
+      defer:
+        val single = Extractor.index(gav("org.webjars", "webjars-locator-core", "0.59")).run
+        val multi  = Extractor.index(gav("com.fasterxml.jackson.core", "jackson-databind", "2.22.1")).run
+        assertTrue(
+          !single.contains("Frame Alert"),
+          single.contains("WebJarAssetLocator"),
+          !multi.contains("Frame Alert"),
+          multi.contains("com.fasterxml.jackson.databind.node"),
+        )
+    },
+    test("index of single-module modern javadoc follows the Refresh redirect") {
+      defer:
+        val index = Extractor.index(gav("org.webjars", "webjars-locator-lite", "1.1.3")).run
+        assertTrue(index.contains("org.webjars.locator_lite"), index.contains("Packages"))
+    },
+    test("javadoc symbol page drops navigation, external links and link titles") {
+      defer:
+        val page = Extractor.javadocSymbolContents(
+          gav("org.webjars", "webjars-locator-core", "0.59"), "org/webjars/WebJarAssetLocator.html", Extractor.LinkBase.Jar,
+        ).run
+        assertTrue(
+          page.contains("Locate WebJar assets"),
+          page.contains("getFullPath"),
+          !page.contains("JavaScript is disabled"),
+          !page.contains("Skip navigation links"),
+          !page.contains("Prev Class"),
+          !page.contains("docs.oracle.com"),
+          !page.contains("class or interface in"),
+          !page.contains("javascript:"),
+          // links to other pages of the jar remain, as jar paths an agent can pass back as `link`
+          page.contains("(org/webjars/WebJarAssetLocator.WebJarInfo.html)"),
+          !page.contains("../../"),
+          page.length < 20_000,
+        )
+    },
+    test("markdown served at the page URL keeps page-relative links") {
+      defer:
+        val page = Extractor.javadocSymbolContents(
+          gav("org.webjars", "webjars-locator-core", "0.59"), "org/webjars/WebJarAssetLocator.html", Extractor.LinkBase.Page,
+        ).run
+        assertTrue(page.contains("(../../org/webjars/WebJarAssetLocator.WebJarInfo.html)"), !page.contains("docs.oracle.com"))
     },
     test("sourceContents - zio-mavencentral_3") {
       defer:

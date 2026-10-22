@@ -1,5 +1,6 @@
 {
   "enabledMcpjsonServers": [
-    "sbta"
+    "sbta",
+    "mcpjam"
   ]
 }

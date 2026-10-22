@@ -1,6 +1,7 @@
 import SymbolSearch.SearchError
 import com.jamesward.ziohttp.mcp.*
 import com.jamesward.zio_mavencentral.MavenCentral.*
+import com.jamesward.zio_mavencentral.JarCache
 import zio.*
 import zio.direct.*
 import zio.schema.{Schema, derived}
@@ -61,24 +62,58 @@ object MCP:
     link: String,
   ) derives Schema
 
-  // McpError instances for domain error types
-  given latestError: McpError[GroupIdOrArtifactIdNotFoundError | Extractor.LatestNotFound] with
-    def message(e: GroupIdOrArtifactIdNotFoundError | Extractor.LatestNotFound): String = e.toString
+  // Every tool error is turned into an agent-facing message by ErrorMessages
+  // (shared with the REST API), so the MCP surface only ever fails with a String.
+  given McpError[String] with
+    def message(e: String): String = e
 
-  given notFoundError: McpError[Extractor.JarError] with
-    def message(e: Extractor.JarError): String = e.toString
+  /**
+   * Agent-facing error messages, shared by the MCP tools and the REST API. The
+   * domain errors' `toString` (`GroupIdOrArtifactIdNotFoundError(com.example,nope)`)
+   * says what failed but not why or what to do, so agents retried blindly. Each
+   * message names the coordinates, the likely cause, and the tool to try next.
+   */
+  object ErrorMessages:
+    enum Jar(val name: String, val listTool: String, val alternativeListTool: String):
+      case Javadoc extends Jar("javadoc", "list_javadoc_symbols", "list_source_files")
+      case Sources extends Jar("sources", "list_source_files", "list_javadoc_symbols")
 
-  given fileNotFoundError: McpError[Extractor.JarError | Extractor.JavadocFileNotFound] with
-    def message(e: Extractor.JarError | Extractor.JavadocFileNotFound): String = e.toString
+    private def coordinates(gav: GroupArtifactVersion): String =
+      s"${gav.groupId}:${gav.artifactId}:${gav.version}"
 
-  given fileNotFoundOrContentError: McpError[Extractor.JarError | Extractor.JavadocFileNotFound | Extractor.JavadocContentError] with
-    def message(e: Extractor.JarError | Extractor.JavadocFileNotFound | Extractor.JavadocContentError): String = e.toString
+    def latest(e: GroupIdOrArtifactIdNotFoundError | Extractor.LatestNotFound): String = e match
+      case e: GroupIdOrArtifactIdNotFoundError =>
+        s"Maven Central has no artifact ${e.groupId}:${e.artifactId}. Check the spelling, or use " +
+          "search_artifacts to find the exact groupId:artifactId (Scala artifactIds usually carry a " +
+          "suffix such as _3 or _2.13)."
+      case e: Extractor.LatestNotFound =>
+        s"${e.groupArtifact.groupId}:${e.groupArtifact.artifactId} exists on Maven Central, but no " +
+          "version could be resolved from its metadata. Use search_artifacts to check whether it moved " +
+          "to another groupId."
 
-  given searchError: McpError[SearchError] with
-    def message(e: SearchError): String = e.message
+    def jar(kind: Jar)(e: Extractor.JarError): String = e match
+      case e: NotFoundError =>
+        s"No ${kind.name} jar on Maven Central for ${e.groupId}:${e.artifactId}:${e.version}. Either " +
+          "that version does not exist (use get_latest_version to get one that does) or the artifact " +
+          s"does not publish a ${kind.name} jar (try ${kind.alternativeListTool} instead)."
+      case e: JarCache.UpstreamCorruptError =>
+        s"The ${kind.name} jar for ${coordinates(e.gav)} downloaded from Maven Central could not be " +
+          s"read (${e.reason}). Retry later, or use another version."
 
-  given throwableError: McpError[Throwable] with
-    def message(e: Throwable): String = e.getMessage
+    def entry(kind: Jar)(e: Extractor.JarError | Extractor.JavadocFileNotFound | Extractor.JavadocContentError): String =
+      e match
+        case e: Extractor.JavadocFileNotFound =>
+          s"The ${kind.name} jar for ${coordinates(e.groupArtifactVersion)} has no entry '${e.path}'. " +
+            s"Pass a `link` exactly as returned by ${kind.listTool} for this same version."
+        case e: Extractor.JavadocContentError =>
+          s"The page '${e.path}' in the ${kind.name} jar for ${coordinates(e.groupArtifactVersion)} " +
+            "could not be converted to text."
+        case e: (NotFoundError | JarCache.UpstreamCorruptError) => jar(kind)(e)
+
+    def search(e: SearchError): String = e.message
+
+    def artifactSearch(e: Throwable): String =
+      s"The artifact search index is unavailable (${e.getMessage}). Retry later."
 
   // The info-level "tool call" log now comes from zio-http-mcp's own
   // `MCP tools/call` log (tool name + arguments as structured fields), so we no
@@ -141,6 +176,9 @@ object MCP:
       "Reads one Javadoc/Scaladoc page from a Maven Central artifact, " +
       "already converted to plain text/markdown so you don't have to parse " +
       "HTML. Pass the `link` value returned by list_javadoc_symbols. " +
+      "Navigation and links to external sites are stripped; the links that " +
+      "remain point at other pages of the same jar and can be passed back " +
+      "as `link` to follow them. " +
       "Use this when you need to know what a class, method, or field does " +
       "and what its parameters mean for any library on Maven Central — " +
       "without downloading or unzipping the javadoc jar yourself."
@@ -197,71 +235,79 @@ object MCP:
 
   val getLatestTool = McpTool("get_latest_version")
     .description(Descriptions.getLatest)
-    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
+    .annotations(title = Some("Get latest version"), readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: LatestVersionQuery) =>
       logMcp("get_latest_version", input.toString):
         Extractor.latest(input.groupArtifact, input.includePreReleases.getOrElse(false))
+      .mapError(ErrorMessages.latest)
 
   val getIndexTool = McpTool("get_javadoc_index")
     .description(Descriptions.getIndex)
-    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
+    .annotations(title = Some("Get javadoc index page"), readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: GroupArtifactVersion) =>
       logMcp("get_javadoc_index", input.toString):
         ZIO.scoped:
           defer:
             SymbolSearch.indexJavadocContents(input).run
             Extractor.index(input).run
+      .mapError(ErrorMessages.entry(ErrorMessages.Jar.Javadoc))
 
   val listJavadocSymbolsTool = McpTool("list_javadoc_symbols")
     .description(Descriptions.listJavadocSymbols)
-    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
+    .annotations(title = Some("List documented classes"), readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: JavadocSymbolsQuery) =>
       logMcp("list_javadoc_symbols", input.toString):
         ZIO.scoped:
           defer:
             SymbolSearch.indexJavadocContents(input.gav).run
             Extractor.filterContents(Extractor.javadocContents(input.gav).run, input.filter)
+      .mapError(ErrorMessages.jar(ErrorMessages.Jar.Javadoc))
 
   val getJavadocSymbolTool = McpTool("get_javadoc_symbol")
     .description(Descriptions.getJavadocSymbol)
-    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
+    .annotations(title = Some("Read javadoc page"), readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: JavadocSymbol) =>
       val groupArtifactVersion = GroupArtifactVersion(input.groupId, input.artifactId, input.version)
       logMcp("get_javadoc_symbol", input.toString):
         ZIO.scoped:
-          Extractor.javadocSymbolContents(groupArtifactVersion, input.link)
+          Extractor.javadocSymbolContents(groupArtifactVersion, input.link, Extractor.LinkBase.Jar)
+      .mapError(ErrorMessages.entry(ErrorMessages.Jar.Javadoc))
 
   val listSourceFilesTool = McpTool("list_source_files")
     .description(Descriptions.listSourceFiles)
-    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
+    .annotations(title = Some("List source files"), readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: GroupArtifactVersion) =>
       logMcp("list_source_files", input.toString):
         ZIO.scoped:
           Extractor.sourceContents(input)
+      .mapError(ErrorMessages.jar(ErrorMessages.Jar.Sources))
 
   val getSourceFileTool = McpTool("get_source_file")
     .description(Descriptions.getSourceFile)
-    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
+    .annotations(title = Some("Read source file"), readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: JavadocSymbol) =>
       val groupArtifactVersion = GroupArtifactVersion(input.groupId, input.artifactId, input.version)
       logMcp("get_source_file", input.toString):
         ZIO.scoped:
           Extractor.sourceFileContents(groupArtifactVersion, input.link)
+      .mapError(ErrorMessages.entry(ErrorMessages.Jar.Sources))
 
   val searchArtifactsTool = McpTool("search_artifacts")
     .description(Descriptions.searchArtifacts)
-    .annotations(readOnly = True, destructive = False, idempotent = True, openWorld = True)
+    .annotations(title = Some("Search artifacts by name"), readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: Symbol) =>
       logMcp("search_artifacts", input.query):
         SymbolSearch.searchGroupArtifacts(input.query)
+      .mapError(ErrorMessages.artifactSearch)
 
   val symbolToArtifactTool = McpTool("symbol_to_artifact")
     .description(Descriptions.symbolToArtifact)
-    .annotations(readOnly = True, destructive = False, idempotent = False, openWorld = True)
+    .annotations(title = Some("Find artifact for a class"), readOnly = True, destructive = False, idempotent = False, openWorld = True)
     .handle: (input: Symbol) =>
       logMcp("symbol_to_artifact", input.query):
         // todo: rate limit
         SymbolSearch.search(input.query)
+      .mapError(ErrorMessages.search)
 
   val mcpServer = McpServer("javadocs.dev", "0.0.2")
     .tool(getLatestTool)

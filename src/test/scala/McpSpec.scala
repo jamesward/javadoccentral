@@ -123,6 +123,8 @@ object McpSpec extends ZIOSpecDefault:
           }) &&
           // inputSchema must have type "object"
           assertTrue(toolList.forall(_.inputSchema().get("type").asInstanceOf[String] == "object")) &&
+          // every tool has a human-readable title (MCPJam conformance flags tools without one)
+          assertTrue(toolList.forall(t => t.annotations() != null && Option(t.annotations().title()).exists(_.nonEmpty))) &&
           // data-class field descriptions flow through into the output schemas
           assertTrue(
             toolList.find(_.name() == "list_javadoc_symbols").exists(_.outputSchema().toString.contains("Fully-qualified name of the documented symbol")),
@@ -147,7 +149,14 @@ object McpSpec extends ZIOSpecDefault:
           port   <- Server.install(Web.appWithMiddleware)
           result <- withClient(port): client =>
             callTool(client, "get_latest_version", java.util.Map.of("groupId", "com.nonexistent.fake", "artifactId", "does-not-exist"))
-        yield assertIsError(result)
+        yield
+          // an actionable message, not the error case class's toString
+          val text = resultText(result)
+          assertIsError(result) && assertTrue(
+            text.contains("com.nonexistent.fake:does-not-exist"),
+            text.contains("search_artifacts"),
+            !text.contains("GroupIdOrArtifactIdNotFoundError"),
+          )
       ,
 
       // --- list_javadoc_symbols ---
@@ -171,7 +180,13 @@ object McpSpec extends ZIOSpecDefault:
           port   <- Server.install(Web.appWithMiddleware)
           result <- withClient(port): client =>
             callTool(client, "get_javadoc_symbol", java.util.Map.of("groupId", javaGroupId, "artifactId", javaArtifactId, "version", javaVersion, "link", "nonexistent/FakeClass.html"))
-        yield assertIsError(result)
+        yield
+          val text = resultText(result)
+          assertIsError(result) && assertTrue(
+            text.contains("'nonexistent/FakeClass.html'"),
+            text.contains("list_javadoc_symbols"),
+            !text.contains("JavadocFileNotFound"),
+          )
       ,
 
       // --- list_source_files / get_source_file ---
@@ -183,14 +198,22 @@ object McpSpec extends ZIOSpecDefault:
           port   <- Server.install(Web.appWithMiddleware)
           result <- withClient(port): client =>
             callTool(client, "list_source_files", java.util.Map.of("groupId", "com.nonexistent.fake", "artifactId", "does-not-exist", "version", "1.0.0"))
-        yield assertIsError(result)
+        yield
+          val text = resultText(result)
+          assertIsError(result) && assertTrue(
+            text.contains("No sources jar"),
+            text.contains("get_latest_version"),
+            text.contains("list_javadoc_symbols"),
+          )
       ,
       test("get_source_file errors for nonexistent file"):
         for
           port   <- Server.install(Web.appWithMiddleware)
           result <- withClient(port): client =>
             callTool(client, "get_source_file", java.util.Map.of("groupId", javaGroupId, "artifactId", javaArtifactId, "version", javaVersion, "link", "com/fake/NonExistent.java"))
-        yield assertIsError(result)
+        yield
+          val text = resultText(result)
+          assertIsError(result) && assertTrue(text.contains("sources jar"), text.contains("list_source_files"))
       ,
 
       // --- get_latest_version pre-releases ---

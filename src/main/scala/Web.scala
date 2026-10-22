@@ -198,7 +198,7 @@ object Web:
     if acceptsMarkdown(request) && file.toString.endsWith(".html") then
       Handler.fromResponseZIO:
         defer:
-          val content = Extractor.javadocSymbolContents(groupArtifactVersion, file.toString).run
+          val content = Extractor.javadocSymbolContents(groupArtifactVersion, file.toString, Extractor.LinkBase.Page).run
           markdownResponse(content)
         .catchAll:
           case _: MavenCentral.NotFoundError | _: JarCache.UpstreamCorruptError =>

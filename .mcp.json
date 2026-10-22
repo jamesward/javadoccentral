@@ -7,6 +7,10 @@
         "--mcp"
       ],
       "timeout": 1800000
+    },
+    "mcpjam": {
+      "type": "http",
+      "url": "https://mcp.mcpjam.com/mcp"
     }
   }
 }

@@ -170,6 +170,45 @@ Evals of agents using this server (Spring AI agents on gpt-oss-120b, see the
 - Descriptions now say what agents got wrong: pre-releases need opting in; the
   same artifactId can live under several groupIds (Jackson 2 vs 3); a class name
   can resolve to several artifacts (a Java and a Scala `JevJudge`).
+- **Error results were case-class `toString`s** (`GroupIdOrArtifactIdNotFoundError(g,a)`),
+  which say what failed but not what to do. `MCP.ErrorMessages` words every tool
+  error (coordinates, likely cause, the tool to try next) and is shared with the
+  REST API; tools map their errors to `String` with it. Keep raw errors in logs.
+- **Converted javadoc pages were mostly chrome**: nav bars, "JavaScript is disabled",
+  and a `docs.oracle.com` link with a title on every type. `Extractor` strips the
+  chrome, unwraps external/self links, and with `LinkBase.Jar` (MCP/API) rewrites
+  the rest to jar paths an agent can pass back as `link`; the browse markdown path
+  (`Web.withFile`) uses `LinkBase.Page` so links stay valid at the page URL.
+- **`index.html` is often a shell**: a frameset (Java 8 and earlier) or a `Refresh`
+  redirect (single-module modern javadoc). `Extractor.indexTarget` follows it.
+
+## MCP spec conformance
+
+Check protocol conformance with MCPJam's CLI, against production or a local dev
+server (`./sbta Test/bgRun`, then `bgStop`; it runs locally, so no tunnel is
+needed):
+
+```bash
+npx -y @mcpjam/cli@latest --no-telemetry protocol conformance \
+  --url http://localhost:8080/mcp --protocol-version 2026-07-28 \
+  --fixtures-file fixtures.json   # {"toolCalls":[{"toolName":"get_latest_version","arguments":{...}}]}
+```
+
+Run it for `2026-07-28` and `2025-11-25`. Fixtures name safe tool calls, so the
+output-schema check has results to validate. Known, accepted leftovers:
+
+- "could not run" for completion, `Mcp-Name`, input-required and log probes
+  (there are no prompts/resources, and no tool requests input or logs);
+- the `logging` capability advisory: zio-http-mcp does emit per-request
+  `notifications/message` when a request opts in, and the spec requires
+  servers that emit them to declare `logging`;
+- the missing `MCP-Protocol-Version` advisory (informational): tolerating it is
+  allowed because the server still serves 2025-03-26 clients;
+- `conformance run --suite apps` fails `ui-tools-present`: there are no MCP Apps.
+
+Every tool sets an annotation `title` (MCPJam flags tools without one).
+Required routing headers (`Mcp-Method`, `Mcp-Name`) are enforced by
+zio-http-mcp, not here.
 
 ## REST API and OpenAPI
 

@@ -21,8 +21,12 @@ object Api:
   case class ApiError(message: String) derives Schema
 
   // Every domain error becomes a 404 ApiError (the resource/artifact/doc could
-  // not be produced); unexpected defects still surface as 500 via the framework.
-  private val toApiError: Any => ApiError = e => ApiError(e.toString)
+  // not be produced), worded by the same MCP.ErrorMessages the MCP tools use;
+  // unexpected defects still surface as 500 via the framework.
+  private def apiError[E](message: E => String): E => ApiError = e => ApiError(message(e))
+
+  import MCP.ErrorMessages
+  import MCP.ErrorMessages.Jar
 
   // ---- Endpoints (metadata only; implemented into Routes below) ----
 
@@ -107,7 +111,7 @@ object Api:
   private val latestRoute =
     latestEndpoint.implement: (input: (GroupId, ArtifactId, Option[Boolean])) =>
       val (g, a, includePreReleases) = input
-      Extractor.latest(GroupArtifact(g, a), includePreReleases.getOrElse(false)).mapError(toApiError)
+      Extractor.latest(GroupArtifact(g, a), includePreReleases.getOrElse(false)).mapError(apiError(ErrorMessages.latest))
 
   private val indexRoute =
     indexEndpoint.implement: (input: (GroupId, ArtifactId, Version)) =>
@@ -116,7 +120,7 @@ object Api:
       ZIO.scoped(defer:
         SymbolSearch.indexJavadocContents(gav).run
         Extractor.index(gav).run
-      ).mapError(toApiError)
+      ).mapError(apiError(ErrorMessages.entry(Jar.Javadoc)))
 
   private val listJavadocSymbolsRoute =
     listJavadocSymbolsEndpoint.implement: (input: (GroupId, ArtifactId, Version, Option[String])) =>
@@ -125,30 +129,32 @@ object Api:
       ZIO.scoped(defer:
         SymbolSearch.indexJavadocContents(gav).run
         Extractor.filterContents(Extractor.javadocContents(gav).run, filter)
-      ).mapError(toApiError)
+      ).mapError(apiError(ErrorMessages.jar(Jar.Javadoc)))
 
   private val javadocSymbolRoute =
     javadocSymbolEndpoint.implement: (input: (GroupId, ArtifactId, Version, String)) =>
       val (g, a, v, link) = input
-      ZIO.scoped(Extractor.javadocSymbolContents(GroupArtifactVersion(g, a, v), link)).mapError(toApiError)
+      ZIO.scoped(Extractor.javadocSymbolContents(GroupArtifactVersion(g, a, v), link, Extractor.LinkBase.Jar))
+        .mapError(apiError(ErrorMessages.entry(Jar.Javadoc)))
 
   private val listSourceFilesRoute =
     listSourceFilesEndpoint.implement: (input: (GroupId, ArtifactId, Version)) =>
       val (g, a, v) = input
-      ZIO.scoped(Extractor.sourceContents(GroupArtifactVersion(g, a, v))).mapError(toApiError)
+      ZIO.scoped(Extractor.sourceContents(GroupArtifactVersion(g, a, v))).mapError(apiError(ErrorMessages.jar(Jar.Sources)))
 
   private val sourceFileRoute =
     sourceFileEndpoint.implement: (input: (GroupId, ArtifactId, Version, String)) =>
       val (g, a, v, link) = input
-      ZIO.scoped(Extractor.sourceFileContents(GroupArtifactVersion(g, a, v), link)).mapError(toApiError)
+      ZIO.scoped(Extractor.sourceFileContents(GroupArtifactVersion(g, a, v), link))
+        .mapError(apiError(ErrorMessages.entry(Jar.Sources)))
 
   private val searchArtifactsRoute =
     searchArtifactsEndpoint.implement: (query: String) =>
-      SymbolSearch.searchGroupArtifacts(query).mapError(toApiError)
+      SymbolSearch.searchGroupArtifacts(query).mapError(apiError(ErrorMessages.artifactSearch))
 
   private val symbolToArtifactRoute =
     symbolToArtifactEndpoint.implement: (query: String) =>
-      SymbolSearch.search(query).mapError(toApiError)
+      SymbolSearch.search(query).mapError(apiError(ErrorMessages.search))
 
   // ---- OpenAPI + SwaggerUI ----
 
