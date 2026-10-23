@@ -99,6 +99,10 @@ object MCP:
       case e: JarCache.UpstreamCorruptError =>
         s"The ${kind.name} jar for ${coordinates(e.gav)} downloaded from Maven Central could not be " +
           s"read (${e.reason}). Retry later, or use another version."
+      case e: JarCache.UpstreamUnavailableError =>
+        s"Maven Central could not be reached to fetch the ${kind.name} jar for ${coordinates(e.gav)} " +
+          s"(${e.reason}). This is a temporary upstream problem, not a problem with the request: retry " +
+          "the same call shortly."
 
     def entry(kind: Jar)(e: Extractor.JarError | Extractor.JavadocFileNotFound | Extractor.JavadocContentError): String =
       e match
@@ -108,7 +112,7 @@ object MCP:
         case e: Extractor.JavadocContentError =>
           s"The page '${e.path}' in the ${kind.name} jar for ${coordinates(e.groupArtifactVersion)} " +
             "could not be converted to text."
-        case e: (NotFoundError | JarCache.UpstreamCorruptError) => jar(kind)(e)
+        case e: (NotFoundError | JarCache.UpstreamCorruptError | JarCache.UpstreamUnavailableError) => jar(kind)(e)
 
     def search(e: SearchError): String = e.message
 

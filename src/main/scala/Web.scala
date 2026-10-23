@@ -123,6 +123,8 @@ object Web:
             .mkString("\n")
           markdownResponse(md)
         .catchAll:
+          case _: JarCache.UpstreamUnavailableError =>
+            ZIO.succeed(upstreamUnavailable)
           case _: MavenCentral.NotFoundError | _: JarCache.UpstreamCorruptError =>
             ZIO.succeed:
               Response.notFound(groupArtifactVersion.toPath.toString)
@@ -145,6 +147,8 @@ object Web:
             import zio.json.*
             Response.json(contents.toJson)
           .catchAll:
+            case _: JarCache.UpstreamUnavailableError =>
+              ZIO.succeed(upstreamUnavailable)
             case _: MavenCentral.NotFoundError | _: JarCache.UpstreamCorruptError =>
               ZIO.succeed:
                 Response.notFound(groupArtifactVersion.toPath.toString)
@@ -166,6 +170,8 @@ object Web:
               val versions = MavenCentral.searchVersions(groupId, artifactId).map(_.value).orElseSucceed(Seq.empty).run
               Response.html(UI.page("javadocs.dev", UI.javadocFileList(groupId, artifactId, version, versions, files)))
       .catchAll:
+        case _: JarCache.UpstreamUnavailableError =>
+          Handler.fromResponse(upstreamUnavailable)
         case _: MavenCentral.NotFoundError | _: JarCache.UpstreamCorruptError =>
           Handler.fromZIO:
             MavenCentral.searchVersions(groupId, artifactId)
@@ -190,6 +196,15 @@ object Web:
     else if lower.endsWith(".txt")                            then MediaType.text.plain
     else                                                           MediaType.application.`octet-stream`
 
+  /** 503 for a jar Maven Central could not be reached for (network error,
+   *  timeout, or throttling from every mirror). Not cached, so a retry works. */
+  private val upstreamUnavailable: Response =
+    Response(
+      status  = Status.ServiceUnavailable,
+      headers = Headers(Header.RetryAfter.ByDuration(30.seconds), Header.CacheControl.NoStore),
+      body    = Body.fromString("Maven Central could not be reached right now. Please retry shortly."),
+    )
+
   def withFile(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, file: Path, request: Request):
       Handler[Client & MavenCentralRepo & Redis & Extractor.JavadocCache & SymbolSearch.SymbolSearchGuard, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
     val groupArtifactVersion = MavenCentral.GroupArtifactVersion(groupId, artifactId, version)
@@ -201,6 +216,8 @@ object Web:
           val content = Extractor.javadocSymbolContents(groupArtifactVersion, file.toString, Extractor.LinkBase.Page).run
           markdownResponse(content)
         .catchAll:
+          case _: JarCache.UpstreamUnavailableError =>
+            ZIO.succeed(upstreamUnavailable)
           case _: MavenCentral.NotFoundError | _: JarCache.UpstreamCorruptError =>
             ZIO.succeed:
               Response.redirect(URL(groupArtifactVersion.toPath))
@@ -224,6 +241,8 @@ object Web:
               headers = Headers(Header.ContentType(contentTypeFor(file.toString))),
             )
         .catchAll:
+          case _: JarCache.UpstreamUnavailableError =>
+            ZIO.succeed(upstreamUnavailable)
           case _: MavenCentral.NotFoundError | _: JarCache.UpstreamCorruptError =>
             ZIO.succeed:
               Response.redirect(URL(groupArtifactVersion.toPath))
@@ -644,6 +663,8 @@ object Web:
             .mkString("\n") + "\n"
           Response.text(md)
       .catchAll:
+        case _: JarCache.UpstreamUnavailableError =>
+          ZIO.succeed(upstreamUnavailable)
         case _: MavenCentral.NotFoundError | _: JarCache.UpstreamCorruptError =>
           ZIO.succeed:
             Response.notFound(groupArtifactVersion.toPath.toString)

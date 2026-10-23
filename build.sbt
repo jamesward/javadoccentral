@@ -63,7 +63,7 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-direct"            % "1.0.0-RC7",
   "dev.zio" %% "zio-redis"             % "1.3.0",
   // Keep zio-schema / zio-json binary compatible with the pinned zio-http-mcp
-  // (0.11.0 validated against zio-schema 1.9.0).
+  // (0.11.1 validated against zio-schema 1.9.0).
   "dev.zio" %% "zio-schema-protobuf"   % "1.9.0",
   "dev.zio" %% "zio-schema-json"       % "1.9.0",
   "dev.zio" %% "zio-schema-derivation" % "1.9.0",
@@ -82,12 +82,12 @@ libraryDependencies ++= Seq(
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioHttpMcpDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-http-mcp" % "0.11.0")
+  else Seq("com.jamesward" %% "zio-http-mcp" % "0.11.1")
 }
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioMavenCentralDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-mavencentral" % "0.14.1")
+  else Seq("com.jamesward" %% "zio-mavencentral" % "0.15.0")
 }
 
 libraryDependencies ++= {

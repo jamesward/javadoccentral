@@ -28,7 +28,7 @@ import java.nio.charset.StandardCharsets
  */
 object Extractor:
 
-  type JarError = NotFoundError | JarCache.UpstreamCorruptError
+  type JarError = JarCache.GetError
 
   case class JavadocFileNotFound(groupArtifactVersion: GroupArtifactVersion, path: String)
 

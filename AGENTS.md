@@ -181,6 +181,12 @@ Evals of agents using this server (Spring AI agents on gpt-oss-120b, see the
   (`Web.withFile`) uses `LinkBase.Page` so links stay valid at the page URL.
 - **`index.html` is often a shell**: a frameset (Java 8 and earlier) or a `Refresh`
   redirect (single-module modern javadoc). `Extractor.indexTarget` follows it.
+- **Network failures were defects**: `JarCache.httpDownloader` died on any
+  upstream error, so agents saw netty's raw `null: repo1.maven.org/…:443`. It
+  now fails with `JarCache.UpstreamUnavailableError` (worded by
+  `ErrorMessages` as "temporary, retry"; browse routes answer 503 +
+  `Retry-After`), and zio-http-mcp answers real defects with a generic message
+  while logging the cause.
 
 ## MCP spec conformance
 
