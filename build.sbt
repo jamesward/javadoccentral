@@ -49,7 +49,7 @@ scalaVersion := "3.10.0"
 
 // SkillsJars
 skillsJarsOutputDir := Some(file(".kiro/skills"))
-libraryDependencies += "com.jamesward" % "skills" % "0.0.17" % Skills
+libraryDependencies += "com.jamesward" % "skills" % "0.0.18" % Skills
 
 libraryDependencies ++= Seq(
   "dev.zio" %% "zio"                   % zioVersion,
