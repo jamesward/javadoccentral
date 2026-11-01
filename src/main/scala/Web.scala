@@ -727,7 +727,20 @@ object Web:
       )
 
 
-  val app: Routes[BadActor & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Client & MavenCentralRepo & Redis & HerokuInference & SymbolSearch.SymbolSearchGuard, Response] =
+  // Annotates every log emitted while handling an MCP request (zio-http-mcp's
+  // `MCP initialize`, `server/discover`, `tools/call`, ...) with `clientIp`, so
+  // protocol usage can be reported per distinct client. On Heroku the router
+  // appends the connecting IP as the LAST `X-Forwarded-For` value (earlier
+  // values are client-supplied and spoofable); `forwardedFor` reads exactly
+  // that and falls back to the socket address locally.
+  private def withClientIp[Env](routes: Routes[Env, Response]): Routes[Env, Response] =
+    routes.transform: handler =>
+      Handler.scoped[Env]:
+        Handler.fromFunctionZIO[Request]: request =>
+          val ip = BadActorMiddleware.forwardedFor(request).getOrElse("-")
+          ZIO.logAnnotate(LogAnnotation("clientIp", ip))(handler(request))
+
+  val app: Routes[BadActor &Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Client & MavenCentralRepo & Redis & HerokuInference & SymbolSearch.SymbolSearchGuard, Response] =
     // `statelessRoutes` from zio-http-mcp only registers POST/GET/DELETE on /mcp.
     // Its `GET /mcp` unconditionally 405s (the stateless transport offers no
     // server→client SSE stream). We replace *only* that exact `GET /mcp` with a
@@ -739,9 +752,9 @@ object Web:
     // 500 via `.sandbox`). Register HEAD /mcp explicitly so it mirrors GET's 405.
     val mcpGetRender = (Method.GET / "mcp").render
     val mcpBaseRoutes = MCP.mcpServer.statelessRoutes
-    val mcpRoutes = Routes.fromIterable(
+    val mcpRoutes = withClientIp(Routes.fromIterable(
       mcpBaseRoutes.routes.filterNot(_.routePattern.render == mcpGetRender)
-    ) ++ Routes(
+    )) ++ Routes(
       Method.GET / "mcp" -> Handler.fromFunction[Request]: request =>
         if prefersHtml(request) then
           Response.html(UI.page("Connect to the javadocs.dev MCP server", UI.mcpSetup))

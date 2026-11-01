@@ -188,6 +188,17 @@ Evals of agents using this server (Spring AI agents on gpt-oss-120b, see the
   `Retry-After`), and zio-http-mcp answers real defects with a generic message
   while logging the cause.
 
+## MCP client IP logging
+
+`Web.withClientIp` wraps the zio-http-mcp routes with a `clientIp` log
+annotation, so every log zio-http-mcp emits while handling a request
+(`MCP initialize`, `server/discover`, `tools/call`, …) carries it as a JSON
+field for per-client protocol usage reports. It uses zio-http-guard's
+`BadActorMiddleware.forwardedFor`: the **last** `X-Forwarded-For` value is the
+one the Heroku router appended (earlier values are client-supplied and
+spoofable). Keep this in the app, not zio-http-mcp: which hop to trust depends
+on the deployment.
+
 ## MCP spec conformance
 
 Check protocol conformance with MCPJam's CLI, against production or a local dev
