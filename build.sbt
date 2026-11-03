@@ -49,7 +49,7 @@ scalaVersion := "3.10.0"
 
 // SkillsJars
 skillsJarsOutputDir := Some(file(".kiro/skills"))
-libraryDependencies += "com.jamesward" % "skills" % "0.0.18" % Skills
+libraryDependencies += "com.jamesward" % "skills" % "0.0.22" % Skills
 
 libraryDependencies ++= Seq(
   "dev.zio" %% "zio"                   % zioVersion,
@@ -63,7 +63,7 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-direct"            % "1.0.0-RC7",
   "dev.zio" %% "zio-redis"             % "1.3.0",
   // Keep zio-schema / zio-json binary compatible with the pinned zio-http-mcp
-  // (0.11.1 validated against zio-schema 1.9.0).
+  // (0.12.0 validated against zio-schema 1.9.0).
   "dev.zio" %% "zio-schema-protobuf"   % "1.9.0",
   "dev.zio" %% "zio-schema-json"       % "1.9.0",
   "dev.zio" %% "zio-schema-derivation" % "1.9.0",
@@ -82,7 +82,7 @@ libraryDependencies ++= Seq(
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioHttpMcpDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-http-mcp" % "0.11.1")
+  else Seq("com.jamesward" %% "zio-http-mcp" % "0.12.0")
 }
 
 libraryDependencies ++= {
