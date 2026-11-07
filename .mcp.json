@@ -11,6 +11,10 @@
     "mcpjam": {
       "type": "http",
       "url": "https://mcp.mcpjam.com/mcp"
+    },
+    "heroku-ops": {
+      "type": "http",
+      "url": "https://jw-heroku-ops-bd1ee276f8be.herokuapp.com/mcp"
     }
   }
 }
