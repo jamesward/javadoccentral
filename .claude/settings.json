@@ -1,6 +1,7 @@
 {
   "enabledMcpjsonServers": [
     "sbta",
-    "mcpjam"
+    "mcpjam",
+    "heroku-ops"
   ]
 }
