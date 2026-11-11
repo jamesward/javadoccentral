@@ -14,7 +14,7 @@ this file records only project-specific facts and exceptions.
 Run sbt with the project launcher `./sbta` (`sbta.bat` on Windows).
 
 This is a **server** project (Heroku). Build plugins: sbt-native-packager
-(`JavaAppPackaging`, `stage`), sbt-reload (`runReload`), sbt-mcp, SkillsJars.
+(`JavaAppPackaging`, `stage`), sbt-reload (`runReload`), SkillsJars.
 
 ### Exceptions to zen-of-projects
 
@@ -52,39 +52,22 @@ This is a **server** project (Heroku). Build plugins: sbt-native-packager
   Tests hit the live Maven Central and need Docker (Valkey Testcontainers).
   CI and Heroku builds (`CI` / `STACK` env) additionally enable `-opt`.
 
-### sbt-mcp
+### MCP
 
-The sbt-mcp server is `sbta` at `http://127.0.0.1:5106/`
-(loopback only). It is only alive while a long-lived sbt session runs (e.g.
-`./sbta` or `./sbta ~Test/runReload`).
-
-- Kiro: registered as an HTTP server in `.kiro/settings/mcp.json`; reconnect the
-  MCP client after starting sbt.
-- Claude Code: `.mcp.json` registers it as a stdio server that runs
-  `.claude/sbt-mcp-stdio.sh`, approved in `.claude/settings.json`. The script
-  relays stdio to the HTTP endpoint and waits out sbt reloads. In cloud sessions
-  (`CLAUDE_CODE_REMOTE=true`) it first starts sbt in the background and waits
-  for port 5106, because Claude Code connects to MCP servers before anything
-  else could start sbt. That sbt runs in the foreground (`./sbta --server`)
-  because `sbt-task` needs an attached console channel. A daemon started by a
-  one-off `./sbta <cmd>` answers `no sbt channel available yet`. Its tools are
-  deferred: load them with ToolSearch (search `sbta`).
-  Diagnostics go to `/tmp/sbt-mcp-stdio.log` and `/tmp/sbt-mcp-server.log`. Locally it only connects to an sbt you already started.
-  Plain `./sbta <task>` commands still work alongside it (they connect to the same
-  server).
-
-- Use `sbta` for ALL sbt interactions when it is available:
-  run commands/tasks through its `sbt-task` tool (separate commands with `;`),
-  and use `list-tasks` to discover tasks/settings.
-- After editing Scala sources, validate them with its `check` tool (use
-  `"scope":"module"` after an API change), then run `compile`/`test` through
-  `sbt-task` before declaring work done.
-- Use its `glob-search`, `inspect`, and `symbol-location` tools for
-  Scala/classpath symbol questions instead of text search or jar inspection;
-  JavaDoc/ScalaDoc lookups are proxied through the same server.
-- If the MCP server is unavailable, say so clearly and fall back to `./sbta`.
-- Always finish a session with `./sbta shutdown` so no daemon (or port 5106) is
-  left running.
+- MCP server `sbta` (this build's `./sbta --mcp`, a stdio server configured in
+  `.mcp.json` and `.kiro/settings/mcp.json`, approved in
+  `.claude/settings.json`). It starts sbt when it isn't running and talks to
+  sbt's own server, so there is no port to check. Its tools are deferred in
+  Claude Code: load them with ToolSearch (search `sbta`).
+- Use it for ALL sbt work: `compile`, `test` (`full` for all), `run`, `check`
+  after editing Scala sources (`"scope":"module"` after an API change),
+  `glob-search` / `inspect` / `symbol-location` for Scala/classpath symbol
+  questions instead of text search or jar inspection, and `sbt-task` for any
+  other command (separate commands with `;`; `list-tasks` to discover
+  tasks/settings). JavaDoc/ScalaDoc lookups are proxied through the same server.
+- If it's unavailable, say so clearly and fall back to `./sbta <command>`.
+  Logs: `project/target/sbta/mcp.log` and `project/target/sbta/boot.log`.
+- Finish a session with `./sbta shutdown` so no sbt daemon is left running.
 
 ### Skills
 
