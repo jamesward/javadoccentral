@@ -87,12 +87,12 @@ libraryDependencies ++= {
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioMavenCentralDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-mavencentral" % "0.15.0")
+  else Seq("com.jamesward" %% "zio-mavencentral" % "0.16.0")
 }
 
-// Used directly for bulkheads. Same version zio-mavencentral 0.15.0 is built
-// against: 0.10.6 is not binary compatible with it.
-libraryDependencies += "nl.vroste" %% "rezilience" % "0.10.5"
+// Used directly for bulkheads. Keep on the version zio-mavencentral is built
+// against (0.16.0: 0.10.6): rezilience minor releases aren't binary compatible.
+libraryDependencies += "nl.vroste" %% "rezilience" % "0.10.6"
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioHttpGuardDir.exists()) Seq.empty
