@@ -799,8 +799,13 @@ object Web:
 
   private val badActorMiddleware: HandlerAspect[BadActor, Unit] = BadActorMiddleware()
 
+  // ShapBot (from Google Cloud IPs) walks every version of artifacts; it isn't in
+  // zio-http-guard's default list.
   private val crawlerRateLimitMiddleware: HandlerAspect[CrawlerLimiter[MavenCentral.GroupArtifactVersion], Unit] =
-    CrawlerLimiter.middleware[MavenCentral.GroupArtifactVersion](req => GavCacheMiddleware.gavFromPath(req.path))
+    CrawlerLimiter.middleware[MavenCentral.GroupArtifactVersion](
+      req => GavCacheMiddleware.gavFromPath(req.path),
+      knownCrawlers = CrawlerLimiter.defaultKnownCrawlers + "shapbot",
+    )
 
   // GAV-immutable HTTP cache aspects come from `zio-mavencentral`'s
   // `GavCacheMiddleware`. They short-circuit `If-None-Match`/`If-Modified-
