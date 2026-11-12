@@ -123,9 +123,16 @@ object SymbolSearch:
    * name match is always a containing match too, so stopping at exact matches would
    * hide other artifacts ("jev" is one artifact's `Mode.Jev` and part of other
    * artifacts' `JevJudge`). Queries too short for trigrams only match exactly.
+   * A dotted query is a qualified name: when nothing contains it, the artifact is
+   * most likely not indexed yet, so it goes to AI search (which indexes it) rather
+   * than to spelling matches of its last segment (`zio.cache.Cache` → every `Cache`).
    */
   def symbolArtifacts(symbol: String): ZIO[SymbolIndex, Throwable, Set[MavenCentral.GroupArtifact]] =
-    val tiers = if symbol.trim.length >= minFuzzyLength then List(Match.Containing, Match.Similar) else List(Match.Exact)
+    val trimmed = symbol.trim
+    val tiers =
+      if trimmed.length < minFuzzyLength then List(Match.Exact)
+      else if trimmed.contains('.') then List(Match.Containing)
+      else List(Match.Containing, Match.Similar)
     ZIO.foldLeft(tiers)(Set.empty[MavenCentral.GroupArtifact]): (found, tier) =>
       if found.nonEmpty then ZIO.succeed(found) else lookup(tier, symbol)
 

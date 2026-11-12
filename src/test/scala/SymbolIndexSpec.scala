@@ -110,5 +110,23 @@ object SymbolIndexSpec extends ZIOSpecDefault:
         SymbolIndex.replace(gav("com.example", "judge", "1.0"), Set("com.example.Mode.Jev")).run
         SymbolIndex.replace(gav("org.other", "lib", "1.0"), Set("org.other.JevJudge")).run
         assertTrue(SymbolSearch.symbolArtifacts("jev").run == Set(judge, other))
+    ,
+    test("similar spellings keep only the artifacts nearly as close as the best match"):
+      // Production: "ObjectMaper" returned 20 artifacts, most with loosely similar names.
+      defer:
+        SymbolIndex.replace(gav("com.example", "judge", "1.0"), Set("com.example.ObjectMapper")).run
+        SymbolIndex.replace(gav("org.other", "lib", "1.0"), Set("org.other.ObjectMapperFactoryBean")).run
+        assertTrue(SymbolSearch.symbolArtifacts("ObjectMaper").run == Set(judge))
+    ,
+    test("dotted queries aren't matched by spelling, and an undotted short query isn't a package"):
+      // Production: "zio.cache.Cache" (zio-cache_3 not indexed yet) returned 20 artifacts with a
+      // `Cache`, and "IO" returned 350 artifacts with any class under `io.`.
+      defer:
+        SymbolIndex.replace(gav("com.example", "judge", "1.0"), Set("com.example.cache.Cache", "io.example.Thing")).run
+        assertTrue(
+          SymbolSearch.symbolArtifacts("zio.cache.Cache").run.isEmpty,
+          SymbolSearch.symbolArtifacts("IO").run.isEmpty,
+          SymbolSearch.symbolArtifacts("io.example").run == Set(judge),
+        )
 
   ).provide(PostgresContainer.freshDatabase, SymbolIndex.layer)

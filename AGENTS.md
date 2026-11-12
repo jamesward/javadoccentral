@@ -452,7 +452,9 @@ file, avoid `split(...).toList`/`List.from(array)`; use an `Iterator` (e.g.
   Flyway checksums them and the release would fail.
 - `symbol_to_artifact` tries, in order: artifact-name match
   (`search_artifacts`), full name containing the query (trigram `ILIKE`),
-  similar simple name (`pg_trgm` `%`, top 20), then AI search. Don't stop at
+  similar simple name (`pg_trgm` `%`, only artifacts within 0.1 of the best
+  score, top 20; skipped for dotted queries, which go to AI search instead),
+  then AI search. Don't stop at
   exact-name matches: an exact match is always a containing match, so an
   exact-first tier hides other artifacts (production regression: `jev`
   returned 2 artifacts instead of 9). Queries under 3 characters (the trigram

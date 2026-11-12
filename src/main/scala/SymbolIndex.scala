@@ -90,13 +90,17 @@ object SymbolIndex:
       val patterns = parts.map(part => "%" + escapeLike(part) + "%")
       artifacts(sql"select group_id, artifact_id from artifact where (group_id || ':' || artifact_id) ilike all($patterns::text[])")
 
-  /** The symbol's simple name (`ObjectMapper`), full name (`tools.jackson.databind.ObjectMapper`) or package is the query. */
+  /**
+   * The symbol's simple name (`ObjectMapper`) or full name (`tools.jackson.databind.ObjectMapper`) is the
+   * query, or, for a dotted query, the query is its package. An undotted query is not treated as a
+   * package: `IO` would otherwise match every class under `io.`.
+   */
   def exact(query: String): ZIO[SymbolIndex, Throwable, Set[GroupArtifact]] =
     val lower = query.trim.toLowerCase
-    val packagePrefix = escapeLike(lower) + ".%"
+    val packagePrefix = if lower.contains('.') then escapeLike(lower) + ".%" else ""
     artifacts(
       sql"""select distinct a.group_id, a.artifact_id from symbol s join artifact a on a.id = s.artifact_id
-            where s.name = $lower or lower(s.fqn) = $lower or lower(s.fqn) like $packagePrefix"""
+            where s.name = $lower or lower(s.fqn) = $lower or ($packagePrefix <> '' and lower(s.fqn) like $packagePrefix)"""
     )
 
   /** A symbol's full name contains the query (its whitespace-separated parts, in order). */
@@ -107,13 +111,24 @@ object SymbolIndex:
               where s.fqn ilike $pattern"""
       )
 
-  /** Artifacts with a symbol whose simple name is spelled like the query (pg_trgm similarity), closest first, at most `limit`. */
+  /** How much less similar than the closest match a name may be and still count. */
+  private val similarBand = 0.1
+
+  /**
+   * Artifacts with a symbol whose simple name is spelled like the query (pg_trgm similarity): only
+   * those whose closest name is within [[similarBand]] of the best match overall, closest first, at
+   * most `limit`. Without the band, a typo such as `ObjectMaper` would also return every artifact with
+   * a loosely similar name (`ObjectMapperFactory`, `Mapper`).
+   */
   def similar(query: String, limit: Int): ZIO[SymbolIndex, Throwable, Set[GroupArtifact]] =
     val lower = query.trim.toLowerCase
     artifacts(
-      sql"""select a.group_id, a.artifact_id from symbol s join artifact a on a.id = s.artifact_id
-            where s.name % $lower
-            group by a.group_id, a.artifact_id
-            order by max(similarity(s.name, $lower)) desc
+      sql"""with m as (
+              select s.artifact_id, max(similarity(s.name, $lower)) as score
+              from symbol s where s.name % $lower group by s.artifact_id
+            )
+            select a.group_id, a.artifact_id from m join artifact a on a.id = m.artifact_id
+            where m.score >= (select max(score) from m) - $similarBand
+            order by m.score desc
             limit $limit"""
     )
