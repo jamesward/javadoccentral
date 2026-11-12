@@ -173,6 +173,7 @@ object MCP:
       "libraries list hundreds of symbols, so filtering saves a lot of " +
       "context when you are looking for one type. Only " +
       "if this returns NotFoundError because no javadoc jar was published, " +
+      "or an empty list because the published jar is empty, " +
       "fall back to list_source_files. Works against the live Maven " +
       "Central catalog with no local install, build, or checkout required."
 
@@ -220,6 +221,9 @@ object MCP:
       "match. The same artifactId can be published under several groupIds " +
       "(e.g. jackson-databind: com.fasterxml.jackson.core for 2.x, " +
       "tools.jackson.core for 3.x), so check each candidate with " +
+      "get_latest_version. The index only holds artifacts javadocs.dev has " +
+      "already read, so an empty result doesn't mean the artifact doesn't " +
+      "exist: if you know the exact coordinates, check them with " +
       "get_latest_version. To find the library that contains a class, use " +
       "symbol_to_artifact instead."
 
@@ -227,10 +231,15 @@ object MCP:
       "Finds which Maven artifact contains a given Java/Kotlin/Scala class: " +
       "resolves a class name, nested type (e.g. Outer.Builder), " +
       "fully-qualified type, or package name to the Maven Central artifacts " +
-      "(groupId, artifactId) that publish it. Matching ignores case: every " +
-      "artifact with a class, nested type (e.g. Outer.Builder), full name or " +
-      "package containing the query is returned; if none does, close " +
-      "spellings are tried, so a typo still finds the class. Several " +
+      "(groupId, artifactId) that publish it. Matching ignores case and " +
+      "returns every artifact with a symbol whose name contains the query " +
+      "(queries under 3 characters must match a name exactly). If none " +
+      "does, a simple name is matched by close spelling, so a typo still " +
+      "finds the class. A query that is part of a groupId:artifactId " +
+      "returns those artifacts instead. The index covers artifacts " +
+      "javadocs.dev has already read; when it has no match, the result " +
+      "comes from an AI guess checked against the live Maven Central " +
+      "catalog, and those artifacts are indexed for next time. Several " +
       "artifacts can contain the same simple name (e.g. a Java and a Scala " +
       "library): check each result rather than assuming the first. " +
       "Use this when you have a symbol from a stack trace, an import " +
