@@ -490,6 +490,11 @@ configured in `JavadocsGuard` (detectors: `probe-shape`, `new-key`,
 `client-hints`) and tuned with `GUARD_*` config vars. Don't add separate
 limiter middleware (the old `BadActorMiddleware` and per-User-Agent
 `CrawlerLimiter` were removed: the latter 429'd Googlebot on cached pages).
+Each declared crawler gets one `new-key` budget (uncached GAVs per window)
+across all its IPs (`ClientKey.crawlerOrIp`); a per-IP budget let Meta's
+crawler, rotating through dozens of IPs, download a jar every ~10 seconds and
+push the dyno into swap. A rate-limit verdict doesn't flag the client, so a
+limited crawler still gets cached pages.
 The guard runs before browse routes can interpret arbitrary paths as Maven
 coordinates. Keep generic probe classification in `zio-http-guard`'s
 `defaultSuspect` (used by `probe-shape`), not as a growing list of

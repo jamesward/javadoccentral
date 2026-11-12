@@ -20,6 +20,11 @@ object AppSpec extends ZIOSpecDefault:
   private def apiUrl(endpoint: String, first: (String, String), rest: (String, String)*): URL =
     URL(Path.root / "api" / endpoint, queryParams = QueryParams(first, rest*))
 
+  private val metaCrawler = Header.Custom("User-Agent", "Mozilla/5.0 (compatible; meta-externalagent/1.1)")
+
+  private def crawlerFetch(path: Path, ip: String) =
+    Web.appWithMiddleware.runZIO(Request.get(URL(path)).addHeader(Header.Custom("X-Forwarded-For", ip)).addHeader(metaCrawler))
+
   def spec = suite("App")(
     test("routing"):
       val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
@@ -263,6 +268,26 @@ object AppSpec extends ZIOSpecDefault:
           afterProbeBody.isEmpty,
           otherClient.status == Status.Ok,
           otherClientBody.nonEmpty,
+        )
+    , test("a crawler shares one budget of uncached GAVs across its IPs, and still gets cached pages"):
+      // GUARD_NEW_KEYS_PER_CLIENT defaults to 30; fake GAVs are uncached and 404
+      // upstream, but each still costs a fetch, so each counts.
+      val budgetPaths = (1 to 30).toList.map(i => (Path.root / "com.example.nope" / "crawler-budget" / s"1.0.$i" / "index.html", s"10.9.${i / 250}.${i % 250}"))
+      defer:
+        val first = crawlerFetch(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "index.html", "10.8.0.1").run
+        ZIO.foreachDiscard(budgetPaths)((path, ip) => crawlerFetch(path, ip)).run
+        val overBudget = crawlerFetch(Path.root / "com.example.nope" / "crawler-budget" / "2.0.0" / "index.html", "10.8.0.2").run
+        val cached = crawlerFetch(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "index.html", "10.8.0.2").run
+        val cachedBody = cached.body.asString.run
+        val browser = Web.appWithMiddleware.runZIO(
+          Request.get(URL(Path.root / "com.example.nope" / "crawler-budget" / "3.0.0" / "index.html")).addHeader(Header.Custom("X-Forwarded-For", "10.8.0.3"))
+        ).run
+        assertTrue(
+          first.status == Status.Ok,
+          overBudget.status == Status.TooManyRequests,
+          cached.status == Status.Ok,
+          cachedBody.nonEmpty,
+          browser.status != Status.TooManyRequests,
         )
     , test("MCP OAuth discovery under /mcp/.well-known is not a probe"):
       // Codex tries these before connecting; flagging them locked it out of /mcp.

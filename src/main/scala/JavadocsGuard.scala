@@ -9,9 +9,12 @@ import zio.http.*
  *
  * Crawlers on cloud IPs walk every version of an artifact
  * (`/com.vaadin/flow-html-components/<each version>/...`), and each GAV not
- * yet cached is a javadoc jar download. `new-key` limits each IP to
+ * yet cached is a javadoc jar download. `new-key` limits each client to
  * `GUARD_NEW_KEYS_PER_CLIENT` (default 30) uncached GAVs per
- * `GUARD_NEW_KEYS_WINDOW` (default 10m) and answers the rest with `429`.
+ * `GUARD_NEW_KEYS_WINDOW` (default 10m) and answers the rest with `429`,
+ * without blocking the client's other requests. A declared crawler is one
+ * client across all its IPs (Meta's crawler rotated through 56 addresses in
+ * 3.5 minutes, so a per-IP limit never fired); anyone else is one per IP.
  * Cached GAVs never count, so browsing is free. `probe-shape` answers
  * scanner paths (`.env`, `.php`, `wp-admin`, …; zio-http-guard's
  * `BadActorMiddleware.defaultSuspect`) with a cheap `404` before any route
@@ -63,7 +66,7 @@ object JavadocsGuard:
         cache    <- ZIO.service[Extractor.JavadocCache]
         config   <- ZIO.config(GuardConfig.config())
         settings <- ZIO.config(NewKeyPerClient.settings())
-        newKeys  <- NewKeyPerClient.make(settings, costlyGav, gav => cache.cache.contains(gav).map(!_))
+        newKeys  <- NewKeyPerClient.make(settings, costlyGav, gav => cache.cache.contains(gav).map(!_), ClientKey.crawlerOrIp())
         guard    <- Guard.make(
                       config,
                       Chunk(probeShape, newKeys, ClientHints.detector),
