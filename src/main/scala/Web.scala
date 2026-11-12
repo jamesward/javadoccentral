@@ -668,61 +668,68 @@ object Web:
           ZIO.succeed:
             Response.notFound(groupArtifactVersion.toPath.toString)
 
+  // The sitemaps read the symbol index. If Postgres is busy or down, answer
+  // fast with a retryable 503 rather than letting the request hit Heroku's
+  // 30 s router timeout (H12).
+  private def indexUnavailable(cause: Throwable): UIO[Response] =
+    ZIO.logWarningCause("Sitemap: symbol index unavailable", Cause.fail(cause)).as:
+      Response(
+        status  = Status.ServiceUnavailable,
+        headers = Headers(Header.RetryAfter.ByDuration(60.seconds), Header.CacheControl.NoStore),
+        body    = Body.fromString("The sitemap is temporarily unavailable. Please retry shortly."),
+      )
+
+  private def xmlResponse(xml: scala.xml.Elem): Response =
+    Response(
+      status = Status.Ok,
+      body = Body.fromString(xml.toString),
+      headers = Headers(Header.ContentType(MediaType.text.xml))
+    )
+
   val sitemapIndex: Handler[SymbolIndex, Nothing, Request, Response] =
     Handler.fromZIO:
-      SymbolIndex.allGroupArtifacts.fold(
-        error =>
-          Response(status = Status.InternalServerError, body = Body.fromString(error.getMessage)),
-        groupArtifacts =>
-          val groups = groupArtifacts.map(_.groupId).toSeq.sortBy(_.toString)
-          val xml =
-            <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-              {
-                groups.map: g =>
-                  <sitemap>
-                    <loc>{"https://www.javadocs.dev/sitemap/" + g}</loc>
-                  </sitemap>
-              }
-            </sitemapindex>
-          Response(
-            status = Status.Ok,
-            body = Body.fromString(xml.toString),
-            headers = Headers(Header.ContentType(MediaType.text.xml))
-          )
+      SymbolIndex.allGroupIds.foldZIO(
+        indexUnavailable,
+        groupIds =>
+          val groups = groupIds.toSeq.sortBy(_.toString)
+          ZIO.succeed:
+            xmlResponse:
+              <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+                {
+                  groups.map: g =>
+                    <sitemap>
+                      <loc>{"https://www.javadocs.dev/sitemap/" + g}</loc>
+                    </sitemap>
+                }
+              </sitemapindex>
       )
 
   def sitemapGroup(gId: MavenCentral.GroupId, @unused request: Request): Handler[SymbolIndex, Nothing, (MavenCentral.GroupId, Request), Response] =
     Handler.fromZIO:
-      SymbolIndex.allGroupArtifacts.fold(
-        error =>
-          Response(status = Status.InternalServerError, body = Body.fromString(error.getMessage)),
+      SymbolIndex.groupArtifactsIn(gId).foldZIO(
+        indexUnavailable,
         groupArtifacts =>
-          val filtered = groupArtifacts.filter(_.groupId == gId)
-          if filtered.isEmpty then
-            Response(status = Status.NotFound, body = Body.fromString("Group not found"))
-          else
-            val xml =
-              <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-                <url>
-                  <loc>{"https://www.javadocs.dev/" + gId}</loc>
-                </url>
-                {
-                  filtered.toSeq.sortBy(_.artifactId.toString).flatMap: ga =>
-                    Seq(
-                      <url>
-                        <loc>{"https://www.javadocs.dev" + ga.toPath}</loc>
-                      </url>,
-                      <url>
-                        <loc>{"https://www.javadocs.dev" + ga / MavenCentral.Version.latest}</loc>
-                      </url>
-                    )
-                }
-              </urlset>
-            Response(
-              status = Status.Ok,
-              body = Body.fromString(xml.toString),
-              headers = Headers(Header.ContentType(MediaType.text.xml))
-            )
+          ZIO.succeed:
+            if groupArtifacts.isEmpty then
+              Response(status = Status.NotFound, body = Body.fromString("Group not found"))
+            else
+              xmlResponse:
+                <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+                  <url>
+                    <loc>{"https://www.javadocs.dev/" + gId}</loc>
+                  </url>
+                  {
+                    groupArtifacts.toSeq.sortBy(_.artifactId.toString).flatMap: ga =>
+                      Seq(
+                        <url>
+                          <loc>{"https://www.javadocs.dev" + ga.toPath}</loc>
+                        </url>,
+                        <url>
+                          <loc>{"https://www.javadocs.dev" + ga / MavenCentral.Version.latest}</loc>
+                        </url>
+                      )
+                  }
+                </urlset>
       )
 
 

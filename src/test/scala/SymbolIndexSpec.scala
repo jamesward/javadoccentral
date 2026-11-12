@@ -89,6 +89,9 @@ object SymbolIndexSpec extends ZIOSpecDefault:
           SymbolSearch.searchGroupArtifacts("(").run.isEmpty,
           SymbolSearch.searchGroupArtifacts("rubric(").run.isEmpty,
           SymbolIndex.allGroupArtifacts.run == Set(databind2, databind3, nullable, springAi),
+          SymbolIndex.allGroupIds.run == Set(databind2, databind3, nullable, springAi).map(_.groupId),
+          SymbolIndex.groupArtifactsIn(databind2.groupId).run == Set(databind2, databind3, nullable, springAi).filter(_.groupId == databind2.groupId),
+          SymbolIndex.groupArtifactsIn(GroupId("no.such.group")).run.isEmpty,
         )
     ,
     test("symbol search matches containing names, then similar spellings, and short queries only match exactly"):
