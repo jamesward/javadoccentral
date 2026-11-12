@@ -1,53 +1,54 @@
-import com.jamesward.zio_mavencentral.MavenCentral.{ArtifactId, GroupArtifact, GroupId}
+import com.jamesward.zio_mavencentral.MavenCentral.Version
 import zio.test.*
 
 /**
- * Pure (no Redis, no network) tests for the query handling behind
+ * Pure (no database, no network) tests for the query handling behind
  * `search_artifacts`, `symbol_to_artifact` and `list_javadoc_symbols`.
  * The cases come from agent evals where these tools returned nothing and the
- * agent retried the same kind of query dozens of times.
+ * agent retried the same kind of query dozens of times. The database-backed
+ * behavior is in SymbolIndexSpec.
  */
 object SearchQuerySpec extends ZIOSpecDefault:
-
-  private def ga(g: String, a: String) = GroupArtifact(GroupId(g), ArtifactId(a))
-
-  private val catalog = Set(
-    ga("com.fasterxml.jackson.core", "jackson-databind"),
-    ga("tools.jackson.core", "jackson-databind"),
-    ga("org.openapitools", "jackson-databind-nullable"),
-    ga("org.springframework.ai", "spring-ai-openai"),
-  )
 
   private def content(fqn: String) = Extractor.Content(fqn.replace('.', '/') + ".html", false, fqn, "", "", "")
 
   override def spec = suite("search query handling")(
 
-    test("a version appended to a name query is ignored when the full query matches nothing"):
-      val r = SymbolSearch.searchGroupArtifactsIn(catalog, "jackson-databind 3.0.0")
-      assertTrue(r == Set(ga("com.fasterxml.jackson.core", "jackson-databind"), ga("tools.jackson.core", "jackson-databind"),
-        ga("org.openapitools", "jackson-databind-nullable")))
-    ,
     test("version-like tokens"):
       assertTrue(
         List("3", "3.0", "3.0.0", "2.1.0-m1", "v1.2", "2.18.8").forall(SymbolSearch.isVersionToken),
         List("jackson", "databind", "spring-ai", "zio_3", "openai").forall(!SymbolSearch.isVersionToken(_)),
       )
     ,
-    test("a query that matches as written is not widened"):
-      assertTrue(SymbolSearch.searchGroupArtifactsIn(catalog, "tools.jackson") == Set(ga("tools.jackson.core", "jackson-databind")))
-    ,
-    test("a version-only or punctuation-only query matches nothing rather than everything"):
+    test("containing patterns: parts in order, LIKE wildcards escaped"):
       assertTrue(
-        SymbolSearch.searchGroupArtifactsIn(catalog, "3.0.0").isEmpty,
-        SymbolSearch.searchGroupArtifactsIn(catalog, "(").isEmpty,
-        SymbolSearch.searchGroupArtifactsIn(catalog, "rubric(").isEmpty,
+        SymbolIndex.containsPattern("JevJudge").contains("%JevJudge%"),
+        SymbolIndex.containsPattern(" Foo  Bar ").contains("%Foo%Bar%"),
+        SymbolIndex.containsPattern("100%_done\\").contains("%100\\%\\_done\\\\%"),
+        SymbolIndex.containsPattern("   ").isEmpty,
       )
     ,
-    test("symbol patterns: exact case, and a case-insensitive fallback glob"):
+    test("only symbol-like names are indexed"):
       assertTrue(
-        SymbolSearch.symbolPattern("JevJudge", caseInsensitive = false) == "*JevJudge*",
-        SymbolSearch.symbolPattern("jev.J1", caseInsensitive = true) == "*[jJ][eE][vV].[jJ]1*",
-        SymbolSearch.symbolPattern("Foo Bar", caseInsensitive = false) == "*Foo*Bar*",
+        List("com.example.Foo", "Foo", "zio.ZIO$", "com.example.Outer.Builder", "zio.ZIO.<*>").forall(SymbolIndex.indexable),
+        List("", "index-all", "allclasses-frame", ".zio-mavencentral", "a/b", "a b").forall(!SymbolIndex.indexable(_)),
+      )
+    ,
+    test("a version supersedes the indexed one only when it is newer or the same"):
+      assertTrue(
+        SymbolIndex.supersedes(Version("1.0"), None),
+        SymbolIndex.supersedes(Version("2.0"), Some(Version("1.10"))),
+        SymbolIndex.supersedes(Version("1.10"), Some(Version("1.9"))),
+        SymbolIndex.supersedes(Version("1.0"), Some(Version("1.0"))),
+        !SymbolIndex.supersedes(Version("1.9"), Some(Version("1.10"))),
+      )
+    ,
+    test("DATABASE_URL is converted to JDBC, requiring TLS unless the URL says otherwise"):
+      assertTrue(
+        Db.parse("postgres://u:p%40ss@host.example:5433/db") == Right(Db.Jdbc("jdbc:postgresql://host.example:5433/db?sslmode=require", "u", "p@ss")),
+        Db.parse("postgresql://u:p@localhost/db?sslmode=disable") == Right(Db.Jdbc("jdbc:postgresql://localhost:5432/db?sslmode=disable", "u", "p")),
+        Db.parse("redis://u:p@host/db").isLeft,
+        Db.parse("postgres://host/db").isLeft,
       )
     ,
     test("filterContents narrows by fqn, case-insensitively, requiring every term"):

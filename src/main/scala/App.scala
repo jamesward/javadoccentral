@@ -6,9 +6,7 @@ import zio.cache.{Cache, Lookup}
 import zio.concurrent.ConcurrentMap
 import zio.direct.*
 import zio.http.*
-import zio.redis.{CodecSupplier, Redis, RedisConfig, RedisError}
 
-import java.net.URI
 import java.nio.file.Files
 
 object App extends ZIOAppDefault:
@@ -97,45 +95,7 @@ object App extends ZIOAppDefault:
 
   val symbolSearchGuardLayer: ZLayer[Any, Nothing, SymbolSearch.SymbolSearchGuard] =
     ZLayer.fromZIO:
-      ConcurrentMap.empty[MavenCentral.GroupArtifactVersion, Unit].map(SymbolSearch.SymbolSearchGuard(_))
-
-  val redisUri: ZIO[Any, Throwable, URI] =
-    ZIO.systemWith:
-      system =>
-        system.env("REDIS_URL")
-          .someOrFail(new RuntimeException("REDIS_URL env var not set"))
-          .map:
-            redisUrl =>
-              URI(redisUrl)
-
-  val redisConfigLayer: ZLayer[Any, Throwable, RedisConfig] =
-    ZLayer.fromZIO:
-      defer:
-        val uri = redisUri.run
-        RedisConfig(uri.getHost, uri.getPort, ssl = true, verifyCertificate = false)
-
-  // may not work with reconnects
-  val redisAuthLayer: ZLayer[CodecSupplier & RedisConfig, Throwable, Redis] =
-    Redis.singleNode.flatMap:
-      env =>
-        ZLayer.fromZIO:
-          defer:
-            val uri = redisUri.run
-            val redis = env.get[Redis]
-            val password = uri.getUserInfo.drop(1) // REDIS_URL has an empty username
-
-            val authIfNeeded =
-              redis.ping().catchAll:
-                case e: RedisError if e.getMessage.contains("NOAUTH") =>
-                  ZIO.logInfo("Redis NOAUTH detected, authenticating...") *> redis.auth(password)
-                case e =>
-                  ZIO.fail(e)
-
-            redis.auth(password).run
-
-            authIfNeeded.repeat(Schedule.spaced(5.seconds)).forkDaemon.run
-
-            redis
+      ConcurrentMap.empty[MavenCentral.GroupArtifact, Unit].map(SymbolSearch.SymbolSearchGuard(_))
 
   private def dirSize(dir: java.io.File): Long =
     val path = dir.toPath.nn
@@ -173,10 +133,18 @@ object App extends ZIOAppDefault:
       val javadocCacheBytes = ZIO.serviceWithZIO[Extractor.JavadocCache](_.cache.totalBytes).run
       val sourcesCacheBytes = ZIO.serviceWithZIO[Extractor.SourcesCache](_.cache.totalBytes).run
       val totalMB = (javadocCacheBytes + sourcesCacheBytes) / 1024 / 1024
+      val javadocWarm   = ZIO.serviceWithZIO[Extractor.JavadocCache](_.cache.warmCount).run
+      val javadocFetch  = ZIO.serviceWithZIO[Extractor.JavadocCache](_.misses.metrics).run
+      val sourcesFetch  = ZIO.serviceWithZIO[Extractor.SourcesCache](_.misses.metrics).run
       val statsAnnotations = List(
         LogAnnotation("javadocEntries", javadocCacheSize.toString),
+        LogAnnotation("javadocWarm", javadocWarm.toString),
         LogAnnotation("sourcesEntries", sourcesCacheSize.toString),
         LogAnnotation("diskMb", totalMB.toString),
+        LogAnnotation("javadocFetchInFlight", javadocFetch.inFlight.toString),
+        LogAnnotation("javadocFetchQueued", javadocFetch.inQueue.toString),
+        LogAnnotation("sourcesFetchInFlight", sourcesFetch.inFlight.toString),
+        LogAnnotation("sourcesFetchQueued", sourcesFetch.inQueue.toString),
       ) ++ jvmMemAnnotations
       ZIO.logAnnotate(statsAnnotations.head, statsAnnotations.tail*)(ZIO.logInfo("cache stats")).run
 
@@ -205,9 +173,8 @@ object App extends ZIOAppDefault:
       latestCacheLayer,
       javadocCacheLayer,
       sourcesCacheLayer,
-      redisConfigLayer,
-      redisAuthLayer,
-      ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
+      Db.fromEnv,
+      SymbolIndex.layer,
       SymbolSearch.herokuInferenceLayer,
       BadActor.live,
       CrawlerLimiter.layer[MavenCentral.GroupArtifactVersion],

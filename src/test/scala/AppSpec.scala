@@ -6,7 +6,6 @@ import zio.concurrent.ConcurrentMap
 import zio.direct.*
 import zio.http.*
 import zio.json.*
-import zio.redis.{CodecSupplier, Redis}
 import zio.test.*
 
 object AppSpec extends ZIOSpecDefault:
@@ -318,9 +317,8 @@ object AppSpec extends ZIOSpecDefault:
       // Reproduces: user loads <gav>/index.html, then searches for a substring
       // of the artifact id (e.g. "zio") and expects the artifact in the results.
       // `withFile` forks `SymbolSearch.indexJavadocContents` as a daemon when
-      // the request path is `index.html`; that daemon calls `Extractor.javadocContents`
-      // (which requires `JavadocCache.getDir` + scope), reads the parsed symbols,
-      // and writes them to Redis.
+      // the request path is `index.html`; that daemon parses the javadoc's
+      // symbols and writes them to the symbol index.
       val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
       // Any modular-javadoc artifact will do; zio_3 is small and well-behaved.
       val gid = "com.jamesward"
@@ -336,18 +334,12 @@ object AppSpec extends ZIOSpecDefault:
         // see its parent scope release.
         indexResp.body.asArray.run
 
-        // Wait up to 30s for the daemon fiber to finish indexing. The artifact
-        // id `zio_3` appears in the Redis `_groupArtifacts` set as soon as the
-        // index write completes.
+        // Wait up to 30s for the daemon fiber to finish indexing.
         val groupArtifact = com.jamesward.zio_mavencentral.MavenCentral.GroupArtifact(
           com.jamesward.zio_mavencentral.MavenCentral.GroupId(gid),
           com.jamesward.zio_mavencentral.MavenCentral.ArtifactId(aid),
         )
-        // Poll via SymbolSearch's own read path, which decodes with the compact
-        // string schema Redis is actually written with. (Checking membership
-        // with `redis.sIsMember` here would encode `groupArtifact` with the
-        // ambient *record* schema and never match the stored string bytes.)
-        SymbolSearch.allGroupArtifacts
+        SymbolIndex.allGroupArtifacts
           .map(_.contains(groupArtifact))
           .repeatUntil(identity)
           .timeoutFail(new RuntimeException("index never populated"))(30.seconds)
@@ -462,7 +454,7 @@ object AppSpec extends ZIOSpecDefault:
       val aid = "webjars-locator-core"
       val ver = "0.52"
       defer:
-        // Deterministic Redis data for both search endpoints; no inference needed.
+        // Deterministic index data for both search endpoints; no inference needed.
         val seededGav = MavenCentral.GroupArtifactVersion(
           MavenCentral.GroupId("com.example"),
           MavenCentral.ArtifactId("api-fixture"),
@@ -582,9 +574,8 @@ object AppSpec extends ZIOSpecDefault:
     App.latestCacheLayer,
     Client.default,
     MavenCentral.MavenCentralRepo.live,
-    ValkeyContainer.layer,
-    Redis.singleNode,
-    ZLayer.succeed[CodecSupplier](SymbolSearch.ProtobufCodecSupplier),
+    PostgresContainer.freshDatabase,
+    SymbolIndex.layer,
     SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
     BadActor.live,
     CrawlerLimiter.layer[MavenCentral.GroupArtifactVersion],

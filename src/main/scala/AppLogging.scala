@@ -6,7 +6,7 @@ import zio.logging.slf4j.bridge.Slf4jBridge
 // `override val bootstrap`.
 //
 // Both variants install the SLF4J bridge, so logs from Java libraries (Netty,
-// the Redis client, jsoup, etc.) flow through ZIO's logger and pick up the same
+// the Postgres driver, jsoup, etc.) flow through ZIO's logger and pick up the same
 // format as our own `ZIO.log*` calls — the bridge is now the sole slf4j
 // provider (slf4j-simple is gone). The two differ in console format and level
 // floor:

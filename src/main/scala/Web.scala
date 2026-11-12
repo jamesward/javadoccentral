@@ -8,7 +8,6 @@ import zio.durationInt
 import zio.http.*
 import zio.http.Header.Accept
 import zio.http.codec.PathCodec
-import zio.redis.Redis
 import zio.schema.*
 import zio.schema.annotation.fieldName
 import zio.schema.codec.JsonCodec as SchemaJsonCodec
@@ -110,7 +109,7 @@ object Web:
   given zio.json.JsonEncoder[Extractor.Content] = zio.json.DeriveJsonEncoder.gen[Extractor.Content]
 
   def withVersion(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, request: Request):
-      Handler[Extractor.LatestCache & Client & MavenCentralRepo & Extractor.JavadocCache & Redis, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
+      Handler[Extractor.LatestCache & Client & MavenCentralRepo & Extractor.JavadocCache & SymbolIndex, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
     val groupArtifactVersion = MavenCentral.GroupArtifactVersion(groupId, artifactId, version)
 
     if acceptsMarkdown(request) then
@@ -206,7 +205,7 @@ object Web:
     )
 
   def withFile(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, file: Path, request: Request):
-      Handler[Client & MavenCentralRepo & Redis & Extractor.JavadocCache & SymbolSearch.SymbolSearchGuard, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
+      Handler[Client & MavenCentralRepo & SymbolIndex & Extractor.JavadocCache & SymbolSearch.SymbolSearchGuard, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
     val groupArtifactVersion = MavenCentral.GroupArtifactVersion(groupId, artifactId, version)
 
     // todo: reduce duplication on error handling
@@ -321,7 +320,7 @@ object Web:
     string("version").transformOrFailLeft(versionExtractor)(_.toString)
 
   def withVersionAndFile(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, path: Path, request: Request):
-      Handler[BadActor & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Client & MavenCentralRepo & Redis & HerokuInference & SymbolSearch.SymbolSearchGuard, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
+      Handler[BadActor & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Client & MavenCentralRepo & SymbolIndex & HerokuInference & SymbolSearch.SymbolSearchGuard, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
     trailingSlashRedirect(request).map(_.toHandler).getOrElse:
       if path.isEmpty then
         withVersion(groupId, artifactId, version, request)
@@ -340,7 +339,7 @@ object Web:
         val param = URL.root.setQueryParams(q).toString.stripSuffix("=")
         Response(Status.MovedPermanently, Headers(Header.Location.name -> param))
 
-  def index(request: Request): Handler[Redis & HerokuInference & Client & MavenCentralRepo & Extractor.JavadocCache & Extractor.SourcesCache & SymbolSearch.SymbolSearchGuard, Nothing, Request, Response] =
+  def index(request: Request): Handler[SymbolIndex & HerokuInference & Client & MavenCentralRepo & Extractor.JavadocCache & Extractor.SourcesCache & SymbolSearch.SymbolSearchGuard, Nothing, Request, Response] =
     indexQueryRedirect(request).map(_.toHandler).getOrElse {
     request.queryParameters.map.keys.filterNot(_ == "groupId").headOption.fold(Response.html(UI.page("javadocs.dev", UI.index)).addHeader("Link", UI.linkHeaderValue).toHandler):
       query =>
@@ -612,9 +611,9 @@ object Web:
       |`https://www.javadocs.dev/.well-known/agent-skills/index.json`.
       |""".stripMargin
 
-  val llmsTxt: Handler[Redis, Nothing, Request, Response] =
+  val llmsTxt: Handler[SymbolIndex, Nothing, Request, Response] =
     Handler.fromZIO:
-      SymbolSearch.allGroupArtifacts.fold(
+      SymbolIndex.allGroupArtifacts.fold(
         error =>
           Response(status = Status.InternalServerError, body = Body.fromString(error.getMessage)),
         groupArtifacts =>
@@ -624,9 +623,9 @@ object Web:
           Response.text(md)
       )
 
-  def llmsGroup(gId: MavenCentral.GroupId, @unused request: Request): Handler[Redis, Nothing, (MavenCentral.GroupId, Request), Response] =
+  def llmsGroup(gId: MavenCentral.GroupId, @unused request: Request): Handler[SymbolIndex, Nothing, (MavenCentral.GroupId, Request), Response] =
     Handler.fromZIO:
-      SymbolSearch.allGroupArtifacts.fold(
+      SymbolIndex.allGroupArtifacts.fold(
         error =>
           Response(status = Status.InternalServerError, body = Body.fromString(error.getMessage)),
         groupArtifacts =>
@@ -651,7 +650,7 @@ object Web:
     .catchAll: _ =>
       Response(status = Status.NotFound, body = Body.fromString(s"Artifact $gId:$aId not found")).toHandler
 
-  def llmsVersion(gId: MavenCentral.GroupId, aId: MavenCentral.ArtifactId, ver: MavenCentral.Version, @unused request: Request): Handler[Client & MavenCentralRepo & Extractor.JavadocCache & Redis, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Request), Response] =
+  def llmsVersion(gId: MavenCentral.GroupId, aId: MavenCentral.ArtifactId, ver: MavenCentral.Version, @unused request: Request): Handler[Client & MavenCentralRepo & Extractor.JavadocCache & SymbolIndex, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Request), Response] =
     val groupArtifactVersion = MavenCentral.GroupArtifactVersion(gId, aId, ver)
     Handler.fromResponseZIO:
       ZIO.scoped:
@@ -669,9 +668,9 @@ object Web:
           ZIO.succeed:
             Response.notFound(groupArtifactVersion.toPath.toString)
 
-  val sitemapIndex: Handler[Redis, Nothing, Request, Response] =
+  val sitemapIndex: Handler[SymbolIndex, Nothing, Request, Response] =
     Handler.fromZIO:
-      SymbolSearch.allGroupArtifacts.fold(
+      SymbolIndex.allGroupArtifacts.fold(
         error =>
           Response(status = Status.InternalServerError, body = Body.fromString(error.getMessage)),
         groupArtifacts =>
@@ -692,9 +691,9 @@ object Web:
           )
       )
 
-  def sitemapGroup(gId: MavenCentral.GroupId, @unused request: Request): Handler[Redis, Nothing, (MavenCentral.GroupId, Request), Response] =
+  def sitemapGroup(gId: MavenCentral.GroupId, @unused request: Request): Handler[SymbolIndex, Nothing, (MavenCentral.GroupId, Request), Response] =
     Handler.fromZIO:
-      SymbolSearch.allGroupArtifacts.fold(
+      SymbolIndex.allGroupArtifacts.fold(
         error =>
           Response(status = Status.InternalServerError, body = Body.fromString(error.getMessage)),
         groupArtifacts =>
@@ -740,7 +739,7 @@ object Web:
           val ip = BadActorMiddleware.forwardedFor(request).getOrElse("-")
           ZIO.logAnnotate(LogAnnotation("clientIp", ip))(handler(request))
 
-  val app: Routes[BadActor &Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Client & MavenCentralRepo & Redis & HerokuInference & SymbolSearch.SymbolSearchGuard, Response] =
+  val app: Routes[BadActor &Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Client & MavenCentralRepo & SymbolIndex & HerokuInference & SymbolSearch.SymbolSearchGuard, Response] =
     // `statelessRoutes` from zio-http-mcp only registers POST/GET/DELETE on /mcp.
     // Its `GET /mcp` unconditionally 405s (the stateless transport offers no
     // server→client SSE stream). We replace *only* that exact `GET /mcp` with a
@@ -770,7 +769,7 @@ object Web:
     // Content-Length header) for HEAD responses.
     val getOrHead: Method = Method.GET #| Method.HEAD
 
-    val appRoutes = Routes[BadActor & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Client & MavenCentralRepo & Redis & HerokuInference & SymbolSearch.SymbolSearchGuard, Nothing](
+    val appRoutes = Routes[BadActor & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Client & MavenCentralRepo & SymbolIndex & HerokuInference & SymbolSearch.SymbolSearchGuard, Nothing](
       getOrHead / Root -> Handler.fromFunctionHandler[Request](index),
       getOrHead / "favicon.ico" -> Handler.fromResource("favicon.ico").orDie,
       getOrHead / "favicon.png" -> Handler.fromResource("favicon.png").orDie,
@@ -862,7 +861,7 @@ object Web:
     Header.SchemaHeaderType[String]("Sec-CH-UA-Platform"),
   )
 
-  val appWithMiddleware: Routes[TrafficStats & NewGavLimiter & CrawlerLimiter[MavenCentral.GroupArtifactVersion] & BadActor & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.LatestCache & Client & MavenCentralRepo & Redis & HerokuInference & SymbolSearch.SymbolSearchGuard, Response] =
+  val appWithMiddleware: Routes[TrafficStats & NewGavLimiter & CrawlerLimiter[MavenCentral.GroupArtifactVersion] & BadActor & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.LatestCache & Client & MavenCentralRepo & SymbolIndex & HerokuInference & SymbolSearch.SymbolSearchGuard, Response] =
     withClientIp(
       app @@ badActorMiddleware @@ crawlerRateLimitMiddleware @@ NewGavLimiter.middleware @@ immutableAssetNotModified @@ immutableAssetCacheHeaders @@ Middleware.requestLogging(loggedRequestHeaders = identifyingHeaders) @@ headStripBody @@ TrafficStats.middleware
     )

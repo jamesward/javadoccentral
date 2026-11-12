@@ -5,45 +5,18 @@ import zio.direct.*
 import zio.http.*
 import zio.http.Header.Authorization
 import zio.json.{DecoderOps, JsonCodec}
-import zio.redis.{CodecSupplier, Count, Redis}
 import zio.schema.*
 import zio.schema.annotation.*
-import zio.schema.codec.{BinaryCodec, ProtobufCodec}
-import zio.stream.ZStream
 
 object SymbolSearch:
 
   import MavenCentral.MavenCentralRepo
 
-  val groupArtifactsKey = "_groupArtifacts"
-  val gavCacheKey = "_gavCache"
-
-  case class SymbolSearchGuard(active: ConcurrentMap[MavenCentral.GroupArtifactVersion, Unit])
+  /** Artifacts being indexed right now, so concurrent requests for one artifact index it once. */
+  case class SymbolSearchGuard(active: ConcurrentMap[MavenCentral.GroupArtifact, Unit])
 
   case class InferenceError(message: String)
   case class SearchError(message: String)
-
-
-  private def stringToGroupArtifact(s: String): MavenCentral.GroupArtifact =
-    // todo: parse failure handling
-    val parts = s.split(':')
-    MavenCentral.GroupArtifact(MavenCentral.GroupId(parts(0)), MavenCentral.ArtifactId(parts(1)))
-
-  private def groupArtifactToString(ga: MavenCentral.GroupArtifact): String = s"${ga.groupId}:${ga.artifactId}"
-
-  // GroupArtifact is persisted in Redis as a compact `groupId:artifactId`
-  // string. This given MUST live in SymbolSearch's scope (not inside the
-  // CodecSupplier): every Redis op here — `sMembers(...).returning[GroupArtifact]`,
-  // `sAdd(key, groupArtifact)`, `hSet/hGet` with `groupArtifact` as the field —
-  // resolves `Schema[GroupArtifact]` at *this* call site, as does
-  // `CodecSupplier.get[A: Schema]` (its `Schema` comes from the caller, not from
-  // givens defined inside the supplier). So this shadows zio-mavencentral's
-  // ambient *record* schema for Redis. (MCP output still uses the record schema,
-  // resolved in MCP.scala's scope.)
-  given Schema[MavenCentral.GroupArtifact] = Schema.primitive[String].transform(stringToGroupArtifact, groupArtifactToString)
-
-  object ProtobufCodecSupplier extends CodecSupplier:
-    def get[A: Schema]: BinaryCodec[A] = ProtobufCodec.protobufCodec
 
   // for deserializing inference responses
   given JsonCodec[MavenCentral.GroupArtifact] = zio.schema.codec.JsonCodec.jsonCodec(MavenCentral.GroupArtifact.schema)
@@ -123,20 +96,41 @@ object SymbolSearch:
       val workaroundForMarkdownContent = choice.message.content.replace("```json", "").replace("```", "").trim
       workaroundForMarkdownContent.fromJson[Set[MavenCentral.GroupArtifact]].getOrElse(Set.empty)
 
-  def search(symbol: String): ZIO[Redis & HerokuInference & Client & MavenCentralRepo & Extractor.JavadocCache & SymbolSearchGuard, SearchError, Set[MavenCentral.GroupArtifact]] =
+  /** How a symbol query was matched, in the order they are tried. */
+  enum Match derives CanEqual:
+    case Exact, Containing, Similar
+
+  // Substring and similarity lookups can't use the trigram indexes below 3 characters.
+  private val minFuzzyLength = 3
+  private val similarLimit = 20
+
+  private def lookup(tier: Match, symbol: String): ZIO[SymbolIndex, Throwable, Set[MavenCentral.GroupArtifact]] =
+    val query = tier match
+      case Match.Exact      => SymbolIndex.exact(symbol)
+      case Match.Containing => SymbolIndex.containing(symbol)
+      case Match.Similar    => SymbolIndex.similar(symbol, similarLimit)
+    query.timed.tap: (duration, results) =>
+      ZIO.logAnnotate(
+        LogAnnotation("symbol", symbol),
+        LogAnnotation("match", tier.toString),
+        LogAnnotation("results", results.size.toString),
+        LogAnnotation("durationMs", duration.toMillis.toString),
+      )(ZIO.logInfo("Symbol search"))
+    .map(_._2)
+
+  /** The first tier (exact, then containing, then similar spelling) that finds anything. */
+  def symbolArtifacts(symbol: String): ZIO[SymbolIndex, Throwable, Set[MavenCentral.GroupArtifact]] =
+    val tiers = if symbol.trim.length >= minFuzzyLength then Match.values.toList else List(Match.Exact)
+    ZIO.foldLeft(tiers)(Set.empty[MavenCentral.GroupArtifact]): (found, tier) =>
+      if found.nonEmpty then ZIO.succeed(found) else lookup(tier, symbol)
+
+  def search(symbol: String): ZIO[SymbolIndex & HerokuInference & Client & MavenCentralRepo & Extractor.JavadocCache & SymbolSearchGuard, SearchError, Set[MavenCentral.GroupArtifact]] =
     defer:
       val gaResults = searchGroupArtifacts(symbol).mapError(e => SearchError(e.toString)).run
 
-      val symbolResults = if gaResults.nonEmpty then Set.empty[MavenCentral.GroupArtifact] else
-        // Exact case first (precise); agents often lower-case class names
-        // ("jevjudge"), so fall back to a case-insensitive scan before the
-        // (slow, costly) AI search.
-        symbolArtifacts(symbol, caseInsensitive = false)
-          .flatMap(found => if found.nonEmpty then ZIO.succeed(found) else symbolArtifacts(symbol, caseInsensitive = true))
-          .mapError(e => SearchError(e.toString))
-          .run
-
-      val cacheResults = gaResults ++ symbolResults
+      val cacheResults =
+        if gaResults.nonEmpty then gaResults
+        else symbolArtifacts(symbol).mapError(e => SearchError(e.toString)).run
 
       if cacheResults.isEmpty then
         // `aiSearch` needs a `Scope` for its HTTP response body; that
@@ -165,10 +159,8 @@ object SymbolSearch:
           LogAnnotation("symbol", symbol),
           LogAnnotation("artifacts", validatedResults.size.toString),
         )(ZIO.logInfo("Scheduling index load")).run
-        // `indexJavadocContents` already owns its Scope internally (it
-        // `ZIO.scoped`s the payload before `forkDaemon`), and
-        // `Extractor.latest` no longer requires `Scope`, so the forked
-        // daemon below has no `Scope` dependency to inherit.
+        // `indexJavadocContents` forks its own daemon and `Extractor.latest`
+        // doesn't require `Scope`, so this daemon has no `Scope` to inherit.
         ZIO.collectAllParDiscard(indexLoad).forkDaemon.run
         validatedResults
       else
@@ -182,132 +174,49 @@ object SymbolSearch:
   /** A standalone version token such as `3`, `3.0.0`, `2.1.0-m1` or `v1.2`. */
   def isVersionToken(part: String): Boolean = versionLike.matches(part)
 
-  /** Artifacts whose `groupId:artifactId` contains every part. No parts matches nothing (not the whole catalog). */
-  def matchGroupArtifacts(all: Set[MavenCentral.GroupArtifact], parts: List[String]): Set[MavenCentral.GroupArtifact] =
-    if parts.isEmpty then Set.empty
-    else all.filter: ga =>
-      val combined = ga.groupId.toString.toLowerCase + ":" + ga.artifactId.toString.toLowerCase
-      parts.forall(combined.contains)
-
   /**
+   * Indexed artifacts whose `groupId:artifactId` contains every part of the query.
    * Agents routinely append a version to a name query ("jackson-databind 3.0.0"),
    * which can never match a `groupId:artifactId`. If the full query finds
    * nothing, retry without the version-like tokens.
    */
-  def searchGroupArtifactsIn(all: Set[MavenCentral.GroupArtifact], query: String): Set[MavenCentral.GroupArtifact] =
+  def searchGroupArtifacts(query: String): ZIO[SymbolIndex, Throwable, Set[MavenCentral.GroupArtifact]] =
     val parts = queryParts(query)
-    val exact = matchGroupArtifacts(all, parts)
-    if exact.nonEmpty then exact
-    else
-      val withoutVersions = parts.filterNot(isVersionToken)
-      if withoutVersions.size == parts.size then exact else matchGroupArtifacts(all, withoutVersions)
+    val withoutVersions = parts.filterNot(isVersionToken)
+    SymbolIndex.groupArtifactsContainingAll(parts).flatMap: found =>
+      if found.nonEmpty || withoutVersions.size == parts.size then ZIO.succeed(found)
+      else SymbolIndex.groupArtifactsContainingAll(withoutVersions)
 
-  def searchGroupArtifacts(query: String): ZIO[Redis, Throwable, Set[MavenCentral.GroupArtifact]] =
-    allGroupArtifacts.map(searchGroupArtifactsIn(_, query))
-
-  /** Redis `SCAN MATCH` glob for `*symbol*`, optionally matching letters in either case (`[jJ][eE]...`). */
-  def symbolPattern(symbol: String, caseInsensitive: Boolean): String =
-    val normalized = symbol.replace(' ', '*')
-    val body =
-      if !caseInsensitive then normalized
-      else normalized.flatMap(c => if c.isLetter then s"[${c.toLower}${c.toUpper}]" else c.toString)
-    "*" + body + "*"
-
-  /** Artifacts indexed under any symbol key matching [[symbolPattern]]. */
-  def symbolArtifacts(symbol: String, caseInsensitive: Boolean): ZIO[Redis, Throwable, Set[MavenCentral.GroupArtifact]] =
+  def update(groupArtifactVersion: MavenCentral.GroupArtifactVersion, symbols: Set[Extractor.Content]): ZIO[SymbolIndex & SymbolSearchGuard, Throwable, Unit] =
     defer:
-      val redis = ZIO.service[Redis].run
-      val pattern = symbolPattern(symbol, caseInsensitive)
-
-      val allKeys = ZStream.paginateZIO(0L): cursor =>
-        redis.scan(cursor, Some(pattern), Some(Count(10_000L))).returning[String].map:
-          case (nextCursor, keys) =>
-            val next = if (nextCursor == 0L) None else Some(nextCursor)
-            (keys, next)
-      .runCollect.run.flatten.filter(!_.startsWith("_"))
-
-      ZIO.logAnnotate(
-        LogAnnotation("pattern", pattern),
-        LogAnnotation("keys", allKeys.size.toString),
-      )(ZIO.logInfo("Symbol search")).run
-
-      // this should be a very small number of groupArtifacts
-      ZIO.foreachPar(allKeys): key =>
-        redis.sMembers(key).returning[MavenCentral.GroupArtifact].catchAll: e =>
-          defer:
-            ZIO.logAnnotate(
-              LogAnnotation("key", key),
-              LogAnnotation("error", e.toString),
-            )(ZIO.logError("Removing unparsable symbol key")).run
-            redis.del(key).run // unparsable keys shouldn't be in there
-            Chunk.empty
-      .run
-      .flatten
-      .toSet
-
-  def allGroupArtifacts: ZIO[Redis, Throwable, Set[MavenCentral.GroupArtifact]] =
-    defer:
-      val redis = ZIO.service[Redis].run
-      // `sMembers.returning` decodes the whole set atomically, so a single
-      // member written with an incompatible schema fails the entire read — and
-      // thus all of search. Degrade to empty (search falls through to the
-      // per-symbol / AI paths) instead of hard-failing. We deliberately do NOT
-      // delete the set: it typically holds far more good entries than bad
-      // (in the one incident, 1238 good vs 2 bad), so wiping it would discard
-      // all the good ones and force a full re-index. The few corrupt members
-      // are removed surgically out-of-band (SSCAN for the record-marker byte,
-      // then SREM); this handler just keeps search available until then.
-      redis.sMembers(groupArtifactsKey).returning[MavenCentral.GroupArtifact].catchAll: e =>
-        ZIO.logAnnotate(
-          LogAnnotation("key", groupArtifactsKey),
-          LogAnnotation("error", e.toString),
-        )(ZIO.logError("Failed to decode group-artifacts set; search degraded to empty until the corrupt members are removed"))
-          .as(Chunk.empty[MavenCentral.GroupArtifact])
-      .run.toSet
-
-  def update(groupArtifactVersion: MavenCentral.GroupArtifactVersion, symbols: Set[Extractor.Content]): ZIO[Redis & SymbolSearchGuard, Throwable, Unit] =
-    defer:
-      val redis = ZIO.service[Redis].run
       val guard = ZIO.service[SymbolSearchGuard].run.active
       val groupArtifact = groupArtifactVersion.noVersion
-      val version = groupArtifactVersion.version.toString
+      val indexed = SymbolIndex.indexedVersion(groupArtifact).run
+      if !indexed.contains(groupArtifactVersion.version) && SymbolIndex.supersedes(groupArtifactVersion.version, indexed) then
+        // Another fiber already indexing this artifact: skip (`replace` would also serialize them).
+        val existing = guard.putIfAbsent(groupArtifact, ()).run
+        if existing.isEmpty then
+          replaceSymbols(groupArtifactVersion, symbols).ensuring(guard.remove(groupArtifact)).run
 
-      val cached = redis.hGet(gavCacheKey, groupArtifact).returning[String].run
-      if cached.contains(version) then
-        ZIO.unit.run
-      else
-        val existing = guard.putIfAbsent(groupArtifactVersion, ()).run
-        existing match
-          case Some(_) =>
-            // another fiber is already indexing this GAV — skip
-            ZIO.unit.run
-          case None =>
-            val work = defer:
-              ZIO.logAnnotate(
-                LogAnnotation("gav", groupArtifactVersion.toString),
-                LogAnnotation("symbols", symbols.size.toString),
-              )(ZIO.logInfo("Updating symbol index")).run
-              ZIO.foreachPar(symbols): symbol =>
-                redis.sAdd(symbol.fqn, groupArtifact)
-              .withParallelism(50).unit.run
-              redis.sAdd(groupArtifactsKey, groupArtifact).unit.run
-              redis.hSet(gavCacheKey, groupArtifact -> version).unit.run
-              ZIO.logAnnotate(
-                LogAnnotation("gav", groupArtifactVersion.toString),
-                LogAnnotation("symbols", symbols.size.toString),
-              )(ZIO.logInfo("Updated symbol index")).run
-            work.ensuring(guard.remove(groupArtifactVersion)).run
+  private def replaceSymbols(groupArtifactVersion: MavenCentral.GroupArtifactVersion, symbols: Set[Extractor.Content]): ZIO[SymbolIndex, Throwable, Unit] =
+    defer:
+      val (duration, written) = SymbolIndex.replace(groupArtifactVersion, symbols.map(_.fqn)).timed.run
+      ZIO.logAnnotate(
+        LogAnnotation("gav", groupArtifactVersion.toString),
+        LogAnnotation("symbols", symbols.size.toString),
+        LogAnnotation("written", written.toString),
+        LogAnnotation("durationMs", duration.toMillis.toString),
+      )(ZIO.logInfo("Updated symbol index")).run
 
   // We only want to trigger symbol cache loading when the index page is loaded;
   // this is a lazy way to populate the cache. The returned effect forks a
   // daemon. With `JarCache`'s append-only model the daemon's `JarHandle` stays
   // valid until app shutdown — no Scope coordination needed.
   def indexJavadocContents(groupArtifactVersion: MavenCentral.GroupArtifactVersion):
-    ZIO[Client & MavenCentralRepo & Extractor.JavadocCache & Redis & SymbolSearch.SymbolSearchGuard, Nothing, Unit] =
+    ZIO[Client & MavenCentralRepo & Extractor.JavadocCache & SymbolIndex & SymbolSearch.SymbolSearchGuard, Nothing, Unit] =
 
     val getContentsAndUpdateIndex =
       defer:
-        ZIO.logAnnotate(LogAnnotation("gav", groupArtifactVersion.toString))(ZIO.logInfo("Index load started")).run
         val (parseDuration, contents) = Extractor.javadocContents(groupArtifactVersion).timed.run
         ZIO.logAnnotate(
           LogAnnotation("gav", groupArtifactVersion.toString),
@@ -315,6 +224,8 @@ object SymbolSearch:
           LogAnnotation("durationMs", parseDuration.toMillis.toString),
         )(ZIO.logInfo("Index load parsed")).run
         SymbolSearch.update(groupArtifactVersion, contents).run
-        ZIO.logAnnotate(LogAnnotation("gav", groupArtifactVersion.toString))(ZIO.logInfo("Index load complete")).run
 
-    getContentsAndUpdateIndex.forkDaemon.unit
+    getContentsAndUpdateIndex
+      .catchAllCause: cause =>
+        ZIO.logAnnotate(LogAnnotation("gav", groupArtifactVersion.toString))(ZIO.logWarningCause("Index load failed", cause))
+      .forkDaemon.unit

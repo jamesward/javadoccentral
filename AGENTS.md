@@ -26,19 +26,20 @@ This is a **server** project (Heroku). Build plugins: sbt-native-packager
   until a stable release exists.
 - **Compatibility constraint:** keep the zio-schema / zio-json versions binary
   compatible with the pinned `zio-http-mcp` (see the comment in `build.sbt`).
-- **Container image tracks production:** the Valkey image in
-  `src/test/scala/ValkeyContainer.scala` (`valkey/valkey:8.1.9`) mirrors the
-  Heroku Key-Value Store add-on on the `javadocs` app. Don't bump it in the maintenance
+- **Container image tracks production:** the Postgres image in
+  `src/test/scala/PostgresContainer.scala` (`postgres:18.4`) mirrors the
+  Heroku Postgres add-on on the `javadocs` app. Don't bump it in the maintenance
   routine; change it only when production's version changes (check with
-  `heroku redis:info --app javadocs`).
+  `heroku pg:info`).
 
-- Dev server (Test scope, Valkey via Testcontainers, `MockInference` fallback;
+- Dev server (Test scope, Postgres via Testcontainers, `MockInference` fallback;
   needs Docker): `./sbta ~Test/runReload` (auto-reload) or `./sbta Test/run`.
   `Test / mainClass` is `AppTest`; `Compile / mainClass` is `App`. Set `PORT`
   to override the default 8080 (after `./sbta shutdown`, since the daemon
   captures the environment). Add `-Dlocal` to use sibling checkouts of
   `zio-http-mcp`, `zio-mavencentral`, `zio-http-guard`.
-- Prod-config server: `./sbta ~runReload` (needs `REDIS_URL` (TLS) and
+- Prod-config server: `./sbta ~runReload` (needs `DATABASE_URL`, migrated with
+  `./sbta "runMain FlywayMigrate"`, and
   `INFERENCE_URL` / `INFERENCE_KEY` / `INFERENCE_MODEL_ID`).
 - Full validation (same as CI in `.github/workflows/test.yml`):
 
@@ -49,7 +50,7 @@ This is a **server** project (Heroku). Build plugins: sbt-native-packager
   ./sbta shutdown
   ```
 
-  Tests hit the live Maven Central and need Docker (Valkey Testcontainers).
+  Tests hit the live Maven Central and need Docker (Postgres Testcontainers).
   CI and Heroku builds (`CI` / `STACK` env) additionally enable `-opt`.
 
 ### MCP
@@ -140,8 +141,8 @@ Evals of agents using this server (Spring AI agents on gpt-oss-120b, see the
   matched nothing, and agents retried variants dozens of times. Version-like
   tokens are now dropped when the full query matches nothing.
 - **Lower-cased class names** (`"jevjudge"`) missed the case-sensitive symbol
-  index and fell through to AI search. `symbol_to_artifact` now retries the
-  index case-insensitively first.
+  index and fell through to AI search. Symbol matching is now case-insensitive
+  throughout (see "Symbol index (Postgres)").
 - **`list_javadoc_symbols` on a big library** (jackson-databind lists hundreds of
   classes) blew agents' context budgets. It takes an optional `filter`.
 - **"Latest" was the last entry of `maven-metadata.xml`**, which is publish order,
@@ -258,8 +259,8 @@ and note that agent docs are authoritative.
 - zio-http for HTTP server and client
 - zio-direct (`defer`/`.run`) as the primary effect composition style
 - zio-cache for in-memory caching (prefer `ScopedCache` when cached values own external resources — see "Caching disk-backed values" below)
-- zio-redis for persistent storage (symbol search index)
-- zio-schema with protobuf codec for Redis serialization
+- Postgres (Heroku Postgres, `pg_trgm`) for the symbol search index, via
+  magnum / zio-magnum on a HikariCP pool; schema managed by Flyway
 - sbt build tool
 
 ## Coding Style
@@ -372,6 +373,8 @@ cache reference must live until the last reader is done.
 - Prefer `.delay(duration)` over `ZIO.sleep(duration) *> effect`
 - Prefer `ZIO.foreachDiscard(option)(...)` over `ZIO.whenCase(option) { case Some(x) => ... }` for running an effect on an `Option`
 - Prefer `ZIO.whenCase` only when matching on non-Option types or multiple cases
+- zio-direct rejects mutable collections inside `defer`, including the `Array`
+  from `String.split`. Do that parsing in a plain (non-`defer`) method.
 
 ### `AllValuesAreNullable` gotcha (Extractor.scala)
 
@@ -398,22 +401,24 @@ file, avoid `split(...).toList`/`List.from(array)`; use an `Iterator` (e.g.
 - `App.scala` contains routes, middleware, layer wiring, and `run`
 - `Extractor.scala` contains Maven Central download/extraction logic
 - Tests in `src/test/scala/`, using `ZIOSpecDefault`
-- `AppTest.scala` is a runnable dev server (not a test suite) that spins up a
-  Valkey container via `ValkeyContainer.layer` for Redis
+- `AppTest.scala` is a runnable dev server (not a test suite) on a fresh
+  Postgres database from `PostgresContainer.freshDatabase`
 
 ### Testing
 
 - ZIO Test with `ZIOSpecDefault`
 - Tests provide their own layers (no shared test fixtures)
-- `ValkeyContainer.layer` for tests needing Redis. It runs Valkey
-  (Redis-compatible) in a Testcontainers-managed Docker container and yields a
-  `RedisConfig`, so `Redis.singleNode` builds the client on top unchanged. This
-  replaced `zio-redis-embedded`, whose bundled native `redis-server` binary was
-  extracted and fork/exec'd per test and intermittently failed with ETXTBSY
-  ("Text file busy") when suites ran in parallel. Requires Docker (available on
-  CI and locally). Forked test JVMs raise `-XX:MaxMetaspaceSize` to 512m
-  (`Test / javaOptions` in `build.sbt`) because Testcontainers + docker-java
-  load far more classes than the production 96m cap allows.
+- `PostgresContainer.freshDatabase` for tests needing the symbol index. One
+  Testcontainers Postgres per test JVM; Flyway migrates a template database
+  once and each spec (each test, with `provide`) gets its own clone, dropped
+  afterwards. Container starts and `CREATE DATABASE` share a lock, since
+  rootless Docker races when two ephemeral ports are published at once.
+  Requires Docker (available on CI and locally). Forked test JVMs raise
+  `-XX:MaxMetaspaceSize` to 512m (`Test / javaOptions` in `build.sbt`) because
+  Testcontainers + docker-java load far more classes than the production 96m
+  cap allows.
+- `JarCache.get` wraps the shared cache entry in a new `JarHandle` on every
+  call, so compare handles by `meta` (one instance per entry), not with `eq`.
 - `MockInference.layer` as fallback when Heroku inference is unavailable
 - `TestAspect.withLiveClock`, `TestAspect.withLiveRandom`, `TestAspect.withLiveSystem` as needed
 - `TestAspect.sequential` for tests with shared state
@@ -428,6 +433,38 @@ file, avoid `split(...).toList`/`List.from(array)`; use an `Iterator` (e.g.
 - 30-second request timeout (H12 error)
 - `-XX:+ExitOnOutOfMemoryError` — OOM kills the process immediately
 - When running the `heroku` command you must not specify an app name
+- Release phase: the Procfile's `release: bin/flyway-migrate` applies Flyway
+  migrations before a new release serves traffic; a failure aborts the release.
+  The old release keeps running while it migrates, so a migration must work
+  with the code already deployed (add, then use; never drop what live code reads).
+
+### Symbol index (Postgres)
+
+`SymbolIndex.scala` holds the queries, `SymbolSearch.scala` the orchestration,
+`Db.scala` the pool, and `src/main/resources/db/migration` the schema.
+
+- Schema: `artifact` (one row per groupId:artifactId, with `indexed_version`)
+  and `symbol` (`artifact_id`, `fqn`, generated lower-case simple `name`).
+  Only the newest indexed version's symbols are kept; an older version never
+  overwrites a newer one (`SymbolIndex.supersedes`, Maven version order). A
+  re-index replaces an artifact's symbols in one transaction.
+- Add schema changes as a new `V<n>__name.sql`. Never edit an applied one;
+  Flyway checksums them and the release would fail.
+- `symbol_to_artifact` tries, in order: artifact-name match
+  (`search_artifacts`), exact simple name / full name / package, full name
+  containing the query (trigram `ILIKE`), similar simple name (`pg_trgm`
+  `%`, top 20), then AI search. Containing and similar need 3+ characters
+  (trigram minimum). Each tier logs `"Symbol search"` with `match` and
+  `durationMs`.
+- `SymbolIndex.indexable` drops doc pages that aren't symbols (`index-all`,
+  `.static-page`). LIKE wildcards in queries are escaped (`escapeLike`).
+- GIN trigram indexes bloat ~4× under per-artifact rewrites; compact with
+  `reindex index concurrently symbol_fqn_trgm_idx` (and `symbol_name_trgm_idx`)
+  via `heroku pg:psql`.
+- The pool starts even if Postgres is down (`initializationFailTimeout = -1`):
+  browsing javadocs doesn't depend on the index, and search fails (logged)
+  until the database is back.
+- `MIGRATION.md` is the one-time Valkey → Postgres plan; delete it when done.
 
 
 ### Security probe filtering

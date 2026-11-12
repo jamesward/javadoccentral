@@ -363,13 +363,15 @@ object ExtractorSpec extends ZIOSpecDefault:
     },
     test("concurrent javadocJar calls for the same GAV deduplicate") {
       // The library's `JarCache` provides single-flight via a `Promise`-keyed
-      // map; concurrent `get`s for the same GAV all observe the same handle.
+      // map, so concurrent `get`s share one cache entry (one download). Each
+      // `get` wraps that entry in a new `JarHandle`, so compare the entry's
+      // `meta` (one instance per entry), not the handles.
       val g = gav("com.jamesward", "zio-mavencentral_3", "0.12.0")
       defer:
         val handles = ZIO.foreachPar(1 to 10)(_ => Extractor.javadocJar(g)).run
         assertTrue(
           handles.size == 10,
-          handles.forall(_ eq handles.head),
+          handles.forall(_.meta eq handles.head.meta),
         )
     } @@ TestAspect.timeout(2.minutes) @@ TestAspect.withLiveClock,
     test("parallel downloads: 20 artifacts concurrently") {

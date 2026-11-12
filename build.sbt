@@ -14,6 +14,8 @@ lazy val root = {
 
 val zioVersion = "2.1.27"
 
+val flywayVersion = "13.12.1"
+
 // Hack Alert: This is the default when not in buildpacks (i.e. `default`)
 // In buildpacks it is javadoccentral which puts it alphabetically after dev.zio.zio-constraintless_3-0.3.1.jar
 // This causes the wrong Main-Class to get picked up.
@@ -57,16 +59,23 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-cache"             % "0.3.0",
   "dev.zio" %% "zio-logging"                % "2.5.3",
   // The slf4j2 bridge is the sole slf4j provider (replaces slf4j-simple): Java
-  // library logs (Netty, Redis client, jsoup, ...) route through ZIO's logger
+  // library logs (Netty, the Postgres driver, HikariCP, Flyway, jsoup, ...) route through ZIO's logger
   // and pick up the JSON (prod) / text (dev) format from `AppLogging`.
   "dev.zio" %% "zio-logging-slf4j2-bridge" % "2.5.3",
   "dev.zio" %% "zio-direct"            % "1.0.0-RC7",
-  "dev.zio" %% "zio-redis"             % "1.3.2",
   // Keep zio-schema / zio-json binary compatible with the pinned zio-http-mcp
   // (0.12.2 validated against zio-schema 1.9.0).
-  "dev.zio" %% "zio-schema-protobuf"   % "1.9.0",
   "dev.zio" %% "zio-schema-json"       % "1.9.0",
   "dev.zio" %% "zio-schema-derivation" % "1.9.0",
+
+  // Symbol index: Postgres (pg_trgm) via magnum, schema managed by Flyway
+  // (`bin/flyway-migrate` runs in Heroku's release phase, see Procfile).
+  "dev.cheleb"      %% "zio-magnum"                 % "4.2.0",
+  "com.augustnagro" %% "magnumpg"                   % "2.0.0",
+  "com.zaxxer"       % "HikariCP"                   % "7.1.0",
+  "org.flywaydb"     % "flyway-core"                % flywayVersion,
+  "org.flywaydb"     % "flyway-database-postgresql" % flywayVersion,
+  "org.postgresql"   % "postgresql"                 % "42.7.14",
 
   "org.jsoup" % "jsoup" % "1.24.1",
 
@@ -74,7 +83,7 @@ libraryDependencies ++= Seq(
 
   "dev.zio" %% "zio-test"           % zioVersion % Test,
   "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,
-  "com.dimafeng" %% "testcontainers-scala-core" % "0.44.1" % Test,
+  "com.dimafeng" %% "testcontainers-scala-postgresql" % "0.44.1" % Test,
 
   "io.modelcontextprotocol.sdk" % "mcp-core"           % "2.1.0" % Test,
   "io.modelcontextprotocol.sdk" % "mcp-json-jackson2"  % "2.1.0" % Test,
@@ -122,7 +131,7 @@ javaOptions ++= Seq(
 
 // The Metaspace/direct-memory caps above emulate the 512MB Heroku dyno for the
 // app itself. Forked test JVMs additionally load Testcontainers + docker-java
-// (which back the Valkey-based Redis suites and AppTest), far exceeding the 96m
+// (which back the Postgres-based suites and AppTest), far exceeding the 96m
 // Metaspace cap and OOMing. Raise the cap for the Test scope only; production
 // run flags are unaffected. A later -XX:MaxMetaspaceSize on the command line
 // wins, so this overrides the inherited 96m.
@@ -130,3 +139,6 @@ Test / javaOptions += "-XX:MaxMetaspaceSize=512m"
 
 Compile / mainClass := Some("App")
 Test / mainClass := Some("AppTest")
+
+// sbt-native-packager writes a launcher per discovered main class: `bin/javadoccentral`
+// (App, the web process) and `bin/flyway-migrate` (FlywayMigrate, the release phase).
