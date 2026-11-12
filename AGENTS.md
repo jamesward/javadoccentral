@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-JavaDoc Central — a Scala web app that serves javadocs from Maven Central artifacts. Deployed on Heroku (512MB dyno). Uses ZIO ecosystem throughout.
+JavaDoc Central — a Scala web app that serves javadocs from Maven Central artifacts. Deployed on Heroku (one Standard-2X dyno, 1GB). Uses ZIO ecosystem throughout.
 
 ## Build Instructions
 
@@ -174,14 +174,15 @@ Evals of agents using this server (Spring AI agents on gpt-oss-120b, see the
 
 ## MCP client IP logging
 
-`Web.withClientIp` wraps the zio-http-mcp routes with a `clientIp` log
-annotation, so every log zio-http-mcp emits while handling a request
-(`MCP initialize`, `server/discover`, `tools/call`, …) carries it as a JSON
-field for per-client protocol usage reports. It uses zio-http-guard's
-`BadActorMiddleware.forwardedFor`: the **last** `X-Forwarded-For` value is the
-one the Heroku router appended (earlier values are client-supplied and
-spoofable). Keep this in the app, not zio-http-mcp: which hop to trust depends
-on the deployment.
+zio-http-guard's `Guard` (applied outermost in `Web.appWithMiddleware`)
+annotates every log line of a request with `client_ip`, including the lines
+zio-http-mcp emits (`MCP initialize`, `server/discover`, `tools/call`, …), so
+per-client protocol usage reports group by `client_ip`. (Before Nov 2026 the
+MCP lines also carried a `clientIp` field from a now-removed wrapper.) The IP
+is the `GUARD_TRUSTED_HOPS`-th value from the end of `X-Forwarded-For`
+(default 1: the value the Heroku router appended; earlier values are
+client-supplied and spoofable). With `GUARD_MODE=off` the guard, and so
+`client_ip`, is skipped.
 
 ## MCP spec conformance
 
@@ -427,7 +428,11 @@ file, avoid `split(...).toList`/`List.from(array)`; use an `Iterator` (e.g.
 
 ### Heroku Constraints
 
-- 512MB memory quota (includes JVM heap + page cache from disk files + swap)
+- 1GB memory quota on the Standard-2X `web` dyno (includes JVM heap +
+  off-heap RSS + page cache from disk files + swap). In Nov 2026 it sat at
+  ~1,000MB: ~800MB RSS (only ~310MB of it heap + non-heap) and ~200MB page
+  cache. The JVM caps in `build.sbt` (`MaxMetaspaceSize=96m`,
+  `MaxDirectMemorySize=96m`) date from the old 512MB dyno.
 - Ephemeral filesystem — extracted jars on disk contribute to page cache memory pressure
 - Single dyno (`web.1`) — all traffic hits one instance
 - 30-second request timeout (H12 error)
@@ -473,15 +478,21 @@ file, avoid `split(...).toList`/`List.from(array)`; use an `Iterator` (e.g.
 
 ### Security probe filtering
 
-`Web.appWithMiddleware` applies `zio-http-guard`'s `BadActorMiddleware` before
-browse routes can interpret arbitrary paths as Maven coordinates. Keep generic
-probe classification in `zio-http-guard`'s `defaultSuspect`, not as a growing
-list of javadoccentral routes:
+All flood, crawler and probe handling goes through zio-http-guard's `Guard`,
+configured in `JavadocsGuard` (detectors: `probe-shape`, `new-key`,
+`client-hints`) and tuned with `GUARD_*` config vars. Don't add separate
+limiter middleware (the old `BadActorMiddleware` and per-User-Agent
+`CrawlerLimiter` were removed: the latter 429'd Googlebot on cached pages).
+The guard runs before browse routes can interpret arbitrary paths as Maven
+coordinates. Keep generic probe classification in `zio-http-guard`'s
+`defaultSuspect` (used by `probe-shape`), not as a growing list of
+javadoccentral routes:
 
 - Match stable path shapes/segments (hidden files such as `.env*` anywhere in
   the path, dynamic scripts, CMS/debug probes), rather than only exact paths.
-- A suspect request must return a cheap 404 before the protected handler runs;
-  repeated probes still escalate to the guard's tarpit response.
+- A probe gets a cheap 404 before the protected handler runs, and flags the
+  client: its later requests get the guard's block response (a tiny `200`)
+  for `GUARD_FLAG_FOR` (10m).
 - Include negative matcher tests for valid Maven coordinates and nested javadoc
   resources. In particular, preserve root `/.well-known` endpoints and avoid
   treating group IDs such as `com.php` or classes such as `Environment.html`,

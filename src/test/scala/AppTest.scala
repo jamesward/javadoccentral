@@ -1,4 +1,3 @@
-import com.jamesward.zio_http_guard.{BadActor, CrawlerLimiter}
 import com.jamesward.zio_mavencentral.MavenCentral
 import zio.*
 import zio.http.*
@@ -22,8 +21,6 @@ object AppTest extends ZIOAppDefault:
       PostgresContainer.freshDatabase,
       SymbolIndex.layer,
       SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
-      BadActor.live,
-      CrawlerLimiter.layer[MavenCentral.GroupArtifactVersion],
       JavadocsGuard.layer,
       App.symbolSearchGuardLayer,
     )

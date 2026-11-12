@@ -1,4 +1,3 @@
-import com.jamesward.zio_http_guard.{BadActor, BadActorMiddleware, CrawlerLimiter}
 import com.jamesward.zio_mavencentral.MavenCentral
 import com.jamesward.zio_mavencentral.MavenCentral.given
 import zio.*
@@ -247,70 +246,23 @@ object AppSpec extends ZIOSpecDefault:
           resp.header(Header.ContentType).exists(_.mediaType.matches(MediaType.application.json)),
           body == """{"version":"4.0.0"}""",
         )
-    , test("rate limit bad actors"):
+    , test("probe paths get a 404, then the client is blocked"):
+      // Its own IP: the guard flags it, and the suite shares one guard.
+      val prober = Header.Custom("X-Forwarded-For", "192.168.1.200")
+      val other = Header.Custom("X-Forwarded-For", "192.168.1.201")
       defer:
-        val forwardedBadActorHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
-
-        // Make 5 requests ending in .php - these should return not found
-        val phpResponses = ZIO.foreach(1 to 5): i =>
-          val request = Request.get(URL(Path.root / s"test$i.php")).addHeader(forwardedBadActorHeader)
-          Web.appWithMiddleware.runZIO(request)
-        .run
-
-        // The 6th request should trigger the slow gibberish response
-        val forwardedBadActorMultipleHeader = Header.Custom("X-Forwarded-For", "192.168.1.101,192.168.1.100")
-        val slowRequest = Request.get(URL(Path.root / "trigger.php")).addHeader(forwardedBadActorMultipleHeader)
-
-        val slowResponse = Web.appWithMiddleware.runZIO(slowRequest).run
-
-        val bodyFork = slowResponse.body.asString.timed.fork.run
-
-        // we can't just move the clock once as that won't trigger the interrupt
-        TestClock.adjust(1.second).forever.fork.run
-
-        val (duration, body) = bodyFork.join.run
-
-        val forwardedGoodActorHeader = Header.Custom("X-Forwarded-For", "192.168.1.101")
-        val goodActorRequest = Request.get(URL(Path.root)).addHeader(forwardedGoodActorHeader)
-        val goodActorResponse = Web.appWithMiddleware.runZIO(goodActorRequest).run
+        val probe = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root / ".env")).addHeader(prober)).run
+        val afterProbe = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root)).addHeader(prober)).run
+        val afterProbeBody = afterProbe.body.asString.run
+        val otherClient = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root)).addHeader(other)).run
+        val otherClientBody = otherClient.body.asString.run
 
         assertTrue(
-          phpResponses.forall(_.status == Status.NotFound),
-          slowResponse.status == Status.Ok,
-          duration.toSeconds >= 25,
-          body.nonEmpty,
-          goodActorResponse.status == Status.Ok,
-        )
-    , test("gibberish"):
-      defer:
-        val gibberishFromStreamFork = BadActorMiddleware.gibberishStream.runCollect.timed.fork.run
-        // we can't just move the clock once as that won't trigger the interrupt
-        TestClock.adjust(1.second).forever.fork.run
-        val (duration, gibberish) = gibberishFromStreamFork.join.run
-
-        assertTrue(
-          duration.toSeconds >= 30,
-          !gibberish.isEmpty,
-        )
-    , test("crawler rate limit: one GAV per crawler, other GAVs get 429"):
-      val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
-      val bot = Header.Custom("User-Agent", "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)")
-      val gav1 = Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "index.html"
-      val gav1File = Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "org" / "webjars" / "package-summary.html"
-      val gav2 = Path.root / "org.webjars" / "jquery" / "3.7.1" / "index.html"
-      defer:
-        val firstGav = Web.appWithMiddleware.runZIO(Request.get(URL(gav1)).addHeader(forwardedForHeader).addHeader(bot)).run
-        val sameGavOtherFile = Web.appWithMiddleware.runZIO(Request.get(URL(gav1File)).addHeader(forwardedForHeader).addHeader(bot)).run
-        val otherGav = Web.appWithMiddleware.runZIO(Request.get(URL(gav2)).addHeader(forwardedForHeader).addHeader(bot)).run
-        // non-crawler bypasses the limiter entirely
-        val nonCrawlerSameGav = Web.appWithMiddleware.runZIO(Request.get(URL(gav2)).addHeader(forwardedForHeader)).run
-
-        assertTrue(
-          firstGav.status == Status.Ok,
-          sameGavOtherFile.status == Status.Ok,
-          otherGav.status == Status.TooManyRequests,
-          otherGav.header(Header.RetryAfter).isDefined,
-          nonCrawlerSameGav.status != Status.TooManyRequests,
+          probe.status == Status.NotFound,
+          afterProbe.status == Status.Ok,
+          afterProbeBody.isEmpty,
+          otherClient.status == Status.Ok,
+          otherClientBody.nonEmpty,
         )
 
     , test("loading an index.html populates the symbol index so later search finds the artifact"):
@@ -577,8 +529,6 @@ object AppSpec extends ZIOSpecDefault:
     PostgresContainer.freshDatabase,
     SymbolIndex.layer,
     SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
-    BadActor.live,
-    CrawlerLimiter.layer[MavenCentral.GroupArtifactVersion],
     JavadocsGuard.layer,
       App.symbolSearchGuardLayer,
     // Test-level Scope: `Handler#runZIO` returns `ZIO[Scope & R, ...]`,

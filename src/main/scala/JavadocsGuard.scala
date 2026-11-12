@@ -1,3 +1,4 @@
+import com.jamesward.zio_http_guard.BadActorMiddleware
 import com.jamesward.zio_http_guard.guard.*
 import com.jamesward.zio_mavencentral.{GavCacheMiddleware, MavenCentral}
 import zio.*
@@ -11,8 +12,13 @@ import zio.http.*
  * yet cached is a javadoc jar download. `new-key` limits each IP to
  * `GUARD_NEW_KEYS_PER_CLIENT` (default 30) uncached GAVs per
  * `GUARD_NEW_KEYS_WINDOW` (default 10m) and answers the rest with `429`.
- * Cached GAVs never count, so browsing is free. `client-hints` blocks
- * requests whose Chrome client hints contradict their User-Agent.
+ * Cached GAVs never count, so browsing is free. `probe-shape` answers
+ * scanner paths (`.env`, `.php`, `wp-admin`, …; zio-http-guard's
+ * `BadActorMiddleware.defaultSuspect`) with a cheap `404` before any route
+ * can read them as Maven coordinates; the client is then flagged, so its
+ * later requests get the block response for `GUARD_FLAG_FOR`.
+ * `client-hints` blocks requests whose Chrome client hints contradict their
+ * User-Agent.
  * Thresholds and actions are `GUARD_*` config vars (see zio-http-guard's
  * README).
  */
@@ -37,6 +43,11 @@ object JavadocsGuard:
   private def costlyGav(request: Request): Option[MavenCentral.GroupArtifactVersion] =
     if isConditional(request) then None else browsedGav(request)
 
+  private val probeShape: Detector =
+    val reason = Reason("probe-shape")
+    Detector.pure(DetectorName("probe-shape")): (request, _) =>
+      Option.when(BadActorMiddleware.defaultSuspect(request))(Verdict(Tier.Confirmed, reason, Some(Response.notFound)))
+
   val layer: ZLayer[Extractor.JavadocCache, Config.Error, Guard] =
     ZLayer.scoped:
       for
@@ -46,7 +57,7 @@ object JavadocsGuard:
         newKeys  <- NewKeyPerClient.make(settings, costlyGav, gav => cache.cache.contains(gav).map(!_))
         guard    <- Guard.make(
                       config,
-                      Chunk(newKeys, ClientHints.detector),
+                      Chunk(probeShape, newKeys, ClientHints.detector),
                       statsKey = request => browsedGav(request).map(_.toString).orElse(Some(request.path.encode)),
                     )
       yield guard

@@ -1,4 +1,3 @@
-import com.jamesward.zio_http_guard.{BadActor, CrawlerLimiter}
 import com.jamesward.zio_mavencentral.{JarCache, MavenCentral}
 import nl.vroste.rezilience.Bulkhead
 import zio.*
@@ -176,8 +175,6 @@ object App extends ZIOAppDefault:
       Db.fromEnv,
       SymbolIndex.layer,
       SymbolSearch.herokuInferenceLayer,
-      BadActor.live,
-      CrawlerLimiter.layer[MavenCentral.GroupArtifactVersion],
       JavadocsGuard.layer,
       symbolSearchGuardLayer,
     )

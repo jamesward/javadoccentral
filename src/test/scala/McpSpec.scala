@@ -1,4 +1,3 @@
-import com.jamesward.zio_http_guard.{BadActor, CrawlerLimiter}
 import com.jamesward.zio_mavencentral.MavenCentral
 import io.modelcontextprotocol.client.McpClient
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport
@@ -274,8 +273,6 @@ object McpSpec extends ZIOSpecDefault:
       PostgresContainer.freshDatabase,
       SymbolIndex.layer,
       SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
-      BadActor.live,
-      CrawlerLimiter.layer[MavenCentral.GroupArtifactVersion],
       JavadocsGuard.layer,
       App.symbolSearchGuardLayer,
     ) @@ withLiveClock @@ timeout(3.minutes) @@ sequential

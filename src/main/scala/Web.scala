@@ -1,4 +1,3 @@
-import com.jamesward.zio_http_guard.{BadActor, BadActorMiddleware, CrawlerLimiter}
 import com.jamesward.zio_http_guard.guard.{ClientId, Guard}
 import com.jamesward.zio_mavencentral.JarCache
 import com.jamesward.zio_mavencentral.{GavCacheMiddleware, MavenCentral}
@@ -321,7 +320,7 @@ object Web:
     string("version").transformOrFailLeft(versionExtractor)(_.toString)
 
   def withVersionAndFile(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, path: Path, request: Request):
-      Handler[BadActor & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Client & MavenCentralRepo & SymbolIndex & HerokuInference & SymbolSearch.SymbolSearchGuard, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
+      Handler[Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Client & MavenCentralRepo & SymbolIndex & HerokuInference & SymbolSearch.SymbolSearchGuard, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
     trailingSlashRedirect(request).map(_.toHandler).getOrElse:
       if path.isEmpty then
         withVersion(groupId, artifactId, version, request)
@@ -727,20 +726,7 @@ object Web:
       )
 
 
-  // Annotates every log emitted while handling an MCP request (zio-http-mcp's
-  // `MCP initialize`, `server/discover`, `tools/call`, ...) with `clientIp`, so
-  // protocol usage can be reported per distinct client. On Heroku the router
-  // appends the connecting IP as the LAST `X-Forwarded-For` value (earlier
-  // values are client-supplied and spoofable); `forwardedFor` reads exactly
-  // that and falls back to the socket address locally.
-  private def withClientIp[Env](routes: Routes[Env, Response]): Routes[Env, Response] =
-    routes.transform: handler =>
-      Handler.scoped[Env]:
-        Handler.fromFunctionZIO[Request]: request =>
-          val ip = BadActorMiddleware.forwardedFor(request).getOrElse("-")
-          ZIO.logAnnotate(LogAnnotation("clientIp", ip))(handler(request))
-
-  val app: Routes[BadActor &Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Client & MavenCentralRepo & SymbolIndex & HerokuInference & SymbolSearch.SymbolSearchGuard, Response] =
+  val app: Routes[Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Client & MavenCentralRepo & SymbolIndex & HerokuInference & SymbolSearch.SymbolSearchGuard, Response] =
     // `statelessRoutes` from zio-http-mcp only registers POST/GET/DELETE on /mcp.
     // Its `GET /mcp` unconditionally 405s (the stateless transport offers no
     // server→client SSE stream). We replace *only* that exact `GET /mcp` with a
@@ -752,9 +738,11 @@ object Web:
     // 500 via `.sandbox`). Register HEAD /mcp explicitly so it mirrors GET's 405.
     val mcpGetRender = (Method.GET / "mcp").render
     val mcpBaseRoutes = MCP.mcpServer.statelessRoutes
-    val mcpRoutes = withClientIp(Routes.fromIterable(
+    // The guard annotates every log line, including zio-http-mcp's `MCP
+    // initialize` / `tools/call` lines, with `client_ip`.
+    val mcpRoutes = Routes.fromIterable(
       mcpBaseRoutes.routes.filterNot(_.routePattern.render == mcpGetRender)
-    )) ++ Routes(
+    ) ++ Routes(
       Method.GET / "mcp" -> Handler.fromFunction[Request]: request =>
         if prefersHtml(request) then
           Response.html(UI.page("Connect to the javadocs.dev MCP server", UI.mcpSetup))
@@ -770,7 +758,7 @@ object Web:
     // Content-Length header) for HEAD responses.
     val getOrHead: Method = Method.GET #| Method.HEAD
 
-    val appRoutes = Routes[BadActor & Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Client & MavenCentralRepo & SymbolIndex & HerokuInference & SymbolSearch.SymbolSearchGuard, Nothing](
+    val appRoutes = Routes[Extractor.LatestCache & Extractor.JavadocCache & Extractor.SourcesCache & Client & MavenCentralRepo & SymbolIndex & HerokuInference & SymbolSearch.SymbolSearchGuard, Nothing](
       getOrHead / Root -> Handler.fromFunctionHandler[Request](index),
       getOrHead / "favicon.ico" -> Handler.fromResource("favicon.ico").orDie,
       getOrHead / "favicon.png" -> Handler.fromResource("favicon.png").orDie,
@@ -796,16 +784,6 @@ object Web:
     )
 
     mcpRoutes ++ Api.routes ++ appRoutes
-
-  private val badActorMiddleware: HandlerAspect[BadActor, Unit] = BadActorMiddleware()
-
-  // ShapBot (from Google Cloud IPs) walks every version of artifacts; it isn't in
-  // zio-http-guard's default list.
-  private val crawlerRateLimitMiddleware: HandlerAspect[CrawlerLimiter[MavenCentral.GroupArtifactVersion], Unit] =
-    CrawlerLimiter.middleware[MavenCentral.GroupArtifactVersion](
-      req => GavCacheMiddleware.gavFromPath(req.path),
-      knownCrawlers = CrawlerLimiter.defaultKnownCrawlers + "shapbot",
-    )
 
   // GAV-immutable HTTP cache aspects come from `zio-mavencentral`'s
   // `GavCacheMiddleware`. They short-circuit `If-None-Match`/`If-Modified-
@@ -847,5 +825,5 @@ object Web:
   // or tell a script from a browser. The guard (see `JavadocsGuard`) sits
   // outermost, so every log line of a request, including "Downloading jar",
   // carries client_ip / guard_tier; it also logs a per-minute guard_stats.
-  val appWithMiddleware: Routes[Guard & CrawlerLimiter[MavenCentral.GroupArtifactVersion] & BadActor & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.LatestCache & Client & MavenCentralRepo & SymbolIndex & HerokuInference & SymbolSearch.SymbolSearchGuard, Response] =
-    app @@ badActorMiddleware @@ crawlerRateLimitMiddleware @@ immutableAssetNotModified @@ immutableAssetCacheHeaders @@ Middleware.requestLogging(loggedRequestHeaders = ClientId.identifyingHeaders) @@ headStripBody @@ Guard.fromEnvironment
+  val appWithMiddleware: Routes[Guard & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.LatestCache & Client & MavenCentralRepo & SymbolIndex & HerokuInference & SymbolSearch.SymbolSearchGuard, Response] =
+    app @@ immutableAssetNotModified @@ immutableAssetCacheHeaders @@ Middleware.requestLogging(loggedRequestHeaders = ClientId.identifyingHeaders) @@ headStripBody @@ Guard.fromEnvironment
