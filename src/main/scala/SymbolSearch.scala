@@ -96,7 +96,7 @@ object SymbolSearch:
       val workaroundForMarkdownContent = choice.message.content.replace("```json", "").replace("```", "").trim
       workaroundForMarkdownContent.fromJson[Set[MavenCentral.GroupArtifact]].getOrElse(Set.empty)
 
-  /** How a symbol query was matched, in the order they are tried. */
+  /** How a symbol query was matched. */
   enum Match derives CanEqual:
     case Exact, Containing, Similar
 
@@ -118,9 +118,14 @@ object SymbolSearch:
       )(ZIO.logInfo("Symbol search"))
     .map(_._2)
 
-  /** The first tier (exact, then containing, then similar spelling) that finds anything. */
+  /**
+   * Names containing the query (any case) first, then close spellings. An exact
+   * name match is always a containing match too, so stopping at exact matches would
+   * hide other artifacts ("jev" is one artifact's `Mode.Jev` and part of other
+   * artifacts' `JevJudge`). Queries too short for trigrams only match exactly.
+   */
   def symbolArtifacts(symbol: String): ZIO[SymbolIndex, Throwable, Set[MavenCentral.GroupArtifact]] =
-    val tiers = if symbol.trim.length >= minFuzzyLength then Match.values.toList else List(Match.Exact)
+    val tiers = if symbol.trim.length >= minFuzzyLength then List(Match.Containing, Match.Similar) else List(Match.Exact)
     ZIO.foldLeft(tiers)(Set.empty[MavenCentral.GroupArtifact]): (found, tier) =>
       if found.nonEmpty then ZIO.succeed(found) else lookup(tier, symbol)
 

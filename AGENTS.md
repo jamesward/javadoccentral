@@ -451,11 +451,13 @@ file, avoid `split(...).toList`/`List.from(array)`; use an `Iterator` (e.g.
 - Add schema changes as a new `V<n>__name.sql`. Never edit an applied one;
   Flyway checksums them and the release would fail.
 - `symbol_to_artifact` tries, in order: artifact-name match
-  (`search_artifacts`), exact simple name / full name / package, full name
-  containing the query (trigram `ILIKE`), similar simple name (`pg_trgm`
-  `%`, top 20), then AI search. Containing and similar need 3+ characters
-  (trigram minimum). Each tier logs `"Symbol search"` with `match` and
-  `durationMs`.
+  (`search_artifacts`), full name containing the query (trigram `ILIKE`),
+  similar simple name (`pg_trgm` `%`, top 20), then AI search. Don't stop at
+  exact-name matches: an exact match is always a containing match, so an
+  exact-first tier hides other artifacts (production regression: `jev`
+  returned 2 artifacts instead of 9). Queries under 3 characters (the trigram
+  minimum) only match exactly. Each tier logs `"Symbol search"` with `match`
+  and `durationMs`.
 - `SymbolIndex.indexable` drops doc pages that aren't symbols (`index-all`,
   `.static-page`). LIKE wildcards in queries are escaped (`escapeLike`).
 - GIN trigram indexes bloat ~4× under per-artifact rewrites; compact with

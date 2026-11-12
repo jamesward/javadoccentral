@@ -91,7 +91,7 @@ object SymbolIndexSpec extends ZIOSpecDefault:
           SymbolIndex.allGroupArtifacts.run == Set(databind2, databind3, nullable, springAi),
         )
     ,
-    test("symbol search falls through exact, then containing, then similar, and short queries only match exactly"):
+    test("symbol search matches containing names, then similar spellings, and short queries only match exactly"):
       defer:
         seedTwo.run
         assertTrue(
@@ -99,6 +99,16 @@ object SymbolIndexSpec extends ZIOSpecDefault:
           SymbolSearch.symbolArtifacts("udg").run == Set(judge, other),
           SymbolSearch.symbolArtifacts("JevJuge").run == Set(judge),
           SymbolSearch.symbolArtifacts("ud").run.isEmpty,
+          SymbolSearch.symbolArtifacts("Outer.Builder").run == Set(judge),
+          SymbolSearch.symbolArtifacts("com.example").run == Set(judge),
         )
+    ,
+    test("a query that is one artifact's exact simple name still finds every artifact containing it"):
+      // Production regression: "jev" is the simple name of `EvidenceFilterMode.Jev`, so an
+      // exact-first search returned that artifact alone instead of all 9 containing "jev".
+      defer:
+        SymbolIndex.replace(gav("com.example", "judge", "1.0"), Set("com.example.Mode.Jev")).run
+        SymbolIndex.replace(gav("org.other", "lib", "1.0"), Set("org.other.JevJudge")).run
+        assertTrue(SymbolSearch.symbolArtifacts("jev").run == Set(judge, other))
 
   ).provide(PostgresContainer.freshDatabase, SymbolIndex.layer)

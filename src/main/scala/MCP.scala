@@ -227,10 +227,10 @@ object MCP:
       "Finds which Maven artifact contains a given Java/Kotlin/Scala class: " +
       "resolves a class name, nested type (e.g. Outer.Builder), " +
       "fully-qualified type, or package name to the Maven Central artifacts " +
-      "(groupId, artifactId) that publish it. Matching ignores case and " +
-      "tries, in order: an exact simple name, full name or package; names " +
-      "containing the query (e.g. a nested Outer.Builder or a fragment); " +
-      "then close spellings, so a typo still finds the class. Several " +
+      "(groupId, artifactId) that publish it. Matching ignores case: every " +
+      "artifact with a class, nested type (e.g. Outer.Builder), full name or " +
+      "package containing the query is returned; if none does, close " +
+      "spellings are tried, so a typo still finds the class. Several " +
       "artifacts can contain the same simple name (e.g. a Java and a Scala " +
       "library): check each result rather than assuming the first. " +
       "Use this when you have a symbol from a stack trace, an import " +
