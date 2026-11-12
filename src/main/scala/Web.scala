@@ -1,4 +1,5 @@
 import com.jamesward.zio_http_guard.{BadActor, BadActorMiddleware, CrawlerLimiter}
+import com.jamesward.zio_http_guard.guard.{ClientId, Guard}
 import com.jamesward.zio_mavencentral.JarCache
 import com.jamesward.zio_mavencentral.{GavCacheMiddleware, MavenCentral}
 import com.jamesward.zio_mavencentral.MavenCentral.MavenCentralRepo
@@ -843,25 +844,8 @@ object Web:
     )
 
   // Request lines are logged at INFO with the headers that identify a client
-  // or tell a script from a browser, and `withClientIp` (outermost) annotates
-  // every log line of a request, including "Downloading jar", with the client
-  // IP. `TrafficStats` adds a per-minute summary of the heaviest IPs and
-  // networks.
-  private val identifyingHeaders: Set[Header.HeaderTypeBase] = Set(
-    Header.UserAgent,
-    Header.Referer,
-    Header.Accept,
-    Header.AcceptLanguage,
-    Header.AcceptEncoding,
-    Header.SchemaHeaderType[String]("X-Forwarded-For"),
-    Header.SchemaHeaderType[String]("Sec-Fetch-Site"),
-    Header.SchemaHeaderType[String]("Sec-Fetch-Mode"),
-    Header.SchemaHeaderType[String]("Sec-Fetch-Dest"),
-    Header.SchemaHeaderType[String]("Sec-CH-UA"),
-    Header.SchemaHeaderType[String]("Sec-CH-UA-Platform"),
-  )
-
-  val appWithMiddleware: Routes[TrafficStats & NewGavLimiter & CrawlerLimiter[MavenCentral.GroupArtifactVersion] & BadActor & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.LatestCache & Client & MavenCentralRepo & SymbolIndex & HerokuInference & SymbolSearch.SymbolSearchGuard, Response] =
-    withClientIp(
-      app @@ badActorMiddleware @@ crawlerRateLimitMiddleware @@ NewGavLimiter.middleware @@ immutableAssetNotModified @@ immutableAssetCacheHeaders @@ Middleware.requestLogging(loggedRequestHeaders = identifyingHeaders) @@ headStripBody @@ TrafficStats.middleware
-    )
+  // or tell a script from a browser. The guard (see `JavadocsGuard`) sits
+  // outermost, so every log line of a request, including "Downloading jar",
+  // carries client_ip / guard_tier; it also logs a per-minute guard_stats.
+  val appWithMiddleware: Routes[Guard & CrawlerLimiter[MavenCentral.GroupArtifactVersion] & BadActor & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.LatestCache & Client & MavenCentralRepo & SymbolIndex & HerokuInference & SymbolSearch.SymbolSearchGuard, Response] =
+    app @@ badActorMiddleware @@ crawlerRateLimitMiddleware @@ immutableAssetNotModified @@ immutableAssetCacheHeaders @@ Middleware.requestLogging(loggedRequestHeaders = ClientId.identifyingHeaders) @@ headStripBody @@ Guard.fromEnvironment

@@ -105,7 +105,7 @@ libraryDependencies += "nl.vroste" %% "rezilience" % "0.10.6"
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioHttpGuardDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-http-guard" % "0.0.2")
+  else Seq("com.jamesward" %% "zio-http-guard" % "0.1.1")
 }
 
 Compile / packageDoc / publishArtifact := false

@@ -1,0 +1,52 @@
+import com.jamesward.zio_http_guard.guard.*
+import com.jamesward.zio_mavencentral.{GavCacheMiddleware, MavenCentral}
+import zio.*
+import zio.http.*
+
+/**
+ * javadocs.dev's configuration of zio-http-guard.
+ *
+ * Crawlers on cloud IPs walk every version of an artifact
+ * (`/com.vaadin/flow-html-components/<each version>/...`), and each GAV not
+ * yet cached is a javadoc jar download. `new-key` limits each IP to
+ * `GUARD_NEW_KEYS_PER_CLIENT` (default 30) uncached GAVs per
+ * `GUARD_NEW_KEYS_WINDOW` (default 10m) and answers the rest with `429`.
+ * Cached GAVs never count, so browsing is free. `client-hints` blocks
+ * requests whose Chrome client hints contradict their User-Agent.
+ * Thresholds and actions are `GUARD_*` config vars (see zio-http-guard's
+ * README).
+ */
+object JavadocsGuard:
+
+  // First path segments that are routes of their own, not a groupId.
+  private val nonGavRoots = Set("api", "llms", "sitemap", ".well-known", "mcp")
+
+  private given CanEqual[MavenCentral.Version, MavenCentral.Version] = CanEqual.derived
+
+  /** The GAV a browse request would fetch a jar for, if any. */
+  def browsedGav(request: Request): Option[MavenCentral.GroupArtifactVersion] =
+    if request.path.segments.headOption.exists(nonGavRoots.contains) then None
+    else
+      GavCacheMiddleware.gavFromPath(request.path)
+        .filterNot(gav => gav.version == MavenCentral.Version.latest || gav.version.toString == "badge.svg")
+
+  // Conditional requests get a 304 from `GavCacheMiddleware` before any jar is fetched.
+  private def isConditional(request: Request): Boolean =
+    request.headers.contains(Header.IfNoneMatch.name) || request.headers.contains(Header.IfModifiedSince.name)
+
+  private def costlyGav(request: Request): Option[MavenCentral.GroupArtifactVersion] =
+    if isConditional(request) then None else browsedGav(request)
+
+  val layer: ZLayer[Extractor.JavadocCache, Config.Error, Guard] =
+    ZLayer.scoped:
+      for
+        cache    <- ZIO.service[Extractor.JavadocCache]
+        config   <- ZIO.config(GuardConfig.config())
+        settings <- ZIO.config(NewKeyPerClient.settings())
+        newKeys  <- NewKeyPerClient.make(settings, costlyGav, gav => cache.cache.contains(gav).map(!_))
+        guard    <- Guard.make(
+                      config,
+                      Chunk(newKeys, ClientHints.detector),
+                      statsKey = request => browsedGav(request).map(_.toString).orElse(Some(request.path.encode)),
+                    )
+      yield guard

@@ -178,7 +178,6 @@ object App extends ZIOAppDefault:
       SymbolSearch.herokuInferenceLayer,
       BadActor.live,
       CrawlerLimiter.layer[MavenCentral.GroupArtifactVersion],
-      NewGavLimiter.layer,
-      TrafficStats.layer,
+      JavadocsGuard.layer,
       symbolSearchGuardLayer,
     )
