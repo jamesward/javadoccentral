@@ -117,9 +117,9 @@ derived from the return type's `zio-schema` `Schema` by `zio-http-mcp`'s
   is nested under a single `result` property. The MCP spec requires
   `outputSchema` to be `{"type":"object"}` and `structuredContent` to be a JSON
   object, so `search_artifacts` / `symbol_to_artifact` (`Set[GroupArtifact]`),
-  `list_source_files` (`Set[String]`), `list_javadoc_symbols`
-  (`Set[Content]`) and `get_latest_version` (`Version`) all return
-  `{"result": …}`.
+  `list_source_files` (`Set[SourceFile]`: `link` + `sizeBytes`),
+  `list_javadoc_symbols` (`Set[Content]`) and `get_latest_version` (`Version`)
+  all return `{"result": …}`.
 - `JsonSchemaGen` auto-generates a `description` for collection schemas from the
   collection kind + element type (e.g. `Set[Foo]` → "a set of Foo") and emits a
   `description` from any `zio-schema` `@description` annotation on records/fields.
@@ -163,6 +163,12 @@ Evals of agents using this server (Spring AI agents on gpt-oss-120b, see the
   chrome, unwraps external/self links, and with `LinkBase.Jar` (MCP/API) rewrites
   the rest to jar paths an agent can pass back as `link`; the browse markdown path
   (`Web.withFile`) uses `LinkBase.Page` so links stay valid at the page URL.
+- **Big source files overflowed agents' tool output** (magnum's 30 KB
+  `DbCodec.scala` went over a 30,000-character limit). `list_source_files` gives
+  each file's `sizeBytes` (from the jar's central directory, via
+  zio-mavencentral's `JarHandle.filterEntrySizes`), and `get_source_file` takes
+  `grep` (case-insensitive regex, literal if invalid) and `startLine`/`endLine`,
+  returning numbered lines (`Extractor.selectLines`).
 - **`index.html` is often a shell**: a frameset (Java 8 and earlier) or a `Refresh`
   redirect (single-module modern javadoc). `Extractor.indexTarget` follows it.
 - **Network failures were defects**: `JarCache.httpDownloader` died on any
@@ -386,7 +392,9 @@ calls on an `Array` can silently resolve through `Optional` instead of
 only because of an `.nn`, and `filterContents` then matched nothing. In that
 file, avoid `split(...).toList`/`List.from(array)`; use an `Iterator` (e.g.
 `"\\S+".r.findAllIn(text).toList`) and cover such helpers with a pure test
-(`SearchQuerySpec`).
+(`SearchQuerySpec`). The same
+conversion makes `String.nonEmpty` always true (a non-null `Optional`); use
+`!s.isEmpty`.
 
 ### Error Handling
 
@@ -473,7 +481,6 @@ file, avoid `split(...).toList`/`List.from(array)`; use an `Iterator` (e.g.
 - The pool starts even if Postgres is down (`initializationFailTimeout = -1`):
   browsing javadocs doesn't depend on the index, and search fails (logged)
   until the database is back.
-- `MIGRATION.md` is the one-time Valkey → Postgres plan; delete it when done.
 
 
 ### Security probe filtering

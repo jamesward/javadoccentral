@@ -73,7 +73,7 @@ object Api:
       .query[GroupId]("groupId")
       .query[ArtifactId]("artifactId")
       .query[Version]("version")
-      .out[Set[String]]
+      .out[Set[Extractor.SourceFile]]
       .outError[ApiError](Status.NotFound)
       .??(Doc.p(MCP.Descriptions.listSourceFiles))
 
@@ -83,6 +83,9 @@ object Api:
       .query[ArtifactId]("artifactId")
       .query[Version]("version")
       .query[String]("link")
+      .query[Option[Int]]("startLine")
+      .query[Option[Int]]("endLine")
+      .query[Option[String]]("grep")
       .out[String]
       .outError[ApiError](Status.NotFound)
       .??(Doc.p(MCP.Descriptions.getSourceFile))
@@ -143,10 +146,9 @@ object Api:
       ZIO.scoped(Extractor.sourceContents(GroupArtifactVersion(g, a, v))).mapError(apiError(ErrorMessages.jar(Jar.Sources)))
 
   private val sourceFileRoute =
-    sourceFileEndpoint.implement: (input: (GroupId, ArtifactId, Version, String)) =>
-      val (g, a, v, link) = input
-      ZIO.scoped(Extractor.sourceFileContents(GroupArtifactVersion(g, a, v), link))
-        .mapError(apiError(ErrorMessages.entry(Jar.Sources)))
+    sourceFileEndpoint.implement: (input: (GroupId, ArtifactId, Version, String, Option[Int], Option[Int], Option[String])) =>
+      val (g, a, v, link, startLine, endLine, grep) = input
+      MCP.sourceFile(MCP.SourceFileQuery(g, a, v, link, startLine, endLine, grep)).mapError(ApiError(_))
 
   private val searchArtifactsRoute =
     searchArtifactsEndpoint.implement: (query: String) =>

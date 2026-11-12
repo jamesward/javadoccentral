@@ -96,7 +96,7 @@ libraryDependencies ++= {
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioMavenCentralDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-mavencentral" % "0.16.0")
+  else Seq("com.jamesward" %% "zio-mavencentral" % "0.17.0")
 }
 
 // Used directly for bulkheads. Keep on the version zio-mavencentral is built

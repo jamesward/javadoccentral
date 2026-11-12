@@ -62,6 +62,27 @@ object MCP:
     link: String,
   ) derives Schema
 
+  @description("One source file inside an artifact's sources jar, optionally narrowed to a line range or to matching lines.")
+  case class SourceFileQuery(
+    @description("The Maven groupId, e.g. \"dev.zio\".")
+    groupId: GroupId,
+    @description("The Maven artifactId, e.g. \"zio_3\".")
+    artifactId: ArtifactId,
+    @description("The artifact version, e.g. \"2.1.9\".")
+    version: Version,
+    @description("The path of the file within the sources jar, as returned by list_source_files.")
+    link: String,
+    @description("Optional. First line to return (1-based, inclusive). Omit to start at line 1.")
+    startLine: Option[Int] = None,
+    @description("Optional. Last line to return (1-based, inclusive). Omit to read to the end of the file.")
+    endLine: Option[Int] = None,
+    @description("Optional. Only return lines matching this case-insensitive regex (matched as plain text if it " +
+      "is not a valid regex), e.g. \"def apply\" or \"class .*Codec\". Combine with startLine/endLine to " +
+      "search part of the file.")
+    grep: Option[String] = None,
+  ) derives Schema:
+    def gav: GroupArtifactVersion = GroupArtifactVersion(groupId, artifactId, version)
+
   // Every tool error is turned into an agent-facing message by ErrorMessages
   // (shared with the REST API), so the MCP surface only ever fails with a String.
   given McpError[String] with
@@ -113,6 +134,12 @@ object MCP:
           s"The page '${e.path}' in the ${kind.name} jar for ${coordinates(e.groupArtifactVersion)} " +
             "could not be converted to text."
         case e: (NotFoundError | JarCache.UpstreamCorruptError | JarCache.UpstreamUnavailableError) => jar(kind)(e)
+
+    def lines(gav: GroupArtifactVersion)(e: Extractor.LineRangeError): String =
+      val requested = List(e.startLine.map(n => s"startLine=$n"), e.endLine.map(n => s"endLine=$n")).flatten.mkString(" ")
+      s"'${e.path}' in the sources jar for ${coordinates(gav)} has ${e.totalLines} lines, so $requested " +
+        s"selects none. Pass 1 <= startLine <= endLine (endLine past ${e.totalLines} reads to the end), " +
+        "or omit both to read the whole file."
 
     def search(e: SearchError): String = e.message
 
@@ -190,8 +217,10 @@ object MCP:
 
     val listSourceFiles: String =
       "Lists the raw source files (`.java`, `.kt`, and `.scala`) in a Maven " +
-      "Central artifact version's `-sources.jar`. Each returned path can be " +
-      "passed to get_source_file to read the actual source code. Use " +
+      "Central artifact version's `-sources.jar`. Each entry's `link` can be " +
+      "passed to get_source_file to read the actual source code, and its " +
+      "`sizeBytes` tells you whether to read the whole file or only part of " +
+      "it (with get_source_file's `grep` or line range). Use " +
       "this only when you need the implementation — for example, to trace " +
       "behavior or see how something is wired. To discover which classes " +
       "exist, or to find classes by topic or name, use " +
@@ -208,7 +237,11 @@ object MCP:
       "implementation, finding a definition, or comparing two library " +
       "versions. Strongly preferred over locating the jar in a local " +
       "build cache and unzipping it: it works for any Maven Central " +
-      "artifact, no local checkout or build needed."
+      "artifact, no local checkout or build needed. Large files (list_source_files " +
+      "gives each file's `sizeBytes`; over about 20000 bytes) can exceed your " +
+      "tool-output limit: pass `grep` to find the lines " +
+      "you need (each result line is numbered), then `startLine`/`endLine` " +
+      "to read the surrounding code. Without them the whole file is returned."
 
     val searchArtifacts: String =
       "Finds Maven coordinates from part of a library name: searches the " +
@@ -300,12 +333,17 @@ object MCP:
   val getSourceFileTool = McpTool("get_source_file")
     .description(Descriptions.getSourceFile)
     .annotations(title = Some("Read source file"), readOnly = True, destructive = False, idempotent = True, openWorld = True)
-    .handle: (input: JavadocSymbol) =>
-      val groupArtifactVersion = GroupArtifactVersion(input.groupId, input.artifactId, input.version)
+    .handle: (input: SourceFileQuery) =>
       logMcp("get_source_file", input.toString):
-        ZIO.scoped:
-          Extractor.sourceFileContents(groupArtifactVersion, input.link)
+        sourceFile(input)
+
+  /** The source file, narrowed as `query` asks; shared with the REST API. */
+  def sourceFile(query: SourceFileQuery): ZIO[Extractor.SourcesCache & zio.http.Client & MavenCentralRepo, String, String] =
+    ZIO.scoped(Extractor.sourceFileContents(query.gav, query.link))
       .mapError(ErrorMessages.entry(ErrorMessages.Jar.Sources))
+      .flatMap: text =>
+        ZIO.fromEither(Extractor.selectLines(query.link, text, query.startLine, query.endLine, query.grep))
+          .mapError(ErrorMessages.lines(query.gav))
 
   val searchArtifactsTool = McpTool("search_artifacts")
     .description(Descriptions.searchArtifacts)

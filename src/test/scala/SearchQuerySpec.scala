@@ -65,4 +65,22 @@ object SearchQuerySpec extends ZIOSpecDefault:
         Extractor.filterContents(all, Some("  ")).map(_.fqn) == all.map(_.fqn),
         Extractor.filterContents(all, Some("NoSuchType")).isEmpty,
       )
+    ,
+    test("selectLines narrows a source file to numbered lines by range and/or grep"):
+      val text = "package a\n\nclass Foo:\n  def apply(x: Int) = x\n  def bar = 1\n"
+      def select(start: Option[Int] = None, end: Option[Int] = None, grep: Option[String] = None) =
+        Extractor.selectLines("a/Foo.scala", text, start, end, grep)
+      assertTrue(
+        select() == Right(text),
+        select(grep = Some("")) == Right(text),
+        select(Some(3), Some(4)) == Right("Lines 3-4 of 5 in a/Foo.scala:\n3: class Foo:\n4:   def apply(x: Int) = x"),
+        select(start = Some(4), end = Some(99)) == Right("Lines 4-5 of 5 in a/Foo.scala:\n4:   def apply(x: Int) = x\n5:   def bar = 1"),
+        select(grep = Some("DEF \\w+")) == Right("2 lines match `DEF \\w+` in a/Foo.scala (5 lines):\n4:   def apply(x: Int) = x\n5:   def bar = 1"),
+        // Not a valid regex, so matched literally.
+        select(grep = Some("apply(")) == Right("1 line matches `apply(` in a/Foo.scala (5 lines):\n4:   def apply(x: Int) = x"),
+        select(Some(1), Some(3), Some("def")) == Right("No lines match `def` in a/Foo.scala (lines 1-3) (5 lines)."),
+        select(start = Some(6)) == Left(Extractor.LineRangeError("a/Foo.scala", 5, Some(6), None)),
+        select(Some(4), Some(2)).isLeft,
+        select(start = Some(0)).isLeft,
+      )
   )

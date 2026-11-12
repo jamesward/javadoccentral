@@ -358,7 +358,8 @@ object ExtractorSpec extends ZIOSpecDefault:
           // jar entries: META-INF/MANIFEST.MF + the source file (directory entries
           // are filtered by sourceContents).
           contents.size >= 2,
-          contents.contains("com/jamesward/zio_mavencentral/MavenCentral.scala")
+          contents.exists(file => file.link == "com/jamesward/zio_mavencentral/MavenCentral.scala" && file.sizeBytes.exists(_ > 10000)),
+          contents.forall(_.sizeBytes.isDefined),
         )
     },
     test("concurrent javadocJar calls for the same GAV deduplicate") {

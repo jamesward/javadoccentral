@@ -127,6 +127,7 @@ object McpSpec extends ZIOSpecDefault:
           assertTrue(
             toolList.find(_.name() == "list_javadoc_symbols").exists(_.outputSchema().toString.contains("Fully-qualified name of the documented symbol")),
             toolList.find(_.name() == "search_artifacts").exists(_.outputSchema().toString.contains("The Maven groupId")),
+            toolList.find(_.name() == "list_source_files").exists(_.outputSchema().toString.contains("Uncompressed size in bytes")),
           )
       ,
 
@@ -212,6 +213,40 @@ object McpSpec extends ZIOSpecDefault:
         yield
           val text = resultText(result)
           assertIsError(result) && assertTrue(text.contains("sources jar"), text.contains("list_source_files"))
+      ,
+      test("get_source_file grep and line range narrow a file and are optional inputs"):
+        val file = java.util.Map.of[String, Object]("groupId", "com.jamesward", "artifactId", "zio-mavencentral_3", "version", "0.12.0",
+          "link", "com/jamesward/zio_mavencentral/MavenCentral.scala")
+        def withArgs(extra: (String, Object)*): java.util.Map[String, Object] =
+          val args = java.util.HashMap[String, Object](file)
+          extra.foreach((k, v) => args.put(k, v))
+          args
+        for
+          port  <- Server.install(Web.appWithMiddleware)
+          tools <- withClient(port)(_.listTools().tools())
+          (whole, grepped, range, badRange) <- withClient(port): client =>
+            (
+              resultText(callTool(client, "get_source_file", file)),
+              resultText(callTool(client, "get_source_file", withArgs("grep" -> "DEF LATEST("))),
+              resultText(callTool(client, "get_source_file", withArgs("startLine" -> Integer.valueOf(1), "endLine" -> Integer.valueOf(3)))),
+              callTool(client, "get_source_file", withArgs("startLine" -> Integer.valueOf(100000))),
+            )
+        yield
+          import scala.jdk.CollectionConverters.*
+          val schema = tools.asScala.find(_.name() == "get_source_file").get.inputSchema()
+          val required = Option(schema.get("required")).map(_.asInstanceOf[java.util.List[String]].asScala.toSet).getOrElse(Set.empty)
+          val properties = schema.get("properties").toString
+          val grepLines = grepped.linesIterator.drop(1).toList
+          assertTrue(
+            List("startLine", "endLine", "grep").forall(properties.contains),
+            required == Set("groupId", "artifactId", "version", "link"),
+            grepped.linesIterator.next().contains(" match"),
+            grepLines.nonEmpty,
+            grepLines.forall(line => line.matches("^\\d+: .*") && line.toLowerCase.contains("def latest(")),
+            range.linesIterator.next().startsWith("Lines 1-3 of "),
+            range.linesIterator.drop(1).toList == whole.linesIterator.take(3).toList.zipWithIndex.map((l, i) => s"${i + 1}: $l"),
+            resultText(badRange).contains("startLine=100000"),
+          ) && assertIsError(badRange)
       ,
 
       // --- get_latest_version pre-releases ---

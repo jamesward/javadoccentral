@@ -461,8 +461,9 @@ object AppSpec extends ZIOSpecDefault:
           "list-source-files", "groupId" -> gid, "artifactId" -> aid, "version" -> ver,
         )).addHeader(ff)).run
         val sourceListBody = sourceListResp.body.asString.run
-        val sourcePaths = ZIO.fromEither(sourceListBody.fromJson[Set[String]])
+        val sourceFiles = ZIO.fromEither(sourceListBody.fromJson[List[zio.json.ast.Json.Obj]])
           .orDieWith(message => new RuntimeException(message)).run
+        val sourcePaths = sourceFiles.flatMap(_.get("link").flatMap(_.asString))
         val sourceLink = ZIO.fromOption(sourcePaths.find(path => path.endsWith(".java") || path.endsWith(".scala")))
           .orDieWith(_ => new RuntimeException("sources jar contained no Java/Scala source file")).run
 

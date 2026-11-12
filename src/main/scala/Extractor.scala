@@ -55,6 +55,15 @@ object Extractor:
     extra: String,
   ) derives Schema
 
+  @description("One file in a library's sources jar.")
+  case class SourceFile(
+    @description("Path of the file within the sources jar. Pass it as `link` to get_source_file to read it.")
+    link: String,
+    @description("Uncompressed size in bytes, if the jar records it. Files over about 20000 bytes may exceed your " +
+      "tool-output limit: read them with get_source_file's `grep` or `startLine`/`endLine`.")
+    sizeBytes: Option[Long],
+  ) derives Schema
+
   /** Caches `GroupArtifact -> latest Version` lookups so a single resolution
    *  is shared by concurrent callers and reused across requests for an hour. */
   case class LatestCache(cache: Cache[GroupArtifact, GroupIdOrArtifactIdNotFoundError | LatestNotFound, Version])
@@ -225,14 +234,59 @@ object Extractor:
     val lower = fqn.toLowerCase.nn
     terms.forall(term => lower.contains(term))
 
+  /** `startLine` / `endLine` that select no line of a file with `totalLines` lines. */
+  case class LineRangeError(path: String, totalLines: Int, startLine: Option[Int], endLine: Option[Int]) derives CanEqual
+
+  /**
+   * Narrows a source file to a 1-based, inclusive line range and/or the lines
+   * matching `grep` (a case-insensitive regex, or literal text if it isn't a
+   * valid regex), numbering each line (`42: text`) so a match can be followed by
+   * a range read. A 30 KB file is over many agents' tool-output limit, which
+   * otherwise left them grepping a saved overflow file. Without a range or grep
+   * the text is returned unchanged.
+   */
+  def selectLines(path: String, text: String, startLine: Option[Int], endLine: Option[Int], grep: Option[String]): Either[LineRangeError, String] =
+    // `!_.isEmpty`, not `_.nonEmpty`: under AllValuesAreNullable a String's
+    // `nonEmpty` resolves through `Optional` (non-null, so always true).
+    val pattern = grep.filter(!_.isEmpty)
+    if startLine.isEmpty && endLine.isEmpty && pattern.isEmpty then Right(text)
+    else
+      // `linesIterator`, not `split`: see `filterContents` on AllValuesAreNullable.
+      val lines = text.linesIterator.toVector
+      val total = lines.size
+      val start = startLine.getOrElse(1)
+      val end   = endLine.fold(total)(_.min(total))
+      if start < 1 || start > end then Left(LineRangeError(path, total, startLine, endLine))
+      else
+        val numbered = lines.slice(start - 1, end).zipWithIndex.map((line, i) => (start + i, line))
+        val selected = pattern.fold(numbered)(p => numbered.filter((_, line) => lineMatcher(p)(line)))
+        val range    = if start == 1 && end == total then "" else s" (lines $start-$end)"
+        val header = pattern match
+          case None    => s"Lines $start-$end of $total in $path:"
+          case Some(p) if selected.isEmpty => s"No lines match `$p` in $path$range ($total lines)."
+          case Some(p) =>
+            val matches = if selected.size == 1 then "line matches" else "lines match"
+            s"${selected.size} $matches `$p` in $path$range ($total lines):"
+        Right((header +: selected.map((n, line) => s"$n: $line")).mkString("\n"))
+
+  private def lineMatcher(pattern: String): String => Boolean =
+    try
+      val regex = java.util.regex.Pattern.compile(pattern, java.util.regex.Pattern.CASE_INSENSITIVE).nn
+      line => regex.matcher(line).nn.find()
+    catch
+      case _: java.util.regex.PatternSyntaxException =>
+        val lower = pattern.toLowerCase.nn
+        line => line.toLowerCase.nn.contains(lower)
+
   def sourceContents(groupArtifactVersion: GroupArtifactVersion):
-      ZIO[SourcesCache & Client & MavenCentralRepo, JarError, Set[String]] =
+      ZIO[SourcesCache & Client & MavenCentralRepo, JarError, Set[SourceFile]] =
     defer:
       val cache  = ZIO.service[SourcesCache].run
       val handle = cache.get(groupArtifactVersion).run
       // Mimic the previous Files.walk-of-regular-files semantics: ZipFile
       // entries that look like directories (trailing '/') are excluded.
-      handle.filterEntryNames(name => !name.endsWith("/")).run
+      val sizes = handle.filterEntrySizes(name => !name.endsWith("/")).run
+      sizes.map(SourceFile(_, _)).toSet
 
   /** How the links that survive in a page converted to markdown are written. */
   enum LinkBase:
