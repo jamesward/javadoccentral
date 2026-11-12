@@ -47,26 +47,26 @@ scalacOptions ++= {
   }
 }
 
-scalaVersion := "3.10.0"
+scalaVersion := "3.10.1"
 
 // SkillsJars
 skillsJarsOutputDir := Some(file(".kiro/skills"))
-libraryDependencies += "com.jamesward" % "skills" % "0.0.24" % Skills
+libraryDependencies += "com.jamesward" % "skills" % "0.0.26" % Skills
 
 libraryDependencies ++= Seq(
   "dev.zio" %% "zio"                   % zioVersion,
   "dev.zio" %% "zio-concurrent"        % zioVersion,
   "dev.zio" %% "zio-cache"             % "0.3.0",
-  "dev.zio" %% "zio-logging"                % "2.5.3",
+  "dev.zio" %% "zio-logging"                % "2.5.4",
   // The slf4j2 bridge is the sole slf4j provider (replaces slf4j-simple): Java
   // library logs (Netty, the Postgres driver, HikariCP, Flyway, jsoup, ...) route through ZIO's logger
   // and pick up the JSON (prod) / text (dev) format from `AppLogging`.
-  "dev.zio" %% "zio-logging-slf4j2-bridge" % "2.5.3",
+  "dev.zio" %% "zio-logging-slf4j2-bridge" % "2.5.4",
   "dev.zio" %% "zio-direct"            % "1.0.0-RC7",
   // Keep zio-schema / zio-json binary compatible with the pinned zio-http-mcp
-  // (0.12.2 validated against zio-schema 1.9.0).
-  "dev.zio" %% "zio-schema-json"       % "1.9.0",
-  "dev.zio" %% "zio-schema-derivation" % "1.9.0",
+  // (0.13.2 is built against zio-schema 1.9.0).
+  "dev.zio" %% "zio-schema-json"       % "1.9.1",
+  "dev.zio" %% "zio-schema-derivation" % "1.9.1",
 
   // Symbol index: Postgres (pg_trgm) via magnum, schema managed by Flyway
   // (`bin/flyway-migrate` runs in Heroku's release phase, see Procfile).
@@ -91,7 +91,7 @@ libraryDependencies ++= Seq(
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioHttpMcpDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-http-mcp" % "0.12.2")
+  else Seq("com.jamesward" %% "zio-http-mcp" % "0.13.2")
 }
 
 libraryDependencies ++= {
