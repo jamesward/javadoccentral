@@ -264,6 +264,25 @@ object AppSpec extends ZIOSpecDefault:
           otherClient.status == Status.Ok,
           otherClientBody.nonEmpty,
         )
+    , test("MCP OAuth discovery under /mcp/.well-known is not a probe"):
+      // Codex tries these before connecting; flagging them locked it out of /mcp.
+      val client = Header.Custom("X-Forwarded-For", "192.168.1.202")
+      val discovery = List(
+        Path.root / "mcp" / ".well-known" / "oauth-protected-resource",
+        Path.root / "mcp" / ".well-known" / "openid-configuration",
+        Path.root / ".well-known" / "oauth-protected-resource" / "mcp",
+      )
+      defer:
+        ZIO.foreachDiscard(discovery)(path => Web.appWithMiddleware.runZIO(Request.get(URL(path)).addHeader(client))).run
+        val home = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root)).addHeader(client)).run
+        val homeBody = home.body.asString.run
+        val stillProbe = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root / "mcp" / ".well-known" / ".env")).addHeader(client)).run
+
+        assertTrue(
+          home.status == Status.Ok,
+          homeBody.nonEmpty,
+          stillProbe.status == Status.NotFound,
+        )
 
     , test("loading an index.html populates the symbol index so later search finds the artifact"):
       // Reproduces: user loads <gav>/index.html, then searches for a substring

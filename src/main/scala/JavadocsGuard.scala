@@ -43,10 +43,19 @@ object JavadocsGuard:
   private def costlyGav(request: Request): Option[MavenCentral.GroupArtifactVersion] =
     if isConditional(request) then None else browsedGav(request)
 
+  // MCP clients' OAuth / OIDC discovery also tries `.well-known` under the
+  // endpoint (`/mcp/.well-known/oauth-protected-resource`), but
+  // `defaultSuspect` allows it only as the first segment. A probe flags the
+  // whole client, so that locked Codex out of `/mcp`: judge the path without
+  // its `.well-known` segments.
+  private def isProbe(request: Request): Boolean =
+    val path = request.path.segments.filterNot(_ == ".well-known").foldLeft(Path.root)(_ / _)
+    BadActorMiddleware.defaultSuspect(request.copy(url = request.url.path(path)))
+
   private val probeShape: Detector =
     val reason = Reason("probe-shape")
     Detector.pure(DetectorName("probe-shape")): (request, _) =>
-      Option.when(BadActorMiddleware.defaultSuspect(request))(Verdict(Tier.Confirmed, reason, Some(Response.notFound)))
+      Option.when(isProbe(request))(Verdict(Tier.Confirmed, reason, Some(Response.notFound)))
 
   val layer: ZLayer[Extractor.JavadocCache, Config.Error, Guard] =
     ZLayer.scoped:
