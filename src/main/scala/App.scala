@@ -1,5 +1,6 @@
 import com.jamesward.zio_http_guard.{BadActor, CrawlerLimiter}
 import com.jamesward.zio_mavencentral.{JarCache, MavenCentral}
+import nl.vroste.rezilience.Bulkhead
 import zio.*
 import zio.cache.{Cache, Lookup}
 import zio.concurrent.ConcurrentMap
@@ -43,11 +44,23 @@ object App extends ZIOAppDefault:
       case Exit.Failure(_) => Duration.Zero
     .map(Extractor.LatestCache(_))
 
+  // A warm entry holds an open `ZipFile` (its central directory is in heap).
+  // A crawler walking every version of an artifact touched ~7,700 jars in one
+  // dyno lifetime and kept them all warm for the old 30-minute default, which
+  // ran the heap out. Demote after 2 idle minutes; evict from disk after 6
+  // idle hours so the cache map and disk stay bounded too.
+  private val jarWarmIdleTtl: Duration   = 2.minutes
+  private val jarColdIdleTtl: Duration   = 6.hours
+  private val jarSweepInterval: Duration = 30.seconds
+
+  // Cache-miss jar fetches running at once, per cache, and how many more may
+  // wait; beyond that a miss gets a 503. See `Extractor.boundedGet`.
+  private val maxConcurrentJarFetches = 8
+  private val maxQueuedJarFetches     = 16
+
   // Cached jars live on the dyno's ephemeral disk. Each cache entry owns one
   // immutable `.jar` file plus an open `ZipFile` handle; reads are random-
-  // access into that handle. There is no eviction in normal operation —
-  // Heroku's daily dyno restart is the natural reset, and we have far more
-  // ephemeral disk (281 GB observed) than 24h of jars need (~25 GB worst-case).
+  // access into that handle (see the TTLs above for eviction).
   // Each layer instance owns a distinct directory. This matters in tests, where
   // multiple suites construct cache layers concurrently in one JVM: a shared
   // directory would let independent JarCache instances write/delete the same
@@ -60,8 +73,12 @@ object App extends ZIOAppDefault:
           cacheDir,
           JarCache.httpDownloader(gav => MavenCentral.javadocUri(gav.groupId, gav.artifactId, gav.version)),
           label = "javadoc",
+          warmIdleTtl = jarWarmIdleTtl,
+          coldIdleTtl = Some(jarColdIdleTtl),
+          sweepInterval = jarSweepInterval,
         ).run
-        new Extractor.JavadocCache(cache)
+        val misses = Bulkhead.make(maxInFlightCalls = maxConcurrentJarFetches, maxQueueing = maxQueuedJarFetches).run
+        new Extractor.JavadocCache(cache, misses)
 
   val sourcesCacheLayer: ZLayer[Client, Nothing, Extractor.SourcesCache] =
     ZLayer.scoped:
@@ -71,8 +88,12 @@ object App extends ZIOAppDefault:
           cacheDir,
           JarCache.httpDownloader(gav => MavenCentral.sourcesUri(gav.groupId, gav.artifactId, gav.version)),
           label = "sources",
+          warmIdleTtl = jarWarmIdleTtl,
+          coldIdleTtl = Some(jarColdIdleTtl),
+          sweepInterval = jarSweepInterval,
         ).run
-        new Extractor.SourcesCache(cache)
+        val misses = Bulkhead.make(maxInFlightCalls = maxConcurrentJarFetches, maxQueueing = maxQueuedJarFetches).run
+        new Extractor.SourcesCache(cache, misses)
 
   val symbolSearchGuardLayer: ZLayer[Any, Nothing, SymbolSearch.SymbolSearchGuard] =
     ZLayer.fromZIO:
@@ -190,5 +211,7 @@ object App extends ZIOAppDefault:
       SymbolSearch.herokuInferenceLayer,
       BadActor.live,
       CrawlerLimiter.layer[MavenCentral.GroupArtifactVersion],
+      NewGavLimiter.layer,
+      TrafficStats.layer,
       symbolSearchGuardLayer,
     )

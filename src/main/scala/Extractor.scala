@@ -2,6 +2,7 @@ import com.jamesward.zio_mavencentral.MavenCentral
 import com.jamesward.zio_mavencentral.MavenCentral.*
 import com.jamesward.zio_mavencentral.JarCache
 import dev.kreuzberg.htmltomarkdown.HtmlToMarkdown
+import nl.vroste.rezilience.Bulkhead
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import scala.jdk.CollectionConverters.*
@@ -64,13 +65,29 @@ object Extractor:
    * (otherwise both would be `JarCache` and `ZIO.service[JarCache]`
    * would be ambiguous).
    */
-  final class JavadocCache(val cache: JarCache):
+  final class JavadocCache(val cache: JarCache, val misses: Bulkhead):
     def get(gav: GroupArtifactVersion): ZIO[Client & MavenCentralRepo, JarError, JarCache.JarHandle] =
-      cache.get(gav)
+      boundedGet(cache, misses, gav)
 
-  final class SourcesCache(val cache: JarCache):
+  final class SourcesCache(val cache: JarCache, val misses: Bulkhead):
     def get(gav: GroupArtifactVersion): ZIO[Client & MavenCentralRepo, JarError, JarCache.JarHandle] =
-      cache.get(gav)
+      boundedGet(cache, misses, gav)
+
+  /**
+   * Cache hits go straight through. Misses (download + open) run in a
+   * rezilience [[Bulkhead]]: a crawler walking every version of an artifact
+   * otherwise starts hundreds of downloads at once, each leaving an open
+   * `ZipFile` in heap, and the dyno runs out of memory. When the bulkhead
+   * and its queue are full the request fails with
+   * [[JarCache.UpstreamUnavailableError]], which the routes already turn
+   * into a 503 with `Retry-After`. The `contains` check races with
+   * concurrent fetches, which is harmless: `JarCache.get` still dedupes.
+   */
+  private def boundedGet(cache: JarCache, misses: Bulkhead, gav: GroupArtifactVersion): ZIO[Client & MavenCentralRepo, JarError, JarCache.JarHandle] =
+    cache.contains(gav).flatMap:
+      case true  => cache.get(gav)
+      case false =>
+        misses(cache.get(gav)).mapError(_.fold(JarCache.UpstreamUnavailableError(gav, "too many jar fetches in progress"), identity))
 
   /** Re-exported library helper. Kept as a method here so existing call
    *  sites (`Extractor.latest`) compile unchanged. */

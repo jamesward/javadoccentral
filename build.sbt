@@ -90,6 +90,10 @@ libraryDependencies ++= {
   else Seq("com.jamesward" %% "zio-mavencentral" % "0.15.0")
 }
 
+// Used directly for bulkheads. Same version zio-mavencentral 0.15.0 is built
+// against: 0.10.6 is not binary compatible with it.
+libraryDependencies += "nl.vroste" %% "rezilience" % "0.10.5"
+
 libraryDependencies ++= {
   if (useLocalSubprojects && zioHttpGuardDir.exists()) Seq.empty
   else Seq("com.jamesward" %% "zio-http-guard" % "0.0.2")

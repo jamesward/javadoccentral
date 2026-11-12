@@ -26,5 +26,7 @@ object AppTest extends ZIOAppDefault:
       SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
       BadActor.live,
       CrawlerLimiter.layer[MavenCentral.GroupArtifactVersion],
+      NewGavLimiter.layer,
+      TrafficStats.layer,
       App.symbolSearchGuardLayer,
     )

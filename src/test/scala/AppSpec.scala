@@ -588,6 +588,8 @@ object AppSpec extends ZIOSpecDefault:
     SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
     BadActor.live,
     CrawlerLimiter.layer[MavenCentral.GroupArtifactVersion],
+    NewGavLimiter.layer,
+    TrafficStats.layer,
       App.symbolSearchGuardLayer,
     // Test-level Scope: `Handler#runZIO` returns `ZIO[Scope & R, ...]`,
     // so invoking the app from test bodies needs a `Scope`.

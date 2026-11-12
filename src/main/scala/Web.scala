@@ -838,5 +838,26 @@ object Web:
         case (false, response) => response
     )
 
-  val appWithMiddleware: Routes[CrawlerLimiter[MavenCentral.GroupArtifactVersion] & BadActor & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.LatestCache & Client & MavenCentralRepo & Redis & HerokuInference & SymbolSearch.SymbolSearchGuard, Response] =
-    app @@ badActorMiddleware @@ crawlerRateLimitMiddleware @@ immutableAssetNotModified @@ immutableAssetCacheHeaders @@ Middleware.requestLogging(level = _ => LogLevel.Debug, loggedRequestHeaders = Set(Header.UserAgent)) @@ headStripBody
+  // Request lines are logged at INFO with the headers that identify a client
+  // or tell a script from a browser, and `withClientIp` (outermost) annotates
+  // every log line of a request, including "Downloading jar", with the client
+  // IP. `TrafficStats` adds a per-minute summary of the heaviest IPs and
+  // networks.
+  private val identifyingHeaders: Set[Header.HeaderTypeBase] = Set(
+    Header.UserAgent,
+    Header.Referer,
+    Header.Accept,
+    Header.AcceptLanguage,
+    Header.AcceptEncoding,
+    Header.SchemaHeaderType[String]("X-Forwarded-For"),
+    Header.SchemaHeaderType[String]("Sec-Fetch-Site"),
+    Header.SchemaHeaderType[String]("Sec-Fetch-Mode"),
+    Header.SchemaHeaderType[String]("Sec-Fetch-Dest"),
+    Header.SchemaHeaderType[String]("Sec-CH-UA"),
+    Header.SchemaHeaderType[String]("Sec-CH-UA-Platform"),
+  )
+
+  val appWithMiddleware: Routes[TrafficStats & NewGavLimiter & CrawlerLimiter[MavenCentral.GroupArtifactVersion] & BadActor & Extractor.JavadocCache & Extractor.SourcesCache & Extractor.LatestCache & Client & MavenCentralRepo & Redis & HerokuInference & SymbolSearch.SymbolSearchGuard, Response] =
+    withClientIp(
+      app @@ badActorMiddleware @@ crawlerRateLimitMiddleware @@ NewGavLimiter.middleware @@ immutableAssetNotModified @@ immutableAssetCacheHeaders @@ Middleware.requestLogging(loggedRequestHeaders = identifyingHeaders) @@ headStripBody @@ TrafficStats.middleware
+    )
