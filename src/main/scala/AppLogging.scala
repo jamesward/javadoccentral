@@ -44,7 +44,11 @@ object AppLogging:
     val format  = if jsonConsole then jsonLogFormat else textLogFormat
     val cfg     = ConsoleLoggerConfig(format, LogFilter.LogLevelByNameConfig(consoleLevel, Map.empty))
     val console = if jsonConsole then consoleJsonLogger(cfg) else consoleLogger(cfg)
-    val slf4j   = Slf4jBridge.init(LogFilter.logLevelByName[Any](slf4jLevel, debugLoggers.toSeq*))
+    // Without FiberRef propagation because of https://github.com/zio/zio-logging/issues/1180:
+    // `init` runs every FiberRef's `join` on each slf4j log call, and zio-magnum's join closes
+    // the transaction's connection. The cost is that slf4j lines don't carry the calling
+    // fiber's annotations/spans. Switch back to `Slf4jBridge.init` once a fixed release is out.
+    val slf4j   = Slf4jBridge.initWithoutFiberRefPropagation(LogFilter.logLevelByName[Any](slf4jLevel, debugLoggers.toSeq*))
     Runtime.removeDefaultLoggers >>> console >>> slf4j
 
   // Dev/text: the aligned default columns, plus any `ZIO.logAnnotate` key/values
