@@ -51,6 +51,8 @@ This is a **server** project (Heroku). Build plugins: sbt-native-packager
   ```
 
   Tests hit the live Maven Central and need Docker (Postgres Testcontainers).
+  In a cloud session the Docker CLI is installed but the daemon isn't running:
+  start it with `dockerd &` (as root); Testcontainers then works.
   CI and Heroku builds (`CI` / `STACK` env) additionally enable `-opt`.
 
 ### MCP
@@ -481,6 +483,12 @@ conversion makes `String.nonEmpty` always true (a non-null `Optional`); use
 - The pool starts even if Postgres is down (`initializationFailTimeout = -1`):
   browsing javadocs doesn't depend on the index, and search fails (logged)
   until the database is back.
+- `Db.connectionTimeout` (5 s) is how long a query waits for one of the 5 pool
+  connections. Keep it well under Heroku's 30 s router timeout: at Hikari's
+  default (30 s) a busy or unreachable database turned `/sitemap/...` requests
+  into H12s. DB-backed browse routes answer 503 + `Retry-After` when the index
+  is unavailable, and the sitemaps query by group (`allGroupIds`,
+  `groupArtifactsIn`), never the whole `artifact` table per request.
 
 
 ### Security probe filtering

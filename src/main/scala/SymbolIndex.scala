@@ -83,6 +83,14 @@ object SymbolIndex:
   def allGroupArtifacts: ZIO[SymbolIndex, Throwable, Set[GroupArtifact]] =
     artifacts(sql"select group_id, artifact_id from artifact")
 
+  /** Every indexed groupId (the sitemap index). */
+  def allGroupIds: ZIO[SymbolIndex, Throwable, Set[GroupId]] =
+    withDataSource(sql"select distinct group_id from artifact".zQuery[String].map(_.map(GroupId(_)).toSet))
+
+  /** The indexed artifacts of one groupId (a group's sitemap), via the `(group_id, artifact_id)` unique index. */
+  def groupArtifactsIn(groupId: GroupId): ZIO[SymbolIndex, Throwable, Set[GroupArtifact]] =
+    artifacts(sql"select group_id, artifact_id from artifact where group_id = ${groupId.toString}")
+
   /** Artifacts whose `groupId:artifactId` contains every part (any case). No parts match nothing. */
   def groupArtifactsContainingAll(parts: List[String]): ZIO[SymbolIndex, Throwable, Set[GroupArtifact]] =
     if parts.isEmpty then ZIO.succeed(Set.empty)

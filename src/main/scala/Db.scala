@@ -54,7 +54,14 @@ object Db:
    * while Postgres is unreachable: the symbol index is an optional feature, so
    * browsing javadocs must not depend on it. Queries fail (and are logged)
    * until the database is back.
+   *
+   * `connectionTimeout` (how long a query waits for a free connection) is far
+   * below Heroku's 30 s router timeout: Hikari's default is also 30 s, so a busy
+   * or unreachable database turned sitemap and search requests into H12s
+   * instead of the handlers' own fast error responses.
    */
+  val connectionTimeout: Duration = 5.seconds
+
   def dataSourceLayer(jdbc: Jdbc, poolName: String, maxPoolSize: Int): ZLayer[Any, Throwable, DataSource] =
     ZLayer.scoped:
       ZIO.fromAutoCloseable:
@@ -66,6 +73,7 @@ object Db:
           config.setPoolName(poolName)
           config.setMaximumPoolSize(maxPoolSize)
           config.setInitializationFailTimeout(-1)
+          config.setConnectionTimeout(connectionTimeout.toMillis)
           HikariDataSource(config)
     .map(env => ZEnvironment[DataSource](env.get))
 
