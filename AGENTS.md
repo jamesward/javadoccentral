@@ -443,6 +443,18 @@ conversion makes `String.nonEmpty` always true (a non-null `Optional`); use
   ~1,000MB: ~800MB RSS (only ~310MB of it heap + non-heap) and ~200MB page
   cache. The JVM caps in `build.sbt` (`MaxMetaspaceSize=96m`,
   `MaxDirectMemorySize=96m`) date from the old 512MB dyno.
+- RSS grows after every restart (Nov 13: 450MB at boot to ~900MB after 11 h,
+  ~40MB/h) while the JVM's own heap + non-heap committed stays ~370MB, so the
+  growth is native memory. Swap and R14 start once RSS passes ~870MB. Before the
+  Nov 12 crawler fixes this took about 2 h and R14 ran most of the day.
+- The buildpack sets `JAVA_OPTS=-XX:MaxRAM=1073741824 -Xmx671m` (the start
+  script honors it) and `JAVA_TOOL_OPTIONS=-XX:+ExitOnOutOfMemoryError`.
+  `MALLOC_ARENA_MAX=2` was set as a config var on Nov 13 (v249, issue #265)
+  to test whether glibc arena fragmentation causes the native growth.
+- Memory history (7 days, 10-minute or hourly buckets; `heroku logs` only covers
+  minutes) comes from the Heroku Metrics API with `heroku auth:token`:
+  `https://api.metrics.heroku.com/metrics/<app-id>/dyno/memory?start_time=…Z&end_time=…Z&step=10m&process_type=web`
+  (also `dyno/errors` for R14/R15 counts, `dyno/load`, `router/status`).
 - Ephemeral filesystem — extracted jars on disk contribute to page cache memory pressure
 - Single dyno (`web.1`) — all traffic hits one instance
 - 30-second request timeout (H12 error)
