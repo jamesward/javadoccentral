@@ -8,14 +8,53 @@ import scala.reflect.TypeTest
  * Written to be lifted into a library: it depends only on ZIO and the Scala 3 standard
  * library, and nothing in it knows about this application.
  *
- * =Why=
+ * =Design goal: make invalid states unrepresentable=
+ *
+ * The primary goal is that a state the flow can't really be in, or a move it can't really
+ * make, can't be written down: the compiler rejects it, rather than code checking for it at
+ * run time or a comment asking callers not to. Every part of the design serves that goal:
+ *
+ *  - being in a state the flow never reached: private constructors on non-start states;
+ *  - a result the machine didn't produce: private constructors on final states;
+ *  - a state carrying impossible data: each state holds exactly its valid data;
+ *  - a move the flow doesn't allow: transitions return a union of the allowed states;
+ *  - beginning a run partway through: `run` accepts only a `Start`;
+ *  - an edge back to an acyclic machine's start: transitions return `Next | Done`;
+ *  - an active state with no transition: exhaustive dispatch (under `-Werror`);
+ *  - a resource still held after the machine stops: each run owns a `Scope`.
+ *
+ * When designing a machine, check each state against this list. In particular:
+ *
+ *  - '''Only start states are public.''' Give every `Next` and `Done` state a private
+ *    constructor (`case class Claimed private[Indexing] (…)`), so the only way to hold one is
+ *    to have run the transitions before it: a value of the type is proof the flow got there.
+ *    A start whose data has an invariant gets a private constructor too, plus a smart
+ *    constructor that establishes it (`Resolution.tiersFor`, `Detection.start`); prefer a
+ *    start that holds raw input any value of which is valid (`NameSearch.ByName(query)`).
+ *  - '''Group states with a sealed trait, not an enum''': enum cases can't have private
+ *    constructors (`Indexing.Skipped`). Enums are fine for plain data inside states.
+ *  - '''No data that some path makes meaningless.''' Each distinct situation is its own state
+ *    or case, not a flag or an `Option` that only some paths fill in:
+ *     - not `UpToDate(indexed: Option[Version])` when nothing-indexed always means stale, but
+ *       `UpToDate(indexed: Version)`;
+ *     - not a final `Boolean` "written", but `Written` or `Skipped.Superseded`;
+ *     - not `Detecting(formats = Nil)` meaning "list the pages", but a non-empty `::[Format]`
+ *       and an explicit `Listing` state;
+ *     - not `notFound: Option[ArtifactId]`, which could name an artifact nobody asked for,
+ *       but a reason (`ArtifactPage.Unknown`) from which the page derives it.
+ *  - '''Non-empty where empty is meaningless''' (`::[Match]`, `::[Format]`).
+ *
+ * `MachineStatesSpec` checks the app's machines against the first rule at compile time.
+ * What still relies on a run-time assumption is listed under ''Constraints'' below.
+ *
+ * =Why explicit states=
  *
  * Multi-step flows with fallbacks ("try the name index, then each symbol tier, then AI
  * search"; "compare versions, take a lock, write") tend to be written as nested
  * `if`/`orElse`/`catchAll` chains. The states exist, but only implicitly: nothing names
  * them, nothing stops a step from being skipped, and the whole flow has to be read to see
- * which paths exist. Making the states explicit gives each one a name, a type and a test
- * point, and lets the compiler check the paths.
+ * which paths exist. An implicit state can't be made unrepresentable; an explicit one, a
+ * type, can.
  *
  * =The model=
  *
@@ -27,9 +66,8 @@ import scala.reflect.TypeTest
  *
  * The '''active''' states, those with a transition, are `Start | Next`.
  *
- *  - '''Each state is a type''', usually a case class carrying exactly the data that state
- *    needs. A state that must only be reached through its transition gets a private
- *    constructor (`case class Claimed private[Indexing] (…)`), so no code can skip ahead.
+ *  - '''Each state is a type''', usually a case class carrying exactly the data valid in that
+ *    state (see the design goal).
  *  - '''Each transition is a plain function''' from one active state to the union of the
  *    states it may lead to:
  *    {{{
@@ -40,7 +78,7 @@ import scala.reflect.TypeTest
  *    still produce one of the listed states.
  *  - '''A machine runs''' with a dispatch table from each active state to its transition:
  *    {{{
- *    StateMachine[Candidate, Stale | Claimed, Boolean | Skipped]("indexing").run(candidate):
+ *    StateMachine[Candidate, Stale | Claimed, Written | Skipped]("indexing").run(candidate):
  *      case candidate: Candidate => compare(candidate)
  *      case stale: Stale         => claim(stale)
  *      case claimed: Claimed     => write(claimed)
@@ -58,8 +96,8 @@ import scala.reflect.TypeTest
  * through (`search` can't start at `NotIndexed` and skip straight to paid AI search). A
  * transition returns `Next | Done`, so when `Start` is not in `Next`, no transition can lead
  * back to the start: in an acyclic machine (`A → B → C`) the start has no incoming edges, by
- * type. Private constructors complement this: they stop code ''outside'' the machine from
- * building a mid-flow state at all.
+ * type. Private constructors complement this: `Start` controls where a run may begin, and
+ * private constructors stop code ''outside'' the machine from building a later state at all.
  *
  * Cycles are edges back to an active state, often to the same type with less work left
  * (`SymbolTiers(tiers.tail)`, `Detecting(formats.tail)`). A cycle through the start lists the
@@ -110,8 +148,14 @@ import scala.reflect.TypeTest
  *
  * =Constraints=
  *
+ * Where the design goal is not (yet) met by the compiler, and a run-time assumption remains:
+ *
  *  - `Next` and `Done` must not overlap: a transition's result is final exactly when it is
- *    not a `Next` state. (`Start` may overlap `Next`, for a cycle through the start.)
+ *    not a `Next` state (`run` casts on that basis). An overlapping declaration compiles; see
+ *    ''Possible improvements''. (`Start` may overlap `Next`, for a cycle through the start.)
+ *  - Private constructors bind outside the machine's object, not inside it: code within
+ *    `object Indexing` could still build a `Claimed`. Keep a machine's object to its states,
+ *    its transitions and its `run`.
  *  - `Next` states must be checkable at run time (a `TypeTest`). Classes, case classes and
  *    unions of them are. A generic state is too while the machine's states pin its type
  *    arguments (`Retrying[Int]`), but not when a `Next` and a `Done` state differ only in
@@ -143,6 +187,12 @@ import scala.reflect.TypeTest
  *
  * =Possible improvements=
  *
+ *  - '''Disjoint `Next` and `Done` at compile time.''' A macro (or a `NotGiven` on each pair of
+ *    union members) could reject an overlapping declaration, removing the last run-time
+ *    assumption in `run`.
+ *  - '''Private constructors by default.''' A macro or linter rule flagging a public
+ *    constructor on any `Next` or `Done` state, so the first design rule can't be forgotten
+ *    (today `MachineStatesSpec` lists them by hand).
  *  - '''Diagrams from types.''' A macro could read each transition's union return type
  *    and emit a Mermaid `stateDiagram` (crem's best feature), replacing the hand-drawn
  *    diagrams in scaladoc and keeping them in step with the code.

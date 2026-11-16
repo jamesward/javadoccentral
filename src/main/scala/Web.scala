@@ -71,23 +71,36 @@ object Web:
    * {{{
    * Lookup ──▶ Versions
    *   ├──▶ NotAnArtifact ──▶ SplitGroup          (`/com/jamesward` → `/com.jamesward`)
-   *   │      └──▶ UnknownArtifact(notFound = artifactId)
-   *   └──(error: invalid coordinates)──▶ UnknownArtifact(notFound = None)
+   *   │      └──▶ UnknownArtifact(NoSuchArtifact)
+   *   └──(error: invalid coordinates)──▶ UnknownArtifact(InvalidCoordinates)
    * UnknownArtifact ──▶ GroupArtifacts | InvalidGroup
    * }}}
    * Every failure is an error edge, so the machine can't fail.
    */
   object ArtifactPage:
+    /** The requested coordinates: the start state. */
     case class Lookup(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId)
     /** No such artifact: the groupId may continue into the artifactId segment. */
     case class NotAnArtifact private[ArtifactPage] (groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId)
-    /** List the group's artifacts instead; `notFound` is the artifactId the page reports missing. */
-    case class UnknownArtifact private[ArtifactPage] (groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, notFound: Option[MavenCentral.ArtifactId])
+    /** List the group's artifacts instead, saying why. */
+    case class UnknownArtifact private[ArtifactPage] (groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, why: Unknown)
 
-    case class Versions(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, versions: Seq[MavenCentral.Version])
-    case class SplitGroup(groupId: MavenCentral.GroupId)
-    case class GroupArtifacts(groupId: MavenCentral.GroupId, artifactIds: Seq[MavenCentral.ArtifactId], notFound: Option[MavenCentral.ArtifactId])
-    case class InvalidGroup(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId)
+    /**
+     * Why the requested artifact wasn't shown. A reason rather than the artifactId to report
+     * (`Option[ArtifactId]`), which could name an artifact that wasn't requested.
+     */
+    enum Unknown derives CanEqual:
+      /** The coordinates couldn't be looked up: the page names no missing artifact. */
+      case InvalidCoordinates
+      /** The group exists but this artifact doesn't: the page says so. */
+      case NoSuchArtifact
+
+    case class Versions private[ArtifactPage] (groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, versions: Seq[MavenCentral.Version])
+    case class SplitGroup private[ArtifactPage] (groupId: MavenCentral.GroupId)
+    case class GroupArtifacts private[ArtifactPage] (groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, artifactIds: Seq[MavenCentral.ArtifactId], why: Unknown):
+      /** The artifactId the page reports missing, if any. */
+      def notFound: Option[MavenCentral.ArtifactId] = Option.when(why == Unknown.NoSuchArtifact)(artifactId)
+    case class InvalidGroup private[ArtifactPage] (groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId)
 
     type Page = Versions | SplitGroup | GroupArtifacts | InvalidGroup
 
@@ -96,16 +109,16 @@ object Web:
       MavenCentral.isArtifact(groupId, artifactId).flatMap: isArtifact =>
         if isArtifact then MavenCentral.searchVersions(groupId, artifactId).map(versions => Versions(groupId, artifactId, versions.value))
         else ZIO.succeed(NotAnArtifact(groupId, artifactId))
-      .orElseSucceed(UnknownArtifact(groupId, artifactId, None))
+      .orElseSucceed(UnknownArtifact(groupId, artifactId, Unknown.InvalidCoordinates))
 
     def splitGroup(notAnArtifact: NotAnArtifact): ZIO[MavenCentralRepo, Nothing, SplitGroup | UnknownArtifact] =
       val NotAnArtifact(groupId, artifactId) = notAnArtifact
       val combinedGroupId = MavenCentral.GroupId(groupId.toString + "." + artifactId.toString)
       MavenCentral.searchArtifacts(combinedGroupId).as(SplitGroup(combinedGroupId))
-        .orElseSucceed(UnknownArtifact(groupId, artifactId, Some(artifactId)))
+        .orElseSucceed(UnknownArtifact(groupId, artifactId, Unknown.NoSuchArtifact))
 
     def groupArtifacts(unknown: UnknownArtifact): ZIO[MavenCentralRepo, Nothing, GroupArtifacts | InvalidGroup] =
-      MavenCentral.searchArtifacts(unknown.groupId).map(artifactIds => GroupArtifacts(unknown.groupId, artifactIds.value, unknown.notFound))
+      MavenCentral.searchArtifacts(unknown.groupId).map(artifactIds => GroupArtifacts(unknown.groupId, unknown.artifactId, artifactIds.value, unknown.why))
         .orElseSucceed(InvalidGroup(unknown.groupId, unknown.artifactId))
 
     def run(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId): ZIO[MavenCentralRepo, Nothing, Page] =
@@ -126,8 +139,9 @@ object Web:
             Response.html(UI.page("javadocs.dev", UI.needVersion(groupId, artifactId, versions)))
         case SplitGroup(groupId) =>
           Response.redirect(URL(Path.root / groupId.toString))
-        case GroupArtifacts(groupId, artifactIds, notFound) =>
-          Response.html(UI.page("javadocs.dev", UI.needArtifactId(groupId, artifactIds, notFound)), Status.NotFound)
+        case groupArtifacts: GroupArtifacts =>
+          val page = UI.needArtifactId(groupArtifacts.groupId, groupArtifacts.artifactIds, groupArtifacts.notFound)
+          Response.html(UI.page("javadocs.dev", page), Status.NotFound)
         case InvalidGroup(groupId, artifactId) =>
           Response.html(UI.page("javadocs.dev", UI.invalidGroupArtifact(groupId, artifactId, groupIdValid = false)), Status.NotFound)
 
@@ -148,18 +162,19 @@ object Web:
    * Every failure is an error edge, so the machine can't fail.
    */
   object VersionPage:
+    /** The requested version: the start state. */
     case class Open(gav: MavenCentral.GroupArtifactVersion)
     /** The jar has no `index.html`, so the page lists its HTML files. */
     case class NoIndex private[VersionPage] (gav: MavenCentral.GroupArtifactVersion, files: Seq[String])
     /** The version or its javadoc jar doesn't exist. */
     case class NoJavadoc private[VersionPage] (gav: MavenCentral.GroupArtifactVersion)
 
-    case class IndexPage(gav: MavenCentral.GroupArtifactVersion)
-    case class FileList(gav: MavenCentral.GroupArtifactVersion, versions: Seq[MavenCentral.Version], files: Seq[String])
-    case class Unavailable(gav: MavenCentral.GroupArtifactVersion)
-    case class MissingVersion(gav: MavenCentral.GroupArtifactVersion, versions: Seq[MavenCentral.Version])
+    case class IndexPage private[VersionPage] (gav: MavenCentral.GroupArtifactVersion)
+    case class FileList private[VersionPage] (gav: MavenCentral.GroupArtifactVersion, versions: Seq[MavenCentral.Version], files: Seq[String])
+    case class Unavailable private[VersionPage] (gav: MavenCentral.GroupArtifactVersion)
+    case class MissingVersion private[VersionPage] (gav: MavenCentral.GroupArtifactVersion, versions: Seq[MavenCentral.Version])
     /** Not even the artifact's versions can be listed: its artifact page explains. */
-    case class NoSuchArtifact(gav: MavenCentral.GroupArtifactVersion)
+    case class NoSuchArtifact private[VersionPage] (gav: MavenCentral.GroupArtifactVersion)
 
     type Page = IndexPage | FileList | Unavailable | MissingVersion | NoSuchArtifact
 

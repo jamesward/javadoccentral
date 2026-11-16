@@ -305,7 +305,7 @@ private def scheduleCrawlerEviction(gav: GAV): ZIO[...] =
 - Use Scala 3 indentation-based syntax (no braces for control structures, class bodies, etc.)
 - Use `given`/`using` for implicits
 - Explicit `given CanEqual` instances are required due to `-language:strictEquality`
-- Use `enum` for ADTs
+- Use `enum` for ADTs (except state machine states: see "State machines")
 - Use `.nn` for Java interop null assertions
 
 ### ZIO Patterns
@@ -401,14 +401,26 @@ conversion makes `String.nonEmpty` always true (a non-null `Optional`); use
 ### State machines
 
 A flow of two or more dependent effectful steps with branches or fallbacks is an
-explicit state machine on `StateMachine`. Its scaladoc (`StateMachine.scala`) is
-the full reference: the model, errors, resources, constraints, prior art and
-future improvements. It is meant to become a library, so keep it free of this
-app's types. In short:
+explicit state machine on `StateMachine`. **The primary design goal is to make
+invalid states unrepresentable**: a state the flow can't be in, or a move it
+can't make, must not compile. `StateMachine.scala`'s scaladoc is the full
+reference (the goal and how each part serves it, the model, errors, resources,
+constraints, prior art, future improvements). It is meant to become a library,
+so keep it free of this app's types. In short:
 
-- States are types; a transition is a plain function to the union of the states
-  it may lead to, so the compiler checks every edge. Private constructors stop a
-  step being skipped. `StateMachine[Start, Next, Done]("name").run(start) { case … }`
+- Only start states are public. Every `Next` and `Done` state has a private
+  constructor (`case class Claimed private[Indexing] (…)`), so holding one proves
+  the flow got there and results can't be forged. A start with an invariant gets
+  a smart constructor (`Resolution.tiersFor`, `Detection.start`); prefer a start
+  holding raw input (`NameSearch.ByName(query)`). Group states with a sealed
+  trait, not an enum (enum cases can't have private constructors). Add new
+  states to `MachineStatesSpec`, which checks this at compile time.
+- A state holds exactly its valid data: no `Option` or flag that only some paths
+  fill in, no `Boolean` result (make it two states), non-empty collections
+  (`::`) where empty is meaningless, and no "empty list means the next step"
+  (make that step a state).
+- Transitions are plain functions returning the union of the states they may
+  lead to. `StateMachine[Start, Next, Done]("name").run(start) { case … }`
   dispatches; a missing case fails the build (exhaustivity under `-Werror`).
   `run` accepts only a `Start`, and transitions return `Next | Done`, so a run
   can't begin partway through and, unless `Start` is also listed in `Next` (a
@@ -425,6 +437,9 @@ app's types. In short:
   (revisit with a cheap model).
 - Not an IndexedStateT-style monad (tried Nov 2026; linear, loses state on
   failure) and not Mechanoid (for long-lived event-driven entities).
+- `scala.compiletime.testing.typeChecks` for compile-time tests: zio-test's
+  `typeCheck` trips `-Werror` ("Catching Throwable"). Use `???` for arguments
+  (explicit nulls reject `null`, which makes a negative check pass vacuously).
 
 ### Error Handling
 

@@ -209,24 +209,31 @@ object Extractor:
    * tried in turn, and a jar in none of them falls back to listing its `.html` pages.
    * {{{
    * Detecting(Scaladoc, Kotlindoc, Javadoc) ──▶ Parsed
-   *   └──▶ Detecting(next formats) … Detecting() ──every .html──▶ Parsed
+   *   ├──▶ Detecting(remaining formats)
+   *   └──▶ Listing ──every .html page──▶ Parsed
    * }}}
    * A format that doesn't match is an error edge to the next one, so the machine can't fail.
    */
   object Detection:
-    /** The formats not tried yet, in order. */
-    case class Detecting(gav: GroupArtifactVersion, handle: JarCache.JarHandle, formats: List[Format])
-    case class Parsed(contents: Set[Content])
+    /** The formats not tried yet, in order: never empty (the last miss goes to [[Listing]]). */
+    case class Detecting private[Detection] (gav: GroupArtifactVersion, handle: JarCache.JarHandle, formats: ::[Format])
+    /** No format matched: list the jar's pages instead. */
+    case class Listing private[Detection] (handle: JarCache.JarHandle)
+    case class Parsed private[Detection] (contents: Set[Content])
 
-    // A List literal, not `Format.values.toList`: see the AllValuesAreNullable note on `filterContents`.
-    val formats: List[Format] = List(Format.Scaladoc, Format.Kotlindoc, Format.Javadoc)
+    /** The start state, with every format still to try: the only way to make a `Detecting`. */
+    def start(gav: GroupArtifactVersion, handle: JarCache.JarHandle): Detecting =
+      Detecting(gav, handle, ::(Format.Scaladoc, List(Format.Kotlindoc, Format.Javadoc)))
 
-    def detect(detecting: Detecting): ZIO[Any, Nothing, Detecting | Parsed] =
-      detecting.formats match
-        case Nil => bruteForce(detecting.handle).map(Parsed(_))
-        case format :: rest =>
-          parse(format, detecting.gav, detecting.handle).map(Parsed(_))
-            .catchAll(_ => ZIO.succeed(detecting.copy(formats = rest)))
+    def detect(detecting: Detecting): ZIO[Any, Nothing, Detecting | Listing | Parsed] =
+      parse(detecting.formats.head, detecting.gav, detecting.handle).map(Parsed(_)).catchAll: _ =>
+        ZIO.succeed:
+          detecting.formats.tail match
+            case next :: rest => detecting.copy(formats = ::(next, rest))
+            case Nil          => Listing(detecting.handle)
+
+    def list(listing: Listing): ZIO[Any, Nothing, Parsed] =
+      bruteForce(listing.handle).map(Parsed(_))
 
     private def parse(format: Format, gav: GroupArtifactVersion, handle: JarCache.JarHandle): ZIO[Any, JavadocFormatFailure, Set[Content]] =
       format match
@@ -243,8 +250,9 @@ object Extractor:
 
   private def readSymbols(groupArtifactVersion: GroupArtifactVersion, handle: JarCache.JarHandle): ZIO[Any, Nothing, Set[Content]] =
     import Detection.*
-    StateMachine[Detecting, Detecting, Parsed]("javadoc-format").run(Detecting(groupArtifactVersion, handle, formats)):
+    StateMachine[Detecting, Detecting | Listing, Parsed]("javadoc-format").run(start(groupArtifactVersion, handle)):
       case detecting: Detecting => detect(detecting)
+      case listing: Listing     => list(listing)
     .mapBoth(_.error, _.contents)
 
   /**
