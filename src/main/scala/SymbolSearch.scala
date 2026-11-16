@@ -119,64 +119,99 @@ object SymbolSearch:
     .map(_._2)
 
   /**
-   * Names containing the query (any case) first, then close spellings. An exact
-   * name match is always a containing match too, so stopping at exact matches would
-   * hide other artifacts ("jev" is one artifact's `Mode.Jev` and part of other
-   * artifacts' `JevJudge`). Queries too short for trigrams only match exactly.
-   * A dotted query is a qualified name: when nothing contains it, the artifact is
-   * most likely not indexed yet, so it goes to AI search (which indexes it) rather
-   * than to spelling matches of its last segment (`zio.cache.Cache` → every `Cache`).
+   * Resolving a query to artifacts (`search`), as a [[StateMachine]]:
+   * {{{
+   * Query ──name match──▶ Found
+   *   └──▶ SymbolTiers ──▶ Found
+   *         ├──▶ SymbolTiers (next tier)
+   *         └──▶ NotIndexed ──AI search──▶ Found
+   * }}}
+   * Symbol tiers: names containing the query (any case) first, then close spellings. An
+   * exact name match is always a containing match too, so stopping at exact matches would
+   * hide other artifacts ("jev" is one artifact's `Mode.Jev` and part of other artifacts'
+   * `JevJudge`). Queries too short for trigrams only match exactly. A dotted query is a
+   * qualified name: when nothing contains it, the artifact is most likely not indexed yet,
+   * so it goes to AI search (which indexes it) rather than to spelling matches of its last
+   * segment (`zio.cache.Cache` → every `Cache`).
    */
+  object Resolution:
+    case class Query(symbol: String)
+    case class SymbolTiers(symbol: String, tiers: ::[Match])
+    /** Nothing in the index matches. */
+    case class NotIndexed(symbol: String)
+    case class Found(artifacts: Set[MavenCentral.GroupArtifact])
+
+    def byName(query: Query): ZIO[SymbolIndex, Throwable, Found | SymbolTiers] =
+      searchGroupArtifacts(query.symbol).map: found =>
+        if found.nonEmpty then Found(found) else tiersFor(query.symbol)
+
+    def tiersFor(symbol: String): SymbolTiers =
+      val trimmed = symbol.trim
+      val tiers =
+        if trimmed.length < minFuzzyLength then ::(Match.Exact, Nil)
+        else if trimmed.contains('.') then ::(Match.Containing, Nil)
+        else ::(Match.Containing, List(Match.Similar))
+      SymbolTiers(symbol, tiers)
+
+    def bySymbol(tiers: SymbolTiers): ZIO[SymbolIndex, Throwable, Found | SymbolTiers | NotIndexed] =
+      lookup(tiers.tiers.head, tiers.symbol).map: found =>
+        if found.nonEmpty then Found(found)
+        else tiers.tiers.tail match
+          case next :: rest => SymbolTiers(tiers.symbol, ::(next, rest))
+          case Nil          => NotIndexed(tiers.symbol)
+
+    def byAi(notIndexed: NotIndexed): ZIO[HerokuInference & Client & MavenCentralRepo & Extractor.JavadocCache & SymbolIndex & SymbolSearchGuard, SearchError, Found] =
+      aiSearchAndIndex(notIndexed.symbol).map(Found(_))
+
   def symbolArtifacts(symbol: String): ZIO[SymbolIndex, Throwable, Set[MavenCentral.GroupArtifact]] =
-    val trimmed = symbol.trim
-    val tiers =
-      if trimmed.length < minFuzzyLength then List(Match.Exact)
-      else if trimmed.contains('.') then List(Match.Containing)
-      else List(Match.Containing, Match.Similar)
-    ZIO.foldLeft(tiers)(Set.empty[MavenCentral.GroupArtifact]): (found, tier) =>
-      if found.nonEmpty then ZIO.succeed(found) else lookup(tier, symbol)
+    import Resolution.*
+    StateMachine[SymbolTiers, Found | NotIndexed]("symbol-search").run(tiersFor(symbol)):
+      case tiers: SymbolTiers => bySymbol(tiers)
+    .map:
+      case Found(artifacts) => artifacts
+      case _: NotIndexed    => Set.empty
 
   def search(symbol: String): ZIO[SymbolIndex & HerokuInference & Client & MavenCentralRepo & Extractor.JavadocCache & SymbolSearchGuard, SearchError, Set[MavenCentral.GroupArtifact]] =
+    import Resolution.*
+    StateMachine[Query | SymbolTiers | NotIndexed, Found]("search").run(Query(symbol)):
+      case query: Query       => byName(query).mapError(e => SearchError(e.toString))
+      case tiers: SymbolTiers => bySymbol(tiers).mapError(e => SearchError(e.toString))
+      case notIndexed: NotIndexed => byAi(notIndexed)
+    .map(_.artifacts)
+
+  /** Asks AI search for the artifacts, keeps the real ones, and schedules indexing them. */
+  private def aiSearchAndIndex(symbol: String): ZIO[HerokuInference & Client & MavenCentralRepo & Extractor.JavadocCache & SymbolIndex & SymbolSearchGuard, SearchError, Set[MavenCentral.GroupArtifact]] =
     defer:
-      val gaResults = searchGroupArtifacts(symbol).mapError(e => SearchError(e.toString)).run
-
-      val cacheResults =
-        if gaResults.nonEmpty then gaResults
-        else symbolArtifacts(symbol).mapError(e => SearchError(e.toString)).run
-
-      if cacheResults.isEmpty then
-        // `aiSearch` needs a `Scope` for its HTTP response body; that
-        // scope is local to the AI call (the body is fully materialized
-        // here) so we don't propagate `Scope` out of `search`.
-        val aiResults = ZIO.scoped(aiSearch(symbol)).mapError(e => SearchError(e.message)).tapError: e =>
-          ZIO.logAnnotate(
-            LogAnnotation("symbol", symbol),
-            LogAnnotation("error", e.message),
-          )(ZIO.logError("aiSearch failed"))
-        .run
+      // `aiSearch` needs a `Scope` for its HTTP response body; that
+      // scope is local to the AI call (the body is fully materialized
+      // here) so we don't propagate `Scope` out of `search`.
+      val aiResults = ZIO.scoped(aiSearch(symbol)).mapError(e => SearchError(e.message)).tapError: e =>
         ZIO.logAnnotate(
           LogAnnotation("symbol", symbol),
-          LogAnnotation("results", aiResults.size.toString),
-        )(ZIO.logInfo("AI search")).run
-        val validatedResults = ZIO.filterPar(aiResults): ga =>
-          MavenCentral.isArtifact(ga.groupId, ga.artifactId).orElseSucceed(false)
-        .run
-        val indexLoad = validatedResults.map:
-          groupArtifact =>
-            Extractor.latest(groupArtifact).flatMap:
-              latest =>
-                indexJavadocContents(MavenCentral.GroupArtifactVersion(groupArtifact.groupId, groupArtifact.artifactId, latest))
-            .ignore
-        ZIO.logAnnotate(
-          LogAnnotation("symbol", symbol),
-          LogAnnotation("artifacts", validatedResults.size.toString),
-        )(ZIO.logInfo("Scheduling index load")).run
-        // `indexJavadocContents` forks its own daemon and `Extractor.latest`
-        // doesn't require `Scope`, so this daemon has no `Scope` to inherit.
-        ZIO.collectAllParDiscard(indexLoad).forkDaemon.run
-        validatedResults
-      else
-        cacheResults
+          LogAnnotation("error", e.message),
+        )(ZIO.logError("aiSearch failed"))
+      .run
+      ZIO.logAnnotate(
+        LogAnnotation("symbol", symbol),
+        LogAnnotation("results", aiResults.size.toString),
+      )(ZIO.logInfo("AI search")).run
+      val validatedResults = ZIO.filterPar(aiResults): ga =>
+        MavenCentral.isArtifact(ga.groupId, ga.artifactId).orElseSucceed(false)
+      .run
+      val indexLoad = validatedResults.map:
+        groupArtifact =>
+          Extractor.latest(groupArtifact).flatMap:
+            latest =>
+              indexJavadocContents(MavenCentral.GroupArtifactVersion(groupArtifact.groupId, groupArtifact.artifactId, latest))
+          .ignore
+      ZIO.logAnnotate(
+        LogAnnotation("symbol", symbol),
+        LogAnnotation("artifacts", validatedResults.size.toString),
+      )(ZIO.logInfo("Scheduling index load")).run
+      // `indexJavadocContents` forks its own daemon and `Extractor.latest`
+      // doesn't require `Scope`, so this daemon has no `Scope` to inherit.
+      ZIO.collectAllParDiscard(indexLoad).forkDaemon.run
+      validatedResults
 
   def queryParts(query: String): List[String] =
     query.toLowerCase.split("\\s+").nn.map(_.nn.replaceAll("[^a-z0-9._:-]", "")).toList.filter(_.nonEmpty)
@@ -250,12 +285,10 @@ object SymbolSearch:
     /** Runs the machine from `candidate` to its final state: written (`true`/`false`) or skipped. */
     def run(candidate: Candidate): ZIO[SymbolIndex & SymbolSearchGuard, Throwable, Boolean | Skipped] =
       ZIO.scoped:
-        compare(candidate).flatMap:
-          case skipped: Skipped => ZIO.succeed(skipped)
-          case stale: Stale =>
-            claim(stale).flatMap:
-              case skipped: Skipped => ZIO.succeed(skipped)
-              case claimed: Claimed => write(claimed)
+        StateMachine[Candidate | Stale | Claimed, Boolean | Skipped]("indexing").run(candidate):
+          case candidate: Candidate => compare(candidate)
+          case stale: Stale         => claim(stale)
+          case claimed: Claimed     => write(claimed)
 
   def update(groupArtifactVersion: MavenCentral.GroupArtifactVersion, symbols: Set[Extractor.Content]): ZIO[SymbolIndex & SymbolSearchGuard, Throwable, Unit] =
     Indexing.run(Indexing.Candidate(groupArtifactVersion, symbols)).unit

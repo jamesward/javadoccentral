@@ -398,6 +398,24 @@ file, avoid `split(...).toList`/`List.from(array)`; use an `Iterator` (e.g.
 conversion makes `String.nonEmpty` always true (a non-null `Optional`); use
 `!s.isEmpty`.
 
+### State machines
+
+Use `StateMachine` (`StateMachine.scala`) for a flow whose steps branch or
+loop. Each state is a type; each transition is a plain function to the union
+of the states it may lead to (`Stale => ZIO[R, E, Claimed | Skipped]`), so the
+compiler checks every edge, including targets decided at run time (crem's typed
+topology, Idris ST's result-dependent states). Give a state a private
+constructor when only its transition may create it.
+`StateMachine[Active, Done]("name").run(start) { case s: A => stepA(s) … }`
+drives it: the `match` must cover every `Active` state (an exhaustivity
+warning fails the build under `-Werror`), and each step logs
+`"State machine step"` at debug (`machine`, `from`, `to`, `durationMs`; state
+type names only, never data). `Active` and `Done` must not overlap.
+Don't use an IndexedStateT-style monad (`S1 => ZIO[R, E, (S2, A)]`, tried
+Nov 2026): it's linear, so after a branch every later step must accept and
+pass on the whole union. Mechanoid (ZIO FSM library) suits long-lived
+event-driven entities (persistence, timeouts), not these single-run flows.
+
 ### Error Handling
 
 - Domain errors are modeled as case classes (not exceptions)
@@ -487,14 +505,12 @@ conversion makes `String.nonEmpty` always true (a non-null `Optional`); use
   returned 2 artifacts instead of 9). Queries under 3 characters (the trigram
   minimum) only match exactly. Each tier logs `"Symbol search"` with `match`
   and `durationMs`.
-- Indexing an artifact version is an explicit state machine,
-  `SymbolSearch.Indexing`: `Candidate` → `compare` → `Stale` | `Skipped.UpToDate`
-  → `claim` → `Claimed` | `Skipped.Busy` → `write`. `Stale`/`Claimed` have private
-  constructors, so a write can't skip the comparison or the claim, and the claim's
-  `SymbolSearchGuard` entry is released by `Scope` (`acquireRelease`). Keep
-  transitions as plain functions between state types: an IndexedStateT-style
-  monad (`S1 => ZIO[R, E, (S2, A)]`) was tried (Nov 2026) and gave no extra safety
-  here, because every branch has to be threaded through later steps as a union.
+- Multi-step flows with branches are explicit state machines on `StateMachine`
+  (see "State machines" under Coding Style): `SymbolSearch.Indexing` (`Candidate`
+  → `compare` → `Stale` | `Skipped.UpToDate` → `claim` → `Claimed` |
+  `Skipped.Busy` → `write`; the claim's `SymbolSearchGuard` entry is released by
+  `Scope`) and `SymbolSearch.Resolution` (`Query` → `SymbolTiers` (→ next tier)
+  → `NotIndexed` → AI search → `Found`).
 - `SymbolIndex.indexable` drops doc pages that aren't symbols (`index-all`,
   `.static-page`). LIKE wildcards in queries are escaped (`escapeLike`).
 - GIN trigram indexes bloat ~4× under per-artifact rewrites; compact with
