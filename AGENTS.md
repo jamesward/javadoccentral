@@ -432,6 +432,13 @@ so keep it free of this app's types. In short:
   inside a transition with a `Schedule`.
 - Each run owns a `Scope` shared by all its steps: don't wrap `run` in
   `ZIO.scoped`.
+- No parallel combinators (decided Nov 2026; reasons in the scaladoc's
+  "Parallelism"): parallelism stays in ZIO at the call site, e.g.
+  `ZIO.foreachPar(items)(machine.run)`, which gives each item its own `Scope`.
+  Background work (`forkDaemon`) stays outside machines. Don't `race`
+  precedence-ordered fallbacks (it changes the answer, and AI search costs per
+  call). AI search's per-suggestion validation and index loads are not a
+  machine: one parallel filter, then a straight `latest → index` in a daemon.
 - Draw the topology in the machine's scaladoc.
 - Machines: `SymbolSearch.Indexing`, `.Resolution`, `.NameSearch`,
   `Extractor.Detection`, `Web.ArtifactPage`, `Web.VersionPage`. Single-step

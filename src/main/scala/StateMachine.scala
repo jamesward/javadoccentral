@@ -150,6 +150,32 @@ import scala.reflect.TypeTest
  * A linear indexed state monad (scalaz's `IndexedStateT`, `S1 => F[(S2, A)]`) can't give
  * this guarantee: once a step fails there is no state left to release.
  *
+ * =Parallelism=
+ *
+ * There are deliberately no parallel combinators (`foreachPar`, `zipPar` / `&&&`, `race`).
+ * Parallelism belongs to ZIO at the call site, and a machine's job is one item's flow: where a
+ * per-item flow deserves a machine, run it with `ZIO.foreachPar(items)(machine.run)` (inside
+ * a transition, if the items come from a state). Decided Nov 2026, because a combinator
+ * would:
+ *
+ *  - add nothing to the design goal: private states, checked edges and testing through `run`
+ *    come with the machine however it is called;
+ *  - make resource lifetimes worse: branches inside one run would share its `Scope`, holding
+ *    whatever a branch acquired until the whole run ends, where a `run` per item gives each
+ *    item its own `Scope`, released as soon as that item finishes;
+ *  - not express background work: work that outlives the response (`forkDaemon`, like AI
+ *    search's index loads) can't live inside a run, whose `Scope` closes when it returns;
+ *  - re-specify what ZIO already defines: interruption on failure, `withParallelism`,
+ *    collecting failures (`validatePar`).
+ *
+ * `race` in particular doesn't fit the fallbacks here: they are ordered by precedence (a name
+ * match beats a symbol match beats AI search), so racing them changes the answer, and racing
+ * AI search would pay for an AI call on every query.
+ *
+ * Reconsider if machines come to render themselves from their composition (where a parallel
+ * split would be part of the drawing), or if parallel branches must share resources acquired
+ * earlier in the same run.
+ *
  * =Observability=
  *
  * Every step logs `"State machine step"` at debug level, annotated with `from` and `to`
@@ -232,8 +258,8 @@ import scala.reflect.TypeTest
  *  - '''Machine-level error edges.''' A `recover` combinator for policies shared by every step
  *    of a machine (e.g. "the index is down: answer from cache"). Today each transition
  *    catches its own errors, which keeps the edge next to its cause.
- *  - '''Parallel composition.''' crem's `Parallel`: run two machines on parts of the input and
- *    combine their outputs (`zipPar`-style).
+ *  - '''Parallel composition''' (crem's `Parallel`, ZIO's `Par` family): not planned; see
+ *    ''Parallelism'' for why, and when to reconsider.
  *  - '''Event-driven machines.''' Accepting external events (a queue) between steps would
  *    cover long-lived entities, at which point Mechanoid's feature set (persistence, durable
  *    timeouts) becomes the comparison.
