@@ -487,6 +487,14 @@ conversion makes `String.nonEmpty` always true (a non-null `Optional`); use
   returned 2 artifacts instead of 9). Queries under 3 characters (the trigram
   minimum) only match exactly. Each tier logs `"Symbol search"` with `match`
   and `durationMs`.
+- Indexing an artifact version is an explicit state machine,
+  `SymbolSearch.Indexing`: `Candidate` → `compare` → `Stale` | `Skipped.UpToDate`
+  → `claim` → `Claimed` | `Skipped.Busy` → `write`. `Stale`/`Claimed` have private
+  constructors, so a write can't skip the comparison or the claim, and the claim's
+  `SymbolSearchGuard` entry is released by `Scope` (`acquireRelease`). Keep
+  transitions as plain functions between state types: an IndexedStateT-style
+  monad (`S1 => ZIO[R, E, (S2, A)]`) was tried (Nov 2026) and gave no extra safety
+  here, because every branch has to be threaded through later steps as a union.
 - `SymbolIndex.indexable` drops doc pages that aren't symbols (`index-all`,
   `.static-page`). LIKE wildcards in queries are escaped (`escapeLike`).
 - GIN trigram indexes bloat ~4× under per-artifact rewrites; compact with

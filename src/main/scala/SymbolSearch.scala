@@ -199,26 +199,66 @@ object SymbolSearch:
       if found.nonEmpty || withoutVersions.size == parts.size then ZIO.succeed(found)
       else SymbolIndex.groupArtifactsContainingAll(withoutVersions)
 
-  def update(groupArtifactVersion: MavenCentral.GroupArtifactVersion, symbols: Set[Extractor.Content]): ZIO[SymbolIndex & SymbolSearchGuard, Throwable, Unit] =
-    defer:
-      val guard = ZIO.service[SymbolSearchGuard].run.active
-      val groupArtifact = groupArtifactVersion.noVersion
-      val indexed = SymbolIndex.indexedVersion(groupArtifact).run
-      if !indexed.contains(groupArtifactVersion.version) && SymbolIndex.supersedes(groupArtifactVersion.version, indexed) then
-        // Another fiber already indexing this artifact: skip (`replace` would also serialize them).
-        val existing = guard.putIfAbsent(groupArtifact, ()).run
-        if existing.isEmpty then
-          replaceSymbols(groupArtifactVersion, symbols).ensuring(guard.remove(groupArtifact)).run
+  /**
+   * Indexing one parsed artifact version, as explicit states. Each transition takes the
+   * state it requires, so the order (compare, then claim, then write) is checked by the
+   * compiler: only [[Indexing.claim]] can make a [[Indexing.Claimed]], and only a
+   * `Claimed` can be written. The claim's guard entry is released by its `Scope`.
+   */
+  object Indexing:
+    /** Parsed symbols for a version, not yet compared with the index. */
+    case class Candidate(gav: MavenCentral.GroupArtifactVersion, symbols: Set[Extractor.Content])
 
-  private def replaceSymbols(groupArtifactVersion: MavenCentral.GroupArtifactVersion, symbols: Set[Extractor.Content]): ZIO[SymbolIndex, Throwable, Unit] =
-    defer:
-      val (duration, written) = SymbolIndex.replace(groupArtifactVersion, symbols.map(_.fqn)).timed.run
-      ZIO.logAnnotate(
-        LogAnnotation("gav", groupArtifactVersion.toString),
-        LogAnnotation("symbols", symbols.size.toString),
-        LogAnnotation("written", written.toString),
-        LogAnnotation("durationMs", duration.toMillis.toString),
-      )(ZIO.logInfo("Updated symbol index")).run
+    /** Newer than the indexed version (or nothing is indexed). */
+    case class Stale private[Indexing] (candidate: Candidate)
+
+    /** This fiber holds the artifact's [[SymbolSearchGuard]] entry. */
+    case class Claimed private[Indexing] (candidate: Candidate)
+
+    /** Why a candidate wasn't written. */
+    enum Skipped:
+      /** The same or a newer version is already indexed. */
+      case UpToDate(indexed: Option[MavenCentral.Version])
+      /** Another fiber is indexing this artifact (`replace` would also serialize them). */
+      case Busy
+
+    def compare(candidate: Candidate): ZIO[SymbolIndex, Throwable, Stale | Skipped] =
+      SymbolIndex.indexedVersion(candidate.gav.noVersion).map: indexed =>
+        val version = candidate.gav.version
+        if !indexed.contains(version) && SymbolIndex.supersedes(version, indexed) then Stale(candidate)
+        else Skipped.UpToDate(indexed)
+
+    def claim(stale: Stale): ZIO[SymbolSearchGuard & Scope, Nothing, Claimed | Skipped] =
+      val groupArtifact = stale.candidate.gav.noVersion
+      ZIO.serviceWithZIO[SymbolSearchGuard]: guard =>
+        ZIO.acquireRelease(guard.active.putIfAbsent(groupArtifact, ()).map(_.isEmpty)): acquired =>
+          ZIO.when(acquired)(guard.active.remove(groupArtifact))
+        .map(acquired => if acquired then Claimed(stale.candidate) else Skipped.Busy)
+
+    def write(claimed: Claimed): ZIO[SymbolIndex, Throwable, Boolean] =
+      val Candidate(gav, symbols) = claimed.candidate
+      defer:
+        val (duration, written) = SymbolIndex.replace(gav, symbols.map(_.fqn)).timed.run
+        ZIO.logAnnotate(
+          LogAnnotation("gav", gav.toString),
+          LogAnnotation("symbols", symbols.size.toString),
+          LogAnnotation("written", written.toString),
+          LogAnnotation("durationMs", duration.toMillis.toString),
+        )(ZIO.logInfo("Updated symbol index")).run
+        written
+
+    /** Runs the machine from `candidate` to its final state: written (`true`/`false`) or skipped. */
+    def run(candidate: Candidate): ZIO[SymbolIndex & SymbolSearchGuard, Throwable, Boolean | Skipped] =
+      ZIO.scoped:
+        compare(candidate).flatMap:
+          case skipped: Skipped => ZIO.succeed(skipped)
+          case stale: Stale =>
+            claim(stale).flatMap:
+              case skipped: Skipped => ZIO.succeed(skipped)
+              case claimed: Claimed => write(claimed)
+
+  def update(groupArtifactVersion: MavenCentral.GroupArtifactVersion, symbols: Set[Extractor.Content]): ZIO[SymbolIndex & SymbolSearchGuard, Throwable, Unit] =
+    Indexing.run(Indexing.Candidate(groupArtifactVersion, symbols)).unit
 
   // We only want to trigger symbol cache loading when the index page is loaded;
   // this is a lazy way to populate the cache. The returned effect forks a
