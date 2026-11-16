@@ -170,13 +170,18 @@ object SymbolSearch:
     .map:
       case Found(artifacts) => artifacts
       case _: NotIndexed    => Set.empty
+    .mapError(_.error)
 
   def search(symbol: String): ZIO[SymbolIndex & HerokuInference & Client & MavenCentralRepo & Extractor.JavadocCache & SymbolSearchGuard, SearchError, Set[MavenCentral.GroupArtifact]] =
     import Resolution.*
     StateMachine[Query | SymbolTiers | NotIndexed, Found]("search").run(Query(symbol)):
-      case query: Query       => byName(query).mapError(e => SearchError(e.toString))
-      case tiers: SymbolTiers => bySymbol(tiers).mapError(e => SearchError(e.toString))
+      case query: Query           => byName(query)
+      case tiers: SymbolTiers     => bySymbol(tiers)
       case notIndexed: NotIndexed => byAi(notIndexed)
+    .mapError: failed =>
+      failed.error match
+        case e: SearchError => e
+        case e: Throwable   => SearchError(e.toString)
     .map(_.artifacts)
 
   /** Asks AI search for the artifacts, keeps the real ones, and schedules indexing them. */
@@ -282,15 +287,19 @@ object SymbolSearch:
         )(ZIO.logInfo("Updated symbol index")).run
         written
 
-    /** Runs the machine from `candidate` to its final state: written (`true`/`false`) or skipped. */
-    def run(candidate: Candidate): ZIO[SymbolIndex & SymbolSearchGuard, Throwable, Boolean | Skipped] =
-      ZIO.scoped:
-        StateMachine[Candidate | Stale | Claimed, Boolean | Skipped]("indexing").run(candidate):
-          case candidate: Candidate => compare(candidate)
-          case stale: Stale         => claim(stale)
-          case claimed: Claimed     => write(claimed)
+    type Failure = StateMachine.Failed[Candidate | Stale | Claimed, Throwable]
 
-  def update(groupArtifactVersion: MavenCentral.GroupArtifactVersion, symbols: Set[Extractor.Content]): ZIO[SymbolIndex & SymbolSearchGuard, Throwable, Unit] =
+    /**
+     * Runs the machine from `candidate` to its final state: written (`true`/`false`) or
+     * skipped. The claim is released when the machine stops, even if `write` fails.
+     */
+    def run(candidate: Candidate): ZIO[SymbolIndex & SymbolSearchGuard, Failure, Boolean | Skipped] =
+      StateMachine[Candidate | Stale | Claimed, Boolean | Skipped]("indexing").run(candidate):
+        case candidate: Candidate => compare(candidate)
+        case stale: Stale         => claim(stale)
+        case claimed: Claimed     => write(claimed)
+
+  def update(groupArtifactVersion: MavenCentral.GroupArtifactVersion, symbols: Set[Extractor.Content]): ZIO[SymbolIndex & SymbolSearchGuard, Indexing.Failure, Unit] =
     Indexing.run(Indexing.Candidate(groupArtifactVersion, symbols)).unit
 
   // We only want to trigger symbol cache loading when the index page is loaded;

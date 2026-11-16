@@ -13,14 +13,33 @@ import scala.reflect.TypeTest
  * output states, in the shape Scala 3 unions give for free. A state with a private
  * constructor can only be reached through its transition, so a step can't be skipped.
  *
- * `StateMachine[Active, Done](name).run(start)(step)` drives a machine: `step` is the dispatch table from each active state to its
- * transition (a `match` over the union, checked for exhaustiveness), and the machine stops
- * at the first `Done` state. Cycles (retries, tiers) are just edges back to an active state.
+ * `StateMachine[Active, Done](name).run(start)(step)` drives a machine: `step` is the
+ * dispatch table from each active state to its transition (a `match` over the union,
+ * checked for exhaustiveness), and the machine stops at the first `Done` state. Cycles
+ * (tiers, retries) are just edges back to an active state.
  *
- * An IndexedStateT-style monad (`S1 => ZIO[R, E, (S2, A)]`) is a straight line: after a branch
- * every later step has to accept and pass on the whole union, so it adds nothing here.
+ * Errors, in three kinds:
+ *  - An expected outcome (nothing found, someone else holds the lock) is a state, not an
+ *    error: a final state, or an edge to a state that handles it.
+ *  - A recoverable failure is an error edge: the transition catches it and returns a state
+ *    (`byName(q).catchAll(_ => ZIO.succeed(NotIndexed(q.symbol)))`), and the union checks
+ *    the target like any other edge. Retry within a transition (`.retry(schedule)`) rather
+ *    than with an edge back to the same state, which has no backoff and no limit.
+ *  - Anything else fails the machine with [[Failed]], which keeps the state it failed in.
+ *    Defects and interruption pass through unchanged.
+ *
+ * Resources: each run owns a `Scope`, so a transition can acquire something
+ * (`ZIO.acquireRelease`) that later states rely on, and it is released when the machine
+ * stops, whether it finished, failed or was interrupted. IndexedStateT can't promise this:
+ * on failure it has no state left to release.
  */
 object StateMachine:
+
+  /** The machine failed with `error` while leaving `state`. */
+  case class Failed[+S, +E](machine: String, state: S, error: E):
+    /** The state's type name: the state itself can hold a lot of data. */
+    def stateName: String = StateMachine.name(state)
+    override def toString: String = s"$machine failed in $stateName: $error"
 
   /**
    * A machine whose non-final states are `Active` and whose final states are `Done` (each
@@ -31,19 +50,20 @@ object StateMachine:
 
   final class Machine[Active, Done](machine: String):
     /**
-     * Runs `step` from `start` until it reaches a `Done` state. Each transition logs
-     * `"State machine step"` at debug level, with the `machine` name, the `from` and `to`
-     * state types and `durationMs`.
+     * Runs `step` from `start` until it reaches a `Done` state, in a `Scope` that closes when
+     * the machine stops. Each transition logs `"State machine step"` at debug level, with the
+     * `machine` name, the `from` and `to` state types and `durationMs`.
      */
-    def run[R, E](start: Active | Done)(step: Active => ZIO[R, E, Active | Done])(
+    def run[R, E](start: Active | Done)(step: Active => ZIO[R & Scope, E, Active | Done])(
       using active: TypeTest[Active | Done, Active]
-    ): ZIO[R, E, Done] =
-      def loop(state: Active | Done): ZIO[R, E, Done] =
+    ): ZIO[R, Failed[Active, E], Done] =
+      def loop(state: Active | Done): ZIO[R & Scope, Failed[Active, E], Done] =
         state match
-          case active(current) => logged(machine, current, step(current)).flatMap(loop)
+          case active(current) =>
+            logged(machine, current, step(current).mapError(Failed(machine, current, _))).flatMap(loop)
           // Not active, so (as Active and Done don't overlap) a Done state.
           case done => ZIO.succeed(done.asInstanceOf[Done])
-      loop(start)
+      ZIO.scoped[R](loop(start))
 
   private def logged[R, E, A](machine: String, from: Any, transition: ZIO[R, E, A]): ZIO[R, E, A] =
     transition.timed.flatMap: (duration, to) =>

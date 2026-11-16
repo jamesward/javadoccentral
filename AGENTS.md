@@ -411,6 +411,24 @@ drives it: the `match` must cover every `Active` state (an exhaustivity
 warning fails the build under `-Werror`), and each step logs
 `"State machine step"` at debug (`machine`, `from`, `to`, `durationMs`; state
 type names only, never data). `Active` and `Done` must not overlap.
+
+Errors and resources in a machine:
+
+- An expected outcome (nothing found, lock held elsewhere) is a state, not an
+  error.
+- A recoverable failure is an error edge: the transition catches it and returns
+  a state (`.catchAll(_ => ZIO.succeed(NotIndexed(…)))`), checked by the union
+  like any edge. Retry inside a transition (`.retry(schedule)`), not with an
+  edge back to the same state (no backoff, no limit).
+- Anything else fails `run` with `StateMachine.Failed(machine, state, error)`,
+  which keeps the state it failed in (`toString`: "indexing failed in Stale:
+  …"; `stateName` for logs). Defects and interruption pass through unchanged.
+  Callers with a public error type map it once (`search` → `SearchError`, same
+  agent-facing text as before).
+- Each run owns a `Scope`: a transition may `acquireRelease` something later
+  states need (the indexing claim), and it is released when the machine stops,
+  whether it finished, failed or was interrupted. Don't add a `ZIO.scoped` around
+  `run`.
 Don't use an IndexedStateT-style monad (`S1 => ZIO[R, E, (S2, A)]`, tried
 Nov 2026): it's linear, so after a branch every later step must accept and
 pass on the whole union. Mechanoid (ZIO FSM library) suits long-lived
