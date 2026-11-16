@@ -3,40 +3,53 @@ import zio.test.*
 import scala.compiletime.testing.typeChecks
 
 /**
- * The app's state machines keep invalid states unrepresentable: only a machine's start state
- * can be built outside it. Mid-flow and final states have private constructors, so no code
- * can skip a step or forge a result. Checked by the compiler, at test compile time.
+ * The app's state machines keep invalid states unrepresentable. Outside a machine's object
+ * only its input can be built and only the whole machine can be run: intermediate states,
+ * transitions and inner machines are private, and output states have private constructors,
+ * so no code can start partway, run a step on its own, or forge a result. Checked by the
+ * compiler, at test compile time. (`???` stands for any argument: `typeChecks` doesn't run
+ * the code, and explicit nulls would reject `null` for an unrelated reason.)
  */
 object MachineStatesSpec extends ZIOSpecDefault:
 
   override def spec = suite("State machine states")(
-    test("start states can be built by callers"):
+    test("a machine's input can be built and the machine run"):
       assertTrue(
-        typeChecks("""SymbolSearch.Indexing.Candidate(???, Set.empty)"""),
-        typeChecks("""SymbolSearch.Resolution.Query("ObjectMapper")"""),
-        typeChecks("""SymbolSearch.NameSearch.ByName("jackson-databind 3.0.0")"""),
-        typeChecks("""Web.ArtifactPage.Lookup(???, ???)"""),
-        typeChecks("""Web.VersionPage.Open(???)"""),
+        typeChecks("""SymbolSearch.Indexing.run(SymbolSearch.Indexing.Candidate(???, Set.empty))"""),
+        typeChecks("""SymbolSearch.Resolution.machine.run(SymbolSearch.Resolution.Query("ObjectMapper"))"""),
+        typeChecks("""SymbolSearch.Resolution.symbols.run("ObjectMapper")"""),
+        typeChecks("""SymbolSearch.NameSearch.machine.run(SymbolSearch.NameSearch.ByName("jackson-databind 3.0.0"))"""),
+        typeChecks("""Extractor.Detection.machine.run(Extractor.Detection.Jar(???, ???))"""),
+        typeChecks("""Web.ArtifactPage.machine.run(Web.ArtifactPage.Lookup(???, ???))"""),
+        typeChecks("""Web.VersionPage.machine.run(Web.VersionPage.Open(???))"""),
       )
     ,
-    test("mid-flow and final states can only be built by their machine"):
+    test("output states can only be built by their machine"):
       assertTrue(
-        !typeChecks("""SymbolSearch.Indexing.Stale(SymbolSearch.Indexing.Candidate(???, Set.empty))"""),
         !typeChecks("""SymbolSearch.Indexing.Written(???)"""),
         !typeChecks("""SymbolSearch.Indexing.Skipped.UpToDate(???)"""),
-        !typeChecks("""SymbolSearch.Resolution.NotIndexed("ObjectMapper")"""),
         !typeChecks("""SymbolSearch.Resolution.Found(Set.empty)"""),
-        !typeChecks("""SymbolSearch.NameSearch.WithoutVersions(Nil)"""),
-        !typeChecks("""Extractor.Detection.Listing(???)"""),
+        !typeChecks("""SymbolSearch.NameSearch.Matched(Set.empty)"""),
+        !typeChecks("""Extractor.Detection.Parsed(Set.empty)"""),
         !typeChecks("""Web.ArtifactPage.SplitGroup(???)"""),
         !typeChecks("""Web.VersionPage.IndexPage(???)"""),
       )
     ,
-    test("a start state with an invariant is built by its smart constructor"):
+    test("intermediate states, transitions and inner machines are private"):
       assertTrue(
-        !typeChecks("""SymbolSearch.Resolution.SymbolTiers("x", ::(SymbolSearch.Match.Similar, Nil))"""),
-        typeChecks("""SymbolSearch.Resolution.tiersFor("ObjectMapper")"""),
-        !typeChecks("""Extractor.Detection.Detecting(???, ???, ::(Extractor.Format.Javadoc, Nil))"""),
-        typeChecks("""Extractor.Detection.start(???, ???)"""),
+        !typeChecks("""val s: SymbolSearch.Indexing.Stale = ???"""),
+        !typeChecks("""SymbolSearch.Indexing.compare(???)"""),
+        !typeChecks("""SymbolSearch.Indexing.write(???)"""),
+        !typeChecks("""val s: SymbolSearch.Resolution.NotIndexed = ???"""),
+        !typeChecks("""SymbolSearch.Resolution.byAi(???)"""),
+        !typeChecks("""SymbolSearch.Resolution.tiers"""),
+        !typeChecks("""SymbolSearch.Resolution.tiersFor("ObjectMapper")"""),
+        !typeChecks("""val s: SymbolSearch.NameSearch.WithoutVersions = ???"""),
+        !typeChecks("""val s: Extractor.Detection.Listing = ???"""),
+        !typeChecks("""Extractor.Detection.detect(???)"""),
+        !typeChecks("""val s: Web.ArtifactPage.NotAnArtifact = ???"""),
+        !typeChecks("""Web.ArtifactPage.splitGroup(???)"""),
+        !typeChecks("""val s: Web.VersionPage.NoJavadoc = ???"""),
+        !typeChecks("""Web.VersionPage.open(???)"""),
       )
   )

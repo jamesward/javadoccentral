@@ -140,20 +140,20 @@ object SymbolSearch:
    * The name search (`byName`) runs the [[NameSearch]] machine inside its transition.
    */
   object Resolution:
-    /** The query as typed: the start state. */
+    /** The query as typed: the machine's input. */
     case class Query(symbol: String)
     /** The symbol tiers not tried yet, in order: never empty (see [[tiersFor]]). */
-    case class SymbolTiers private[Resolution] (symbol: String, tiers: ::[Match])
+    private case class SymbolTiers(symbol: String, tiers: ::[Match])
     /** Nothing in the index matches. */
-    case class NotIndexed private[Resolution] (symbol: String)
+    private case class NotIndexed(symbol: String)
     case class Found private[Resolution] (artifacts: Set[MavenCentral.GroupArtifact])
 
-    def byName(query: Query): ZIO[SymbolIndex, Throwable, Found | SymbolTiers] =
+    private def byName(query: Query): ZIO[SymbolIndex, Throwable, Found | SymbolTiers] =
       searchGroupArtifacts(query.symbol).map: found =>
         if found.nonEmpty then Found(found) else tiersFor(query.symbol)
 
-    /** The tiers for a symbol: the start of [[symbolArtifacts]]' machine, and the only way to make one. */
-    def tiersFor(symbol: String): SymbolTiers =
+    /** The tiers for a symbol: the only way to make a `SymbolTiers`. */
+    private def tiersFor(symbol: String): SymbolTiers =
       val trimmed = symbol.trim
       val tiers =
         if trimmed.length < minFuzzyLength then ::(Match.Exact, Nil)
@@ -161,36 +161,47 @@ object SymbolSearch:
         else ::(Match.Containing, List(Match.Similar))
       SymbolTiers(symbol, tiers)
 
-    def bySymbol(tiers: SymbolTiers): ZIO[SymbolIndex, Throwable, Found | SymbolTiers | NotIndexed] =
+    private def bySymbol(tiers: SymbolTiers): ZIO[SymbolIndex, Throwable, Found | SymbolTiers | NotIndexed] =
       lookup(tiers.tiers.head, tiers.symbol).map: found =>
         if found.nonEmpty then Found(found)
         else tiers.tiers.tail match
           case next :: rest => SymbolTiers(tiers.symbol, ::(next, rest))
           case Nil          => NotIndexed(tiers.symbol)
 
-    def byAi(notIndexed: NotIndexed): ZIO[HerokuInference & Client & MavenCentralRepo & Extractor.JavadocCache & SymbolIndex & SymbolSearchGuard, SearchError, Found] =
+    private def byAi(notIndexed: NotIndexed): ZIO[HerokuInference & Client & MavenCentralRepo & Extractor.JavadocCache & SymbolIndex & SymbolSearchGuard, SearchError, Found] =
       aiSearchAndIndex(notIndexed.symbol).map(Found(_))
 
+    /** The inner machine both machines below share: each tier in turn, until one matches. */
+    private val tiers: StateMachine[SymbolIndex, Throwable, SymbolTiers, Found | NotIndexed] =
+      StateMachine.step(bySymbol).loop[SymbolTiers, Found | NotIndexed]
+
+    /** The symbol tiers alone, without AI search: nothing matching is an empty set. */
+    val symbols: StateMachine[SymbolIndex, Throwable, String, Set[MavenCentral.GroupArtifact]] =
+      tiers.contramap(tiersFor).map:
+        case Found(artifacts) => artifacts
+        case _: NotIndexed    => Set.empty
+      .named("symbol-search")
+
+    val machine: StateMachine[
+      SymbolIndex & HerokuInference & Client & MavenCentralRepo & Extractor.JavadocCache & SymbolSearchGuard,
+      Throwable | SearchError, Query, Found,
+    ] =
+      StateMachine.step(byName)
+        .on[SymbolTiers, Found](tiers)
+        .on[NotIndexed, Found](StateMachine.step(byAi))
+        .named("search")
+
   def symbolArtifacts(symbol: String): ZIO[SymbolIndex, Throwable, Set[MavenCentral.GroupArtifact]] =
-    import Resolution.*
-    StateMachine[SymbolTiers, SymbolTiers, Found | NotIndexed]("symbol-search").run(tiersFor(symbol)):
-      case tiers: SymbolTiers => bySymbol(tiers)
-    .map:
-      case Found(artifacts) => artifacts
-      case _: NotIndexed    => Set.empty
-    .mapError(_.error)
+    Resolution.symbols.run(symbol).mapError(_.error)
 
   def search(symbol: String): ZIO[SymbolIndex & HerokuInference & Client & MavenCentralRepo & Extractor.JavadocCache & SymbolSearchGuard, SearchError, Set[MavenCentral.GroupArtifact]] =
-    import Resolution.*
-    StateMachine[Query, SymbolTiers | NotIndexed, Found]("search").run(Query(symbol)):
-      case query: Query           => byName(query)
-      case tiers: SymbolTiers     => bySymbol(tiers)
-      case notIndexed: NotIndexed => byAi(notIndexed)
-    .mapError: failed =>
-      failed.error match
-        case e: SearchError => e
-        case e: Throwable   => SearchError(e.toString)
-    .map(_.artifacts)
+    Resolution.machine.run(Resolution.Query(symbol)).mapBoth(
+      failed =>
+        failed.error match
+          case e: SearchError => e
+          case e: Throwable   => SearchError(e.toString),
+      _.artifacts,
+    )
 
   /** Asks AI search for the artifacts, keeps the real ones, and schedules indexing them. */
   private def aiSearchAndIndex(symbol: String): ZIO[HerokuInference & Client & MavenCentralRepo & Extractor.JavadocCache & SymbolIndex & SymbolSearchGuard, SearchError, Set[MavenCentral.GroupArtifact]] =
@@ -247,28 +258,29 @@ object SymbolSearch:
    * without the version-like tokens.
    */
   object NameSearch:
-    /** The query as typed: any string is a valid start, and [[queryParts]] normalizes it. */
+    /** The query as typed: the machine's input. Any string is valid; [[queryParts]] normalizes it. */
     case class ByName(query: String)
     /** The full query matched nothing: its parts without the version-like tokens. */
-    case class WithoutVersions private[NameSearch] (parts: List[String])
+    private case class WithoutVersions(parts: List[String])
     case class Matched private[NameSearch] (artifacts: Set[MavenCentral.GroupArtifact])
 
-    def byName(byName: ByName): ZIO[SymbolIndex, Throwable, Matched | WithoutVersions] =
+    private def byName(byName: ByName): ZIO[SymbolIndex, Throwable, Matched | WithoutVersions] =
       val parts = queryParts(byName.query)
       SymbolIndex.groupArtifactsContainingAll(parts).map: found =>
         val withoutVersions = parts.filterNot(isVersionToken)
         if found.nonEmpty || withoutVersions.size == parts.size then Matched(found)
         else WithoutVersions(withoutVersions)
 
-    def withoutVersions(query: WithoutVersions): ZIO[SymbolIndex, Throwable, Matched] =
+    private def withoutVersions(query: WithoutVersions): ZIO[SymbolIndex, Throwable, Matched] =
       SymbolIndex.groupArtifactsContainingAll(query.parts).map(Matched(_))
 
+    val machine: StateMachine[SymbolIndex, Throwable, ByName, Matched] =
+      StateMachine.step(byName)
+        .on[WithoutVersions, Matched](StateMachine.step(withoutVersions))
+        .named("artifact-search")
+
   def searchGroupArtifacts(query: String): ZIO[SymbolIndex, Throwable, Set[MavenCentral.GroupArtifact]] =
-    import NameSearch.*
-    StateMachine[ByName, WithoutVersions, Matched]("artifact-search").run(ByName(query)):
-      case query: ByName           => byName(query)
-      case query: WithoutVersions  => withoutVersions(query)
-    .mapBoth(_.error, _.artifacts)
+    NameSearch.machine.run(NameSearch.ByName(query)).mapBoth(_.error, _.artifacts)
 
   /**
    * Indexing one parsed artifact version, as a [[StateMachine]]:
@@ -276,19 +288,19 @@ object SymbolSearch:
    * Candidate ──compare──▶ Stale ──claim──▶ Claimed ──write──▶ Written
    *   └──▶ Skipped.UpToDate   └──▶ Skipped.Busy    └──▶ Skipped.Superseded
    * }}}
-   * Only `compare` can make a `Stale` and only `claim` a `Claimed`, so nothing writes
-   * without the version check and the claim. The claim's guard entry is released by the
-   * machine's `Scope`.
+   * Outside this object the machine is `Candidate` in, `Written | Skipped` out: `Stale`,
+   * `Claimed` and the transitions are private, so no caller can start partway or run a step
+   * on its own. The claim's guard entry is released by the run's `Scope`.
    */
   object Indexing:
-    /** Parsed symbols for a version, not yet compared with the index. The start state. */
+    /** Parsed symbols for a version, not yet compared with the index. The machine's input. */
     case class Candidate(gav: MavenCentral.GroupArtifactVersion, symbols: Set[Extractor.Content])
 
     /** Newer than the indexed version (or nothing is indexed). */
-    case class Stale private[Indexing] (candidate: Candidate)
+    private case class Stale(candidate: Candidate)
 
     /** This fiber holds the artifact's [[SymbolSearchGuard]] entry. */
-    case class Claimed private[Indexing] (candidate: Candidate)
+    private case class Claimed(candidate: Candidate)
 
     /** The candidate's symbols are now the artifact's indexed symbols. */
     case class Written private[Indexing] (gav: MavenCentral.GroupArtifactVersion)
@@ -303,7 +315,7 @@ object SymbolSearch:
       /** A newer version was indexed (another dyno, the backfill) between `compare` and `write`. */
       case object Superseded extends Skipped
 
-    def compare(candidate: Candidate): ZIO[SymbolIndex, Throwable, Stale | Skipped] =
+    private def compare(candidate: Candidate): ZIO[SymbolIndex, Throwable, Stale | Skipped] =
       SymbolIndex.indexedVersion(candidate.gav.noVersion).map: indexed =>
         val version = candidate.gav.version
         indexed match
@@ -311,14 +323,14 @@ object SymbolSearch:
             Skipped.UpToDate(current)
           case _ => Stale(candidate)
 
-    def claim(stale: Stale): ZIO[SymbolSearchGuard & Scope, Nothing, Claimed | Skipped] =
+    private def claim(stale: Stale): ZIO[SymbolSearchGuard & Scope, Nothing, Claimed | Skipped] =
       val groupArtifact = stale.candidate.gav.noVersion
       ZIO.serviceWithZIO[SymbolSearchGuard]: guard =>
         ZIO.acquireRelease(guard.active.putIfAbsent(groupArtifact, ()).map(_.isEmpty)): acquired =>
           ZIO.when(acquired)(guard.active.remove(groupArtifact))
         .map(acquired => if acquired then Claimed(stale.candidate) else Skipped.Busy)
 
-    def write(claimed: Claimed): ZIO[SymbolIndex, Throwable, Written | Skipped] =
+    private def write(claimed: Claimed): ZIO[SymbolIndex, Throwable, Written | Skipped] =
       val Candidate(gav, symbols) = claimed.candidate
       defer:
         val (duration, written) = SymbolIndex.replace(gav, symbols.map(_.fqn)).timed.run
@@ -330,17 +342,17 @@ object SymbolSearch:
         )(ZIO.logInfo("Updated symbol index")).run
         if written then Written(gav) else Skipped.Superseded
 
-    type Failure = StateMachine.Failed[Candidate | Stale | Claimed, Throwable]
+    val machine: StateMachine[SymbolIndex & SymbolSearchGuard, Throwable, Candidate, Written | Skipped] =
+      StateMachine.step(compare)
+        .on[Stale, Skipped](StateMachine.step(claim))
+        .on[Claimed, Skipped](StateMachine.step(write))
+        .named("indexing")
 
-    /**
-     * Runs the machine from `candidate` to its final state: written or skipped. The claim is
-     * released when the machine stops, even if `write` fails.
-     */
+    type Failure = StateMachine.Failed[Throwable]
+
+    /** Runs the machine. The claim is released when it stops, even if `write` fails. */
     def run(candidate: Candidate): ZIO[SymbolIndex & SymbolSearchGuard, Failure, Written | Skipped] =
-      StateMachine[Candidate, Stale | Claimed, Written | Skipped]("indexing").run(candidate):
-        case candidate: Candidate => compare(candidate)
-        case stale: Stale         => claim(stale)
-        case claimed: Claimed     => write(claimed)
+      machine.run(candidate)
 
   def update(groupArtifactVersion: MavenCentral.GroupArtifactVersion, symbols: Set[Extractor.Content]): ZIO[SymbolIndex & SymbolSearchGuard, Indexing.Failure, Unit] =
     Indexing.run(Indexing.Candidate(groupArtifactVersion, symbols)).unit

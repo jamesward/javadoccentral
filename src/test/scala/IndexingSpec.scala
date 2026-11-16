@@ -4,10 +4,18 @@ import zio.concurrent.ConcurrentMap
 import zio.direct.*
 import zio.test.*
 
+import java.sql.Connection
+import javax.sql.DataSource
+
 import SymbolSearch.Indexing
 import SymbolSearch.Indexing.Skipped
 
-/** The symbol-indexing state machine (`SymbolSearch.Indexing`) against a real (Testcontainers) database. */
+/**
+ * The symbol-indexing state machine (`SymbolSearch.Indexing`) against a real (Testcontainers)
+ * database. Only the machine is public, so each outcome is produced through it: `Busy` by
+ * holding the artifact's guard entry, `Superseded` by indexing a newer version while the
+ * machine's write waits on the artifact's row lock.
+ */
 object IndexingSpec extends ZIOSpecDefault:
 
   private def gav(v: String) = GroupArtifactVersion(GroupId("com.example"), ArtifactId("judge"), Version(v))
@@ -26,6 +34,7 @@ object IndexingSpec extends ZIOSpecDefault:
         val same = Indexing.run(candidate("2.0", "com.example.Other")).run
         val older = Indexing.run(candidate("1.0", "com.example.Old")).run
         val newer = Indexing.run(candidate("3.0", "com.example.Newer")).run
+        val guard = ZIO.serviceWithZIO[SymbolSearch.SymbolSearchGuard](_.active.toList).run
         assertTrue(
           written(first).contains("2.0"),
           upToDate(same).contains("2.0"),
@@ -33,37 +42,58 @@ object IndexingSpec extends ZIOSpecDefault:
           written(newer).contains("3.0"),
           SymbolIndex.exact("newer").run == Set(judge),
           SymbolIndex.exact("jevjudge").run.isEmpty,
-        )
-    ,
-    test("a write is Superseded when a newer version was indexed after the comparison"):
-      defer:
-        val stale = staleFor(candidate("1.0", "com.example.Old")).run
-        SymbolIndex.replace(gav("2.0"), Set("com.example.Newer")).run
-        val result = ZIO.scoped:
-          Indexing.claim(stale).flatMap:
-            case claimed: Indexing.Claimed => Indexing.write(claimed)
-            case skipped: Skipped          => ZIO.succeed(skipped)
-        .run
-        assertTrue(result == (Skipped.Superseded: Skipped), SymbolIndex.exact("old").run.isEmpty)
-    ,
-    test("a second claim on an artifact is Busy, and the guard is released when the first claim's scope closes"):
-      defer:
-        val stale = staleFor(candidate("1.0", "com.example.A")).run
-        val second = ZIO.scoped(Indexing.claim(stale) *> Indexing.claim(stale)).run
-        val afterwards = ZIO.scoped(Indexing.claim(stale)).run
-        val guard = ZIO.serviceWithZIO[SymbolSearch.SymbolSearchGuard](_.active.toList).run
-        assertTrue(
-          second == Skipped.Busy,
-          afterwards.isInstanceOf[Indexing.Claimed],
           guard.isEmpty,
         )
+    ,
+    test("is Busy while another fiber holds the artifact's claim"):
+      defer:
+        val guard = ZIO.service[SymbolSearch.SymbolSearchGuard].run.active
+        guard.put(judge, ()).run
+        val result = Indexing.run(candidate("1.0", "com.example.A")).run
+        assertTrue(result == (Skipped.Busy: Skipped), SymbolIndex.exact("a").run.isEmpty)
+    ,
+    test("a write is Superseded when a newer version is indexed while it waits for the row lock"):
+      ZIO.scoped:
+        defer:
+          Indexing.run(candidate("1.0", "com.example.Old")).run
+          val dataSource = ZIO.serviceWith[SymbolIndex](_.dataSource).run
+          val lock = connection(dataSource).run
+          execute(lock, "select id from artifact where group_id = 'com.example' and artifact_id = 'judge' for update").run
+          val fiber = Indexing.run(candidate("2.0", "com.example.Middle")).fork.run
+          lockWaiters(dataSource).repeat(Schedule.recurUntil[Int](_ > 0) && Schedule.spaced(20.millis)).timeoutFail("never waited")(10.seconds).run
+          execute(lock, "update artifact set indexed_version = '3.0' where group_id = 'com.example' and artifact_id = 'judge'").run
+          commit(lock).run
+          val result = fiber.join.run
+          assertTrue(result == (Skipped.Superseded: Skipped), SymbolIndex.exact("middle").run.isEmpty)
+    @@ TestAspect.withLiveClock
 
   ).provide(PostgresContainer.freshDatabase, SymbolIndex.layer, guardLayer)
 
-  private def staleFor(candidate: Indexing.Candidate) =
-    Indexing.compare(candidate).flatMap:
-      case stale: Indexing.Stale => ZIO.succeed(stale)
-      case other                 => ZIO.dieMessage(s"expected Stale, got $other")
+  // JDBC helpers outside `defer`, which rejects the blocking Java calls' mutable results.
+  private def connection(dataSource: DataSource): ZIO[Scope, Throwable, Connection] =
+    ZIO.acquireRelease(
+      ZIO.attemptBlocking:
+        val connection = dataSource.getConnection.nn
+        connection.setAutoCommit(false)
+        connection
+    )(connection => ZIO.succeedBlocking(connection.close()))
+
+  private def execute(connection: Connection, sql: String): Task[Unit] =
+    ZIO.attemptBlocking(connection.createStatement().nn.execute(sql)).unit
+
+  private def commit(connection: Connection): Task[Unit] =
+    ZIO.attemptBlocking(connection.commit())
+
+  /** Sessions in this database waiting on a lock. */
+  private def lockWaiters(dataSource: DataSource): Task[Int] =
+    ZIO.scoped:
+      connection(dataSource).flatMap: connection =>
+        ZIO.attemptBlocking:
+          val results = connection.createStatement().nn.executeQuery(
+            "select count(*) from pg_stat_activity where wait_event_type = 'Lock' and datname = current_database()"
+          ).nn
+          results.next()
+          results.getInt(1)
 
   // Final states can't be built here (private constructors), so tests read them instead.
   private def written(result: Indexing.Written | Skipped): Option[String] = result match
@@ -75,4 +105,3 @@ object IndexingSpec extends ZIOSpecDefault:
     case _                          => None
 
   given writtenOrSkipped: CanEqual[Indexing.Written | Skipped, Skipped] = CanEqual.derived
-  given claimedOrSkipped: CanEqual[Indexing.Claimed | Skipped, Skipped] = CanEqual.derived

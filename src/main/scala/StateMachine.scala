@@ -3,7 +3,8 @@ import zio.*
 import scala.reflect.TypeTest
 
 /**
- * Explicit, effectful state machines for ZIO, with compile-checked transitions.
+ * Explicit, effectful state machines for ZIO, built by composition, with compile-checked
+ * transitions.
  *
  * Written to be lifted into a library: it depends only on ZIO and the Scala 3 standard
  * library, and nothing in it knows about this application.
@@ -14,23 +15,27 @@ import scala.reflect.TypeTest
  * make, can't be written down: the compiler rejects it, rather than code checking for it at
  * run time or a comment asking callers not to. Every part of the design serves that goal:
  *
- *  - being in a state the flow never reached: private constructors on non-start states;
- *  - a result the machine didn't produce: private constructors on final states;
+ *  - being in a state the flow never reached: intermediate states are private types, and
+ *    output states have private constructors;
+ *  - a result the machine didn't produce: private constructors on output states;
+ *  - running a step on its own, or starting partway: transitions and inner machines are
+ *    private, and a machine's only entry is its input type;
  *  - a state carrying impossible data: each state holds exactly its valid data;
- *  - a move the flow doesn't allow: transitions return a union of the allowed states;
- *  - beginning a run partway through: `run` accepts only a `Start`;
- *  - an edge back to an acyclic machine's start: transitions return `Next | Done`;
- *  - an active state with no transition: exhaustive dispatch (under `-Werror`);
+ *  - a move the flow doesn't allow: a step returns a union of the allowed states;
+ *  - a state nothing handles: it would appear in the machine's output type, which then
+ *    doesn't match the declared one;
+ *  - an edge back to an acyclic machine's input: composition has no back edges, and `loop`
+ *    only repeats its own input type;
  *  - a resource still held after the machine stops: each run owns a `Scope`.
  *
  * When designing a machine, check each state against this list. In particular:
  *
- *  - '''Only start states are public.''' Give every `Next` and `Done` state a private
- *    constructor (`case class Claimed private[Indexing] (…)`), so the only way to hold one is
- *    to have run the transitions before it: a value of the type is proof the flow got there.
- *    A start whose data has an invariant gets a private constructor too, plus a smart
- *    constructor that establishes it (`Resolution.tiersFor`, `Detection.start`); prefer a
- *    start that holds raw input any value of which is valid (`NameSearch.ByName(query)`).
+ *  - '''Only the input and the outputs are public.''' A machine lives in its own object.
+ *    Its input type is public (prefer raw input any value of which is valid:
+ *    `NameSearch.ByName(query)`); intermediate states, transitions, smart constructors and
+ *    inner machines are `private`; output types are public with `private[Machine]`
+ *    constructors, so callers can match on a result but not forge one. The public surface
+ *    is a `val machine: StateMachine[R, E, In, Out]` (and maybe a `run` helper).
  *  - '''Group states with a sealed trait, not an enum''': enum cases can't have private
  *    constructors (`Indexing.Skipped`). Enums are fine for plain data inside states.
  *  - '''No data that some path makes meaningless.''' Each distinct situation is its own state
@@ -58,17 +63,12 @@ import scala.reflect.TypeTest
  *
  * =The model=
  *
- * A machine has three kinds of state, each declared as a type parameter (usually a union):
+ * A `StateMachine[R, E, In, Out]` takes an `In` state to an `Out` state (each usually a
+ * union of case classes), needing `R` and failing with [[Failed]]`[E]`. Only `In` and `Out`
+ * appear in its type: whatever states it passes through inside are its own business, which
+ * is what lets them be private. Machines are values, built from steps and combined:
  *
- *  - `Start`: where a run begins, the only state `run` accepts.
- *  - `Next`: the states a transition can lead to that still have work to do.
- *  - `Done`: the final states, one of which `run` returns.
- *
- * The '''active''' states, those with a transition, are `Start | Next`.
- *
- *  - '''Each state is a type''', usually a case class carrying exactly the data valid in that
- *    state (see the design goal).
- *  - '''Each transition is a plain function''' from one active state to the union of the
+ *  - '''`step(f)`''' lifts one transition, a plain function from a state to the union of the
  *    states it may lead to:
  *    {{{
  *    def claim(stale: Stale): ZIO[SymbolSearchGuard & Scope, Nothing, Claimed | Skipped]
@@ -76,55 +76,64 @@ import scala.reflect.TypeTest
  *    That union is the machine's topology at that state. Returning any other state is a type
  *    error, including when the target is decided at run time, because every branch must
  *    still produce one of the listed states.
- *  - '''A machine runs''' with a dispatch table from each active state to its transition:
- *    {{{
- *    StateMachine[Candidate, Stale | Claimed, Written | Skipped]("indexing").run(candidate):
- *      case candidate: Candidate => compare(candidate)
- *      case stale: Stale         => claim(stale)
- *      case claimed: Claimed     => write(claimed)
- *    }}}
- *    The `match` must cover every active state: a missing case is an exhaustivity warning,
- *    which fails the build under `-Werror`. The machine stops at the first final state and
- *    returns it, usually for a caller to render (`match` over the final union, also checked
- *    for exhaustiveness).
+ *  - '''`m1.andThen(m2)`''' (or `>>>`) runs `m2` on `m1`'s output.
+ *  - '''`m.on[A, Rest](m2)`''' runs `m2` on the `A` states of `m`'s output and passes the
+ *    `Rest` through. `Rest` is spelled out because Scala can't subtract a type from a union;
+ *    the compiler checks that `A | Rest` covers the output.
+ *  - '''`m.loop[A, B]`''' repeats `m` while its output is an `A` and returns the first `B`
+ *    (the symbol tiers, the doc formats). The loop's input is `A`, so it can't be entered at
+ *    any other state.
+ *  - '''`m.contramap(f)` / `m.map(f)`''' adapt the input or output without a logged step.
+ *  - '''`m.named(name)`''' names a machine in its log lines and its failures.
+ *  - '''`m.run(in)`''' runs it.
  *
- * Declaring the states up front lists them in one place and lets `run` infer the
- * environment `R` and error `E` from the transitions. Document the topology as a diagram in
- * the machine's scaladoc; see `SymbolSearch.Resolution` for the style.
+ * {{{
+ * val machine: StateMachine[SymbolIndex & SymbolSearchGuard, Throwable, Candidate, Written | Skipped] =
+ *   step(compare)
+ *     .on[Stale, Skipped](step(claim))
+ *     .on[Claimed, Skipped](step(write))
+ *     .named("indexing")
+ * }}}
  *
- * '''Entry is checked too.''' `run` takes only a `Start`, so a run can't begin partway
- * through (`search` can't start at `NotIndexed` and skip straight to paid AI search). A
- * transition returns `Next | Done`, so when `Start` is not in `Next`, no transition can lead
- * back to the start: in an acyclic machine (`A → B → C`) the start has no incoming edges, by
- * type. Private constructors complement this: `Start` controls where a run may begin, and
- * private constructors stop code ''outside'' the machine from building a later state at all.
+ * The declared type is the check that every state is handled: forget the `write` branch
+ * and the output is `Claimed | Skipped`, which doesn't conform. Document the topology as a
+ * diagram in the machine's scaladoc; see `SymbolSearch.Resolution` for the style.
  *
- * Cycles are edges back to an active state, often to the same type with less work left
- * (`SymbolTiers(tiers.tail)`, `Detecting(formats.tail)`). A cycle through the start lists the
- * start in `Next` too: `StateMachine[SymbolTiers, SymbolTiers, Found | NotIndexed]`.
- * Composition is a transition that runs another machine (`Resolution.byName` runs
- * `NameSearch`).
+ * '''Inner machines.''' A machine is a value, so a bigger one is built from smaller ones and
+ * the smaller ones stay private: `Resolution.tiers` (a `loop` over the symbol tiers) is
+ * private, and both `Resolution.machine` (search) and `Resolution.symbols` (tiers alone)
+ * are built from it. A transition may also run another machine (`Resolution.byName` runs
+ * `NameSearch`) when its output doesn't feed straight into the next input.
+ *
+ * '''Why not a monad?''' A machine is a function `In => ZIO[R, E, Out]` (a Kleisli arrow
+ * over ZIO). ZIO is already the monad; what machines need is the other composition, output
+ * into input (`andThen`), plus choice (`on`) and feedback (`loop`): the same operators crem
+ * provides (Kleisli/Sequential, Alternative, Feedback). For a fixed input a machine is also
+ * a monad in its output, but that bind re-feeds the same input to every machine, which no
+ * flow here wants, so it is left out.
  *
  * =Errors=
  *
  * Three kinds, handled in three ways:
  *
  *  - '''An expected outcome''' (nothing found, the lock is held elsewhere, the page doesn't
- *    exist) is a state, not an error: a final state, or an edge to a state that handles it.
+ *    exist) is a state, not an error: an output state, or an edge to a state that handles it.
  *  - '''A recoverable failure''' is an '''error edge''': the transition catches it and
  *    returns a state, and the union checks the target like any other edge:
  *    {{{
  *    MavenCentral.searchArtifacts(groupId).map(GroupArtifacts(groupId, _))
  *      .orElseSucceed(InvalidGroup(groupId))
  *    }}}
- *    Retry inside a transition (`.retry(schedule)`), not with an edge back to the same state:
+ *    Retry inside a transition (`.retry(schedule)`), not with a loop back to the same state:
  *    that would have no backoff and no limit. A machine whose failures are all error edges
  *    has `E = Nothing`, so `run` can't fail; `.mapError(_.error)` turns its
- *    `Failed[_, Nothing]` into `Nothing`.
- *  - '''Anything else''' fails the machine with [[Failed]], which keeps the machine's name and
- *    the state it failed in (its `toString` reads "indexing failed in Stale: …"). Callers
- *    with a public error type map it once at the end, not per transition. Defects and
- *    interruption pass through unchanged: they are not the machine's to handle.
+ *    `Failed[Nothing]` into `Nothing`.
+ *  - '''Anything else''' fails the machine with [[Failed]], which keeps the type name of the
+ *    state it failed in and the named machines it was running in, outermost first: its
+ *    `toString` reads "search > symbol-search failed in SymbolTiers: …". It keeps the name,
+ *    not the state, so intermediate types stay private. Callers with a public error type
+ *    map it once at the end, not per transition. Defects and interruption pass through
+ *    unchanged: they are not the machine's to handle.
  *
  * Choosing between an error edge and failing is a product decision. `SymbolSearch` does not
  * fall back to AI search when the index is down, because every query would then cost an AI
@@ -132,35 +141,39 @@ import scala.reflect.TypeTest
  *
  * =Resources=
  *
- * Each run owns a `Scope`. A transition may acquire something that later states rely on
- * (`ZIO.acquireRelease` in `Indexing.claim`), and it is released when the machine stops,
- * whether it reached a final state, failed or was interrupted. Callers must not wrap `run` in
- * `ZIO.scoped`; the machine's environment never contains `Scope`.
+ * Each run owns a `Scope`, shared by every step of the run, inner machines included. A
+ * transition may acquire something that later states rely on (`ZIO.acquireRelease` in
+ * `Indexing.claim`), and it is released when the machine stops, whether it reached an
+ * output state, failed or was interrupted. Callers must not wrap `run` in `ZIO.scoped`; a
+ * machine's `R` never contains `Scope`.
  *
  * A linear indexed state monad (scalaz's `IndexedStateT`, `S1 => F[(S2, A)]`) can't give
  * this guarantee: once a step fails there is no state left to release.
  *
  * =Observability=
  *
- * Every transition logs `"State machine step"` at debug level, annotated with `machine`,
- * `from` and `to` (state type names) and `durationMs`. Only type names are logged, never
- * state data, which can be large (an artifact's whole symbol set) or sensitive.
+ * Every step logs `"State machine step"` at debug level, annotated with `from` and `to`
+ * (state type names) and `durationMs`. `named` adds a `machine` annotation to every log
+ * line inside it, the steps' and the transitions' own (the innermost name wins). Only type
+ * names are logged, never state data, which can be large (an artifact's whole symbol set)
+ * or sensitive.
  *
  * =Constraints=
  *
  * Where the design goal is not (yet) met by the compiler, and a run-time assumption remains:
  *
- *  - `Next` and `Done` must not overlap: a transition's result is final exactly when it is
- *    not a `Next` state (`run` casts on that basis). An overlapping declaration compiles; see
- *    ''Possible improvements''. (`Start` may overlap `Next`, for a cycle through the start.)
- *  - Private constructors bind outside the machine's object, not inside it: code within
+ *  - The two sides of a split must not overlap: `A` and `Rest` in `on[A, Rest]`, `A` and `B`
+ *    in `loop[A, B]`. A value is routed to `Rest` (or `B`) exactly when it is not an `A`, and
+ *    the combinator casts on that basis. An overlapping split compiles; see
+ *    ''Possible improvements''.
+ *  - Private members bind outside the machine's object, not inside it: code within
  *    `object Indexing` could still build a `Claimed`. Keep a machine's object to its states,
- *    its transitions and its `run`.
- *  - `Next` states must be checkable at run time (a `TypeTest`). Classes, case classes and
- *    unions of them are. A generic state is too while the machine's states pin its type
- *    arguments (`Retrying[Int]`), but not when a `Next` and a `Done` state differ only in
- *    type arguments (`Box[Int]` vs `Box[String]`): erasure can't tell them apart, and the
- *    unchecked-type-test warning fails the build under `-Werror`.
+ *    its transitions and its machines.
+ *  - The `A` of a split must be checkable at run time (a `TypeTest`). Classes, case classes
+ *    and unions of them are. A generic state is too while the types pin its arguments
+ *    (`Retrying[Int]`), but not when the two sides differ only in type arguments (`Box[Int]`
+ *    vs `Box[String]`): erasure can't tell them apart, and the unchecked-type-test warning
+ *    fails the build under `-Werror`.
  *  - State types should be distinct per machine: two machines sharing a state type works,
  *    but blurs their logs.
  *
@@ -168,14 +181,19 @@ import scala.reflect.TypeTest
  *
  *  - '''crem''' (Haskell; Perone & Karachalias, "Crème de la Crem", 2023): Mealy machines
  *    whose topology is a type, with states indexed by node, so an action may branch at run
- *    time but only to allowed nodes. The union return type here is the same idea without
- *    type-level graphs. crem also composes machines and renders them as Mermaid diagrams.
+ *    time but only to allowed nodes, composed with Sequential, Kleisli, Alternative and
+ *    Feedback operators, and rendered as Mermaid diagrams. `step`'s union return type is
+ *    the same topology idea without type-level graphs, and `andThen` / `on` / `loop` are its
+ *    composition operators.
  *  - '''Idris `ST`''' (Brady, "State Machines All the Way Down", 2017) and resource-dependent
  *    algebraic effects: an operation's output state may depend on its result, e.g. a login
  *    leaves you logged in or out depending on whether it succeeded. Here the result is
  *    simply the next state.
  *  - '''Typestate''' (Strom & Yemini, 1986): an object's allowed operations depend on its
- *    state. Private constructors provide the "can't skip a step" part.
+ *    state. Private states and transitions provide the "can't skip a step" part.
+ *  - '''Arrows''' (Hughes, 2000): `andThen`, `on` and `loop` are the category, choice
+ *    (`ArrowChoice`'s `left`, on unions instead of `Either`) and feedback (`ArrowLoop`,
+ *    here a `tailRecM`) operations on Kleisli arrows.
  *  - '''IndexedStateT''' (scalaz) / zio-prelude's `ZPure`: indexed state monads. Tried and
  *    rejected: they are linear, so after a branch every later step must accept and pass on
  *    the whole union; they lose state (and resources) on failure; and `ZPure` can't run
@@ -187,75 +205,121 @@ import scala.reflect.TypeTest
  *
  * =Possible improvements=
  *
- *  - '''Disjoint `Next` and `Done` at compile time.''' A macro (or a `NotGiven` on each pair of
- *    union members) could reject an overlapping declaration, removing the last run-time
- *    assumption in `run`.
- *  - '''Private constructors by default.''' A macro or linter rule flagging a public
- *    constructor on any `Next` or `Done` state, so the first design rule can't be forgotten
+ *  - '''Disjoint splits at compile time.''' A macro (or a `NotGiven` on each pair of union
+ *    members) could reject an overlapping `on[A, Rest]` or `loop[A, B]`, removing the last
+ *    run-time assumption.
+ *  - '''Inferred `Rest`.''' A macro could compute "the output minus `A`" so `on[A](m)` needs no
+ *    spelled-out remainder (Scala has no union subtraction).
+ *  - '''Private states by default.''' A macro or linter rule flagging a public intermediate
+ *    state or a public output constructor, so the first design rule can't be forgotten
  *    (today `MachineStatesSpec` lists them by hand).
- *  - '''Diagrams from types.''' A macro could read each transition's union return type
- *    and emit a Mermaid `stateDiagram` (crem's best feature), replacing the hand-drawn
+ *  - '''Diagrams from the composition.''' Each combinator could record its edge (step type
+ *    names, `on` branches, `loop` back edges) in the machine value, so a machine can render
+ *    itself as a Mermaid `stateDiagram` (crem's best feature), replacing the hand-drawn
  *    diagrams in scaladoc and keeping them in step with the code.
- *  - '''Topology tests.''' The same macro could expose the edge list, so a test can assert
- *    reachability (every final state reachable, no dead active state).
- *  - '''Per-state scopes.''' Today resources live until the machine stops. A state could own
- *    a scope closed on leaving it, for resources only some states need (a lock released
- *    before a slow, lock-free final step).
- *  - '''Step limits.''' A bound on transitions per run (dying with the path so far) would stop
- *    a buggy cycle from spinning forever. Not needed while every cycle consumes a list.
+ *  - '''Topology tests.''' The same recorded edges would let a test assert reachability
+ *    (every output state reachable, no dead state).
+ *  - '''Per-machine scopes.''' Today resources live until the whole run stops. A `scoped`
+ *    combinator could close an inner machine's scope when it finishes, for resources only
+ *    part of the flow needs (a lock released before a slow, lock-free last step).
+ *  - '''Step limits.''' A bound on `loop` iterations (dying with the path so far) would stop a
+ *    buggy cycle from spinning forever. Not needed while every loop consumes a list.
  *  - '''Path history.''' [[Failed]] could carry the states visited (type names) to show how the
- *    machine got there, and `run` could optionally return it with the final state.
- *  - '''Tracing.''' A span per transition (ZIO telemetry / OpenTelemetry) instead of, or as well
- *    as, the debug log; the log level and message could be configurable for a library.
- *  - '''Per-step timeouts.''' A machine-level deadline, or one per state, as an error edge to a
- *    timed-out state.
- *  - '''Machine-level error edges.''' A `recover: (Start | Next, E) => ZIO[R, E2, Next | Done]` hook
- *    for policies shared by every state (e.g. "the index is down: answer from cache"). Today
- *    each transition catches its own errors, which keeps the edge next to its cause.
- *  - '''Event-driven machines.''' Accepting external events (a queue) between transitions
- *    would cover long-lived entities, at which point Mechanoid's feature set (persistence,
- *    durable timeouts) becomes the comparison.
+ *    machine got there, and `run` could optionally return it with the output.
+ *  - '''Tracing.''' A span per step (ZIO telemetry / OpenTelemetry) instead of, or as well as,
+ *    the debug log; the log level and message could be configurable for a library.
+ *  - '''Timeouts.''' A `timeout` combinator on a machine, as an error edge to a timed-out state.
+ *  - '''Machine-level error edges.''' A `recover` combinator for policies shared by every step
+ *    of a machine (e.g. "the index is down: answer from cache"). Today each transition
+ *    catches its own errors, which keeps the edge next to its cause.
+ *  - '''Parallel composition.''' crem's `Parallel`: run two machines on parts of the input and
+ *    combine their outputs (`zipPar`-style).
+ *  - '''Event-driven machines.''' Accepting external events (a queue) between steps would
+ *    cover long-lived entities, at which point Mechanoid's feature set (persistence, durable
+ *    timeouts) becomes the comparison.
  *  - '''Library extraction.''' Package it (e.g. `zio-state-machine`), with this scaladoc as the
  *    README. Keep it free of logging backends and of this app's types.
  */
-object StateMachine:
+final class StateMachine[-R, +E, -In, +Out] private (
+  private val transition: In => ZIO[R & Scope, StateMachine.Failed[E], Out]
+):
+  import StateMachine.*
 
-  /** The machine failed with `error` while leaving `state`. */
-  case class Failed[+S, +E](machine: String, state: S, error: E):
-    /** The state's type name: the state itself can hold a lot of data. */
-    def stateName: String = StateMachine.name(state)
-    override def toString: String = s"$machine failed in $stateName: $error"
+  /** This machine, then `next` on its output. */
+  def andThen[R1 <: R, E1 >: E, Out2](next: StateMachine[R1, E1, Out, Out2]): StateMachine[R1, E1, In, Out2] =
+    StateMachine(in => transition(in).flatMap(next.transition))
+
+  /** Alias for [[andThen]]. */
+  def >>>[R1 <: R, E1 >: E, Out2](next: StateMachine[R1, E1, Out, Out2]): StateMachine[R1, E1, In, Out2] =
+    andThen(next)
 
   /**
-   * A machine that starts at a `Start` state, whose transitions lead to `Next` (more work)
-   * or `Done` (final) states. Each is usually a union. `Next` and `Done` must not overlap.
-   * `Start` is listed in `Next` only if a transition can lead back to it (a cycle through
-   * the start). `machine` names the machine in logs and failures.
+   * Runs `next` on the `A` states of this machine's output and passes the `Rest` through:
+   * `compare.on[Stale, Skipped](claim)`. `A | Rest` must cover the output, and the two must
+   * not overlap. (`Rest` is written out because Scala can't subtract a type from a union.)
    */
-  def apply[Start, Next, Done](machine: String): Machine[Start, Next, Done] = Machine(machine)
+  def on[A, Rest](using covers: Out <:< (A | Rest), branch: TypeTest[A | Rest, A])[R1 <: R, E1 >: E, Out2](
+    next: StateMachine[R1, E1, A, Out2]
+  ): StateMachine[R1, E1, In, Out2 | Rest] =
+    StateMachine: in =>
+      transition(in).flatMap: out =>
+        covers(out) match
+          case branch(a) => next.transition(a)
+          // Not an A, so (as A and Rest don't overlap) a Rest.
+          case rest => ZIO.succeed(rest.asInstanceOf[Rest])
 
-  final class Machine[Start, Next, Done](machine: String):
-    /**
-     * Runs `step` from `start` until it reaches a `Done` state, in a `Scope` that closes when
-     * the machine stops. Each transition logs `"State machine step"` at debug level, with the
-     * `machine` name, the `from` and `to` state types and `durationMs`.
-     */
-    def run[R, E](start: Start)(step: (Start | Next) => ZIO[R & Scope, E, Next | Done])(
-      using next: TypeTest[Next | Done, Next]
-    ): ZIO[R, Failed[Start | Next, E], Done] =
-      def transition(from: Start | Next): ZIO[R & Scope, Failed[Start | Next, E], Next | Done] =
-        logged(machine, from, step(from).mapError(Failed(machine, from, _)))
-      def loop(state: Next | Done): ZIO[R & Scope, Failed[Start | Next, E], Done] =
-        state match
-          case next(current) => transition(current).flatMap(loop)
-          // Not a Next state, so (as Next and Done don't overlap) a Done state.
-          case done => ZIO.succeed(done.asInstanceOf[Done])
-      ZIO.scoped[R](transition(start).flatMap(loop))
+  /**
+   * Repeats this machine while its output is an `A`, and returns the first `B`:
+   * `step(bySymbol).loop[SymbolTiers, Found | NotIndexed]`. `A | B` must cover the output,
+   * and the two must not overlap. The loop's input is its `A`, so it can only start there.
+   */
+  def loop[A, B](using covers: Out <:< (A | B), again: TypeTest[A | B, A], input: A <:< In): StateMachine[R, E, A, B] =
+    def go(a: A): ZIO[R & Scope, Failed[E], B] =
+      transition(input(a)).flatMap: out =>
+        covers(out) match
+          case again(next) => go(next)
+          // Not an A, so (as A and B don't overlap) a B.
+          case done => ZIO.succeed(done.asInstanceOf[B])
+    StateMachine(go)
 
-  private def logged[R, E, A](machine: String, from: Any, transition: ZIO[R, E, A]): ZIO[R, E, A] =
+  /** Builds this machine's input from an `In2` without a logged step (a pure entry point). */
+  def contramap[In2](f: In2 => In): StateMachine[R, E, In2, Out] =
+    StateMachine(in2 => transition(f(in2)))
+
+  /** Transforms the output without a logged step (for renaming or wrapping a result). */
+  def map[Out2](f: Out => Out2): StateMachine[R, E, In, Out2] =
+    StateMachine(in => transition(in).map(f))
+
+  /** Names the machine in its steps' logs (`machine`) and in its [[Failed]] path. */
+  def named(machine: String): StateMachine[R, E, In, Out] =
+    StateMachine: in =>
+      ZIO.logAnnotate(LogAnnotation("machine", machine)):
+        transition(in).mapError(failed => failed.copy(machines = machine :: failed.machines))
+
+  /** Runs the machine from `in` to its output, in a `Scope` that closes when it stops. */
+  def run(in: In): ZIO[R, Failed[E], Out] =
+    ZIO.scoped[R](transition(in))
+
+object StateMachine:
+
+  /**
+   * The machine failed with `error` in the state named `state` (its type name: the state
+   * itself can hold a lot of data). `machines` are the named machines it ran in, outermost
+   * first (`search > symbol-tiers`).
+   */
+  case class Failed[+E](state: String, error: E, machines: List[String] = Nil):
+    override def toString: String =
+      val machine = if machines.isEmpty then "state machine" else machines.mkString(" > ")
+      s"$machine failed in $state: $error"
+
+  /** One transition: from an `A` to whatever `f` returns (usually a union of states). */
+  def step[R, E, A, B](f: A => ZIO[R & Scope, E, B]): StateMachine[R, E, A, B] =
+    StateMachine: a =>
+      logged(a, f(a).mapError(Failed(name(a), _)))
+
+  private def logged[R, E, A](from: Any, transition: ZIO[R, E, A]): ZIO[R, E, A] =
     transition.timed.flatMap: (duration, to) =>
       ZIO.logAnnotate(
-        LogAnnotation("machine", machine),
         LogAnnotation("from", name(from)),
         LogAnnotation("to", name(to)),
         LogAnnotation("durationMs", duration.toMillis.toString),

@@ -78,12 +78,12 @@ object Web:
    * Every failure is an error edge, so the machine can't fail.
    */
   object ArtifactPage:
-    /** The requested coordinates: the start state. */
+    /** The requested coordinates: the machine's input. */
     case class Lookup(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId)
     /** No such artifact: the groupId may continue into the artifactId segment. */
-    case class NotAnArtifact private[ArtifactPage] (groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId)
+    private case class NotAnArtifact(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId)
     /** List the group's artifacts instead, saying why. */
-    case class UnknownArtifact private[ArtifactPage] (groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, why: Unknown)
+    private case class UnknownArtifact(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, why: Unknown)
 
     /**
      * Why the requested artifact wasn't shown. A reason rather than the artifactId to report
@@ -104,29 +104,31 @@ object Web:
 
     type Page = Versions | SplitGroup | GroupArtifacts | InvalidGroup
 
-    def lookup(lookup: Lookup): ZIO[MavenCentralRepo, Nothing, Versions | NotAnArtifact | UnknownArtifact] =
+    private def lookup(lookup: Lookup): ZIO[MavenCentralRepo, Nothing, Versions | NotAnArtifact | UnknownArtifact] =
       val Lookup(groupId, artifactId) = lookup
       MavenCentral.isArtifact(groupId, artifactId).flatMap: isArtifact =>
         if isArtifact then MavenCentral.searchVersions(groupId, artifactId).map(versions => Versions(groupId, artifactId, versions.value))
         else ZIO.succeed(NotAnArtifact(groupId, artifactId))
       .orElseSucceed(UnknownArtifact(groupId, artifactId, Unknown.InvalidCoordinates))
 
-    def splitGroup(notAnArtifact: NotAnArtifact): ZIO[MavenCentralRepo, Nothing, SplitGroup | UnknownArtifact] =
+    private def splitGroup(notAnArtifact: NotAnArtifact): ZIO[MavenCentralRepo, Nothing, SplitGroup | UnknownArtifact] =
       val NotAnArtifact(groupId, artifactId) = notAnArtifact
       val combinedGroupId = MavenCentral.GroupId(groupId.toString + "." + artifactId.toString)
       MavenCentral.searchArtifacts(combinedGroupId).as(SplitGroup(combinedGroupId))
         .orElseSucceed(UnknownArtifact(groupId, artifactId, Unknown.NoSuchArtifact))
 
-    def groupArtifacts(unknown: UnknownArtifact): ZIO[MavenCentralRepo, Nothing, GroupArtifacts | InvalidGroup] =
+    private def groupArtifacts(unknown: UnknownArtifact): ZIO[MavenCentralRepo, Nothing, GroupArtifacts | InvalidGroup] =
       MavenCentral.searchArtifacts(unknown.groupId).map(artifactIds => GroupArtifacts(unknown.groupId, unknown.artifactId, artifactIds.value, unknown.why))
         .orElseSucceed(InvalidGroup(unknown.groupId, unknown.artifactId))
 
+    val machine: StateMachine[MavenCentralRepo, Nothing, Lookup, Page] =
+      StateMachine.step(lookup)
+        .on[NotAnArtifact, Versions | UnknownArtifact](StateMachine.step(splitGroup))
+        .on[UnknownArtifact, Versions | SplitGroup](StateMachine.step(groupArtifacts))
+        .named("artifact-page")
+
     def run(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId): ZIO[MavenCentralRepo, Nothing, Page] =
-      StateMachine[Lookup, NotAnArtifact | UnknownArtifact, Page]("artifact-page").run(Lookup(groupId, artifactId)):
-        case start: Lookup               => lookup(start)
-        case notAnArtifact: NotAnArtifact => splitGroup(notAnArtifact)
-        case unknown: UnknownArtifact     => groupArtifacts(unknown)
-      .mapError(_.error)
+      machine.run(Lookup(groupId, artifactId)).mapError(_.error)
 
     def render(request: Request)(page: Page): Response =
       page match
@@ -162,12 +164,12 @@ object Web:
    * Every failure is an error edge, so the machine can't fail.
    */
   object VersionPage:
-    /** The requested version: the start state. */
+    /** The requested version: the machine's input. */
     case class Open(gav: MavenCentral.GroupArtifactVersion)
     /** The jar has no `index.html`, so the page lists its HTML files. */
-    case class NoIndex private[VersionPage] (gav: MavenCentral.GroupArtifactVersion, files: Seq[String])
+    private case class NoIndex(gav: MavenCentral.GroupArtifactVersion, files: Seq[String])
     /** The version or its javadoc jar doesn't exist. */
-    case class NoJavadoc private[VersionPage] (gav: MavenCentral.GroupArtifactVersion)
+    private case class NoJavadoc(gav: MavenCentral.GroupArtifactVersion)
 
     case class IndexPage private[VersionPage] (gav: MavenCentral.GroupArtifactVersion)
     case class FileList private[VersionPage] (gav: MavenCentral.GroupArtifactVersion, versions: Seq[MavenCentral.Version], files: Seq[String])
@@ -178,7 +180,7 @@ object Web:
 
     type Page = IndexPage | FileList | Unavailable | MissingVersion | NoSuchArtifact
 
-    def open(open: Open): ZIO[Client & MavenCentralRepo & Extractor.JavadocCache, Nothing, IndexPage | NoIndex | Unavailable | NoJavadoc] =
+    private def open(open: Open): ZIO[Client & MavenCentralRepo & Extractor.JavadocCache, Nothing, IndexPage | NoIndex | Unavailable | NoJavadoc] =
       val gav = open.gav
       Extractor.javadocJar(gav).flatMap: handle =>
         handle.hasEntry("index.html").flatMap: hasIndex =>
@@ -188,22 +190,24 @@ object Web:
         case _: JarCache.UpstreamUnavailableError                          => ZIO.succeed(Unavailable(gav))
         case _: MavenCentral.NotFoundError | _: JarCache.UpstreamCorruptError => ZIO.succeed(NoJavadoc(gav))
 
-    def listFiles(noIndex: NoIndex): ZIO[MavenCentralRepo, Nothing, FileList] =
+    private def listFiles(noIndex: NoIndex): ZIO[MavenCentralRepo, Nothing, FileList] =
       val gav = noIndex.gav
       MavenCentral.searchVersions(gav.groupId, gav.artifactId).map(_.value).orElseSucceed(Seq.empty)
         .map(FileList(gav, _, noIndex.files))
 
-    def noJavadoc(noJavadoc: NoJavadoc): ZIO[MavenCentralRepo, Nothing, MissingVersion | NoSuchArtifact] =
+    private def noJavadoc(noJavadoc: NoJavadoc): ZIO[MavenCentralRepo, Nothing, MissingVersion | NoSuchArtifact] =
       val gav = noJavadoc.gav
       MavenCentral.searchVersions(gav.groupId, gav.artifactId).map(versions => MissingVersion(gav, versions.value))
         .orElseSucceed(NoSuchArtifact(gav))
 
+    val machine: StateMachine[Client & MavenCentralRepo & Extractor.JavadocCache, Nothing, Open, Page] =
+      StateMachine.step(open)
+        .on[NoIndex, IndexPage | Unavailable | NoJavadoc](StateMachine.step(listFiles))
+        .on[NoJavadoc, FileList | IndexPage | Unavailable](StateMachine.step(noJavadoc))
+        .named("version-page")
+
     def run(gav: MavenCentral.GroupArtifactVersion): ZIO[Client & MavenCentralRepo & Extractor.JavadocCache, Nothing, Page] =
-      StateMachine[Open, NoIndex | NoJavadoc, Page]("version-page").run(Open(gav)):
-        case start: Open          => open(start)
-        case noIndex: NoIndex     => listFiles(noIndex)
-        case missing: NoJavadoc   => noJavadoc(missing)
-      .mapError(_.error)
+      machine.run(Open(gav)).mapError(_.error)
 
     def render(page: Page): Response =
       page match

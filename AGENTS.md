@@ -408,35 +408,43 @@ reference (the goal and how each part serves it, the model, errors, resources,
 constraints, prior art, future improvements). It is meant to become a library,
 so keep it free of this app's types. In short:
 
-- Only start states are public. Every `Next` and `Done` state has a private
-  constructor (`case class Claimed private[Indexing] (…)`), so holding one proves
-  the flow got there and results can't be forged. A start with an invariant gets
-  a smart constructor (`Resolution.tiersFor`, `Detection.start`); prefer a start
-  holding raw input (`NameSearch.ByName(query)`). Group states with a sealed
-  trait, not an enum (enum cases can't have private constructors). Add new
-  states to `MachineStatesSpec`, which checks this at compile time.
+- A machine is a value `StateMachine[R, E, In, Out]`: only its input and output
+  appear in its type. Build it from `step(f)` (one transition, returning the
+  union of the states it may lead to), `andThen` (output into input),
+  `on[A, Rest](m)` (run `m` on the `A` branch, pass `Rest` through; `Rest` is
+  spelled out, Scala can't subtract from a union), `loop[A, B]` (repeat while
+  the output is an `A`), `contramap`/`map`, and `named`. Declare the machine's
+  type: an unhandled state shows up in the output and fails to conform.
+- Each machine lives in its own object. Public: the input type, the output
+  types (with `private[Machine]` constructors) and `val machine`. Private:
+  intermediate states, transitions, smart constructors and inner machines
+  (`Resolution.tiers` is shared by `Resolution.machine` and `.symbols`). So
+  callers can't start partway, run a step alone, or forge a result. Group
+  states with a sealed trait, not an enum (enum cases can't have private
+  constructors). Add new machines to `MachineStatesSpec` (compile-time checks).
 - A state holds exactly its valid data: no `Option` or flag that only some paths
   fill in, no `Boolean` result (make it two states), non-empty collections
   (`::`) where empty is meaningless, and no "empty list means the next step"
   (make that step a state).
-- Transitions are plain functions returning the union of the states they may
-  lead to. `StateMachine[Start, Next, Done]("name").run(start) { case … }`
-  dispatches; a missing case fails the build (exhaustivity under `-Werror`).
-  `run` accepts only a `Start`, and transitions return `Next | Done`, so a run
-  can't begin partway through and, unless `Start` is also listed in `Next` (a
-  cycle through the start), nothing leads back to the start.
 - Expected outcomes are states; recoverable failures are error edges (catch and
   return a state); anything else fails `run` with `StateMachine.Failed`, which
-  keeps the failing state. Retry inside a transition with a `Schedule`.
-- Each run owns a `Scope`: don't wrap `run` in `ZIO.scoped`.
+  keeps the failing state's type name and the named machines it ran in. Retry
+  inside a transition with a `Schedule`.
+- Each run owns a `Scope` shared by all its steps: don't wrap `run` in
+  `ZIO.scoped`.
 - Draw the topology in the machine's scaladoc.
 - Machines: `SymbolSearch.Indexing`, `.Resolution`, `.NameSearch`,
   `Extractor.Detection`, `Web.ArtifactPage`, `Web.VersionPage`. Single-step
   handlers (one fetch plus error mapping) stay plain ZIO.
+- Test a machine through its public `machine`/`run` only. Produce hard-to-reach
+  outcomes with real conditions (`IndexingSpec`: a held guard entry for `Busy`, a
+  held row lock for `Superseded`), not by calling private steps.
 - No error edge from index failures to AI search: each AI call costs money
   (revisit with a cheap model).
 - Not an IndexedStateT-style monad (tried Nov 2026; linear, loses state on
-  failure) and not Mechanoid (for long-lived event-driven entities).
+  failure), not a `Start/Next/Done` dispatch table (Nov 2026; leaked
+  intermediate state types into the machine's type), and not Mechanoid (for
+  long-lived event-driven entities).
 - `scala.compiletime.testing.typeChecks` for compile-time tests: zio-test's
   `typeCheck` trips `-Werror` ("Catching Throwable"). Use `???` for arguments
   (explicit nulls reject `null`, which makes a negative check pass vacuously).
