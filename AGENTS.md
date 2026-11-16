@@ -408,8 +408,11 @@ app's types. In short:
 
 - States are types; a transition is a plain function to the union of the states
   it may lead to, so the compiler checks every edge. Private constructors stop a
-  step being skipped. `StateMachine[Active, Done]("name").run(start) { case … }`
+  step being skipped. `StateMachine[Start, Next, Done]("name").run(start) { case … }`
   dispatches; a missing case fails the build (exhaustivity under `-Werror`).
+  `run` accepts only a `Start`, and transitions return `Next | Done`, so a run
+  can't begin partway through and, unless `Start` is also listed in `Next` (a
+  cycle through the start), nothing leads back to the start.
 - Expected outcomes are states; recoverable failures are error edges (catch and
   return a state); anything else fails `run` with `StateMachine.Failed`, which
   keeps the failing state. Retry inside a transition with a `Schedule`.

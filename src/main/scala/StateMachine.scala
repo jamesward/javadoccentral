@@ -19,7 +19,13 @@ import scala.reflect.TypeTest
  *
  * =The model=
  *
- * A machine has '''active''' states (more work to do) and '''final''' states (the result).
+ * A machine has three kinds of state, each declared as a type parameter (usually a union):
+ *
+ *  - `Start`: where a run begins, the only state `run` accepts.
+ *  - `Next`: the states a transition can lead to that still have work to do.
+ *  - `Done`: the final states, one of which `run` returns.
+ *
+ * The '''active''' states, those with a transition, are `Start | Next`.
  *
  *  - '''Each state is a type''', usually a case class carrying exactly the data that state
  *    needs. A state that must only be reached through its transition gets a private
@@ -34,7 +40,7 @@ import scala.reflect.TypeTest
  *    still produce one of the listed states.
  *  - '''A machine runs''' with a dispatch table from each active state to its transition:
  *    {{{
- *    StateMachine[Candidate | Stale | Claimed, Boolean | Skipped]("indexing").run(candidate):
+ *    StateMachine[Candidate, Stale | Claimed, Boolean | Skipped]("indexing").run(candidate):
  *      case candidate: Candidate => compare(candidate)
  *      case stale: Stale         => claim(stale)
  *      case claimed: Claimed     => write(claimed)
@@ -44,13 +50,22 @@ import scala.reflect.TypeTest
  *    returns it, usually for a caller to render (`match` over the final union, also checked
  *    for exhaustiveness).
  *
- * Declaring `Active` and `Done` up front lists the machine's states in one place and lets
- * `run` infer the environment `R` and error `E` from the transitions. Document the topology
- * as a diagram in the machine's scaladoc; see `SymbolSearch.Resolution` for the style.
+ * Declaring the states up front lists them in one place and lets `run` infer the
+ * environment `R` and error `E` from the transitions. Document the topology as a diagram in
+ * the machine's scaladoc; see `SymbolSearch.Resolution` for the style.
+ *
+ * '''Entry is checked too.''' `run` takes only a `Start`, so a run can't begin partway
+ * through (`search` can't start at `NotIndexed` and skip straight to paid AI search). A
+ * transition returns `Next | Done`, so when `Start` is not in `Next`, no transition can lead
+ * back to the start: in an acyclic machine (`A → B → C`) the start has no incoming edges, by
+ * type. Private constructors complement this: they stop code ''outside'' the machine from
+ * building a mid-flow state at all.
  *
  * Cycles are edges back to an active state, often to the same type with less work left
- * (`SymbolTiers(tiers.tail)`, `Detecting(formats.tail)`). Composition is a transition that
- * runs another machine (`Resolution.byName` runs `NameSearch`).
+ * (`SymbolTiers(tiers.tail)`, `Detecting(formats.tail)`). A cycle through the start lists the
+ * start in `Next` too: `StateMachine[SymbolTiers, SymbolTiers, Found | NotIndexed]`.
+ * Composition is a transition that runs another machine (`Resolution.byName` runs
+ * `NameSearch`).
  *
  * =Errors=
  *
@@ -95,12 +110,13 @@ import scala.reflect.TypeTest
  *
  * =Constraints=
  *
- *  - `Active` and `Done` must not overlap: a value is final exactly when it is not active.
- *  - Active states must be checkable at run time (a `TypeTest`). Classes, case classes and
+ *  - `Next` and `Done` must not overlap: a transition's result is final exactly when it is
+ *    not a `Next` state. (`Start` may overlap `Next`, for a cycle through the start.)
+ *  - `Next` states must be checkable at run time (a `TypeTest`). Classes, case classes and
  *    unions of them are. A generic state is too while the machine's states pin its type
- *    arguments (`StateMachine[Retrying[Int], Done]`), but not when an active and a final
- *    state differ only in type arguments (`Box[Int]` vs `Box[String]`): erasure can't tell
- *    them apart, and the unchecked-type-test warning fails the build under `-Werror`.
+ *    arguments (`Retrying[Int]`), but not when a `Next` and a `Done` state differ only in
+ *    type arguments (`Box[Int]` vs `Box[String]`): erasure can't tell them apart, and the
+ *    unchecked-type-test warning fails the build under `-Werror`.
  *  - State types should be distinct per machine: two machines sharing a state type works,
  *    but blurs their logs.
  *
@@ -143,7 +159,7 @@ import scala.reflect.TypeTest
  *    as, the debug log; the log level and message could be configurable for a library.
  *  - '''Per-step timeouts.''' A machine-level deadline, or one per state, as an error edge to a
  *    timed-out state.
- *  - '''Machine-level error edges.''' A `recover: (Active, E) => ZIO[R, E2, Active | Done]` hook
+ *  - '''Machine-level error edges.''' A `recover: (Start | Next, E) => ZIO[R, E2, Next | Done]` hook
  *    for policies shared by every state (e.g. "the index is down: answer from cache"). Today
  *    each transition catches its own errors, which keeps the edge next to its cause.
  *  - '''Event-driven machines.''' Accepting external events (a queue) between transitions
@@ -161,27 +177,30 @@ object StateMachine:
     override def toString: String = s"$machine failed in $stateName: $error"
 
   /**
-   * A machine whose non-final states are `Active` and whose final states are `Done` (each
-   * usually a union; they must not overlap). `machine` names it in logs and failures.
+   * A machine that starts at a `Start` state, whose transitions lead to `Next` (more work)
+   * or `Done` (final) states. Each is usually a union. `Next` and `Done` must not overlap.
+   * `Start` is listed in `Next` only if a transition can lead back to it (a cycle through
+   * the start). `machine` names the machine in logs and failures.
    */
-  def apply[Active, Done](machine: String): Machine[Active, Done] = Machine(machine)
+  def apply[Start, Next, Done](machine: String): Machine[Start, Next, Done] = Machine(machine)
 
-  final class Machine[Active, Done](machine: String):
+  final class Machine[Start, Next, Done](machine: String):
     /**
      * Runs `step` from `start` until it reaches a `Done` state, in a `Scope` that closes when
      * the machine stops. Each transition logs `"State machine step"` at debug level, with the
      * `machine` name, the `from` and `to` state types and `durationMs`.
      */
-    def run[R, E](start: Active | Done)(step: Active => ZIO[R & Scope, E, Active | Done])(
-      using active: TypeTest[Active | Done, Active]
-    ): ZIO[R, Failed[Active, E], Done] =
-      def loop(state: Active | Done): ZIO[R & Scope, Failed[Active, E], Done] =
+    def run[R, E](start: Start)(step: (Start | Next) => ZIO[R & Scope, E, Next | Done])(
+      using next: TypeTest[Next | Done, Next]
+    ): ZIO[R, Failed[Start | Next, E], Done] =
+      def transition(from: Start | Next): ZIO[R & Scope, Failed[Start | Next, E], Next | Done] =
+        logged(machine, from, step(from).mapError(Failed(machine, from, _)))
+      def loop(state: Next | Done): ZIO[R & Scope, Failed[Start | Next, E], Done] =
         state match
-          case active(current) =>
-            logged(machine, current, step(current).mapError(Failed(machine, current, _))).flatMap(loop)
-          // Not active, so (as Active and Done don't overlap) a Done state.
+          case next(current) => transition(current).flatMap(loop)
+          // Not a Next state, so (as Next and Done don't overlap) a Done state.
           case done => ZIO.succeed(done.asInstanceOf[Done])
-      ZIO.scoped[R](loop(start))
+      ZIO.scoped[R](transition(start).flatMap(loop))
 
   private def logged[R, E, A](machine: String, from: Any, transition: ZIO[R, E, A]): ZIO[R, E, A] =
     transition.timed.flatMap: (duration, to) =>

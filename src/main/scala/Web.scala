@@ -109,7 +109,7 @@ object Web:
         .orElseSucceed(InvalidGroup(unknown.groupId, unknown.artifactId))
 
     def run(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId): ZIO[MavenCentralRepo, Nothing, Page] =
-      StateMachine[Lookup | NotAnArtifact | UnknownArtifact, Page]("artifact-page").run(Lookup(groupId, artifactId)):
+      StateMachine[Lookup, NotAnArtifact | UnknownArtifact, Page]("artifact-page").run(Lookup(groupId, artifactId)):
         case start: Lookup               => lookup(start)
         case notAnArtifact: NotAnArtifact => splitGroup(notAnArtifact)
         case unknown: UnknownArtifact     => groupArtifacts(unknown)
@@ -184,7 +184,7 @@ object Web:
         .orElseSucceed(NoSuchArtifact(gav))
 
     def run(gav: MavenCentral.GroupArtifactVersion): ZIO[Client & MavenCentralRepo & Extractor.JavadocCache, Nothing, Page] =
-      StateMachine[Open | NoIndex | NoJavadoc, Page]("version-page").run(Open(gav)):
+      StateMachine[Open, NoIndex | NoJavadoc, Page]("version-page").run(Open(gav)):
         case start: Open          => open(start)
         case noIndex: NoIndex     => listFiles(noIndex)
         case missing: NoJavadoc   => noJavadoc(missing)

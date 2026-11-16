@@ -170,7 +170,7 @@ object SymbolSearch:
 
   def symbolArtifacts(symbol: String): ZIO[SymbolIndex, Throwable, Set[MavenCentral.GroupArtifact]] =
     import Resolution.*
-    StateMachine[SymbolTiers, Found | NotIndexed]("symbol-search").run(tiersFor(symbol)):
+    StateMachine[SymbolTiers, SymbolTiers, Found | NotIndexed]("symbol-search").run(tiersFor(symbol)):
       case tiers: SymbolTiers => bySymbol(tiers)
     .map:
       case Found(artifacts) => artifacts
@@ -179,7 +179,7 @@ object SymbolSearch:
 
   def search(symbol: String): ZIO[SymbolIndex & HerokuInference & Client & MavenCentralRepo & Extractor.JavadocCache & SymbolSearchGuard, SearchError, Set[MavenCentral.GroupArtifact]] =
     import Resolution.*
-    StateMachine[Query | SymbolTiers | NotIndexed, Found]("search").run(Query(symbol)):
+    StateMachine[Query, SymbolTiers | NotIndexed, Found]("search").run(Query(symbol)):
       case query: Query           => byName(query)
       case tiers: SymbolTiers     => bySymbol(tiers)
       case notIndexed: NotIndexed => byAi(notIndexed)
@@ -260,7 +260,7 @@ object SymbolSearch:
 
   def searchGroupArtifacts(query: String): ZIO[SymbolIndex, Throwable, Set[MavenCentral.GroupArtifact]] =
     import NameSearch.*
-    StateMachine[ByName | WithoutVersions, Matched]("artifact-search").run(ByName(queryParts(query))):
+    StateMachine[ByName, WithoutVersions, Matched]("artifact-search").run(ByName(queryParts(query))):
       case query: ByName           => byName(query)
       case query: WithoutVersions  => withoutVersions(query)
     .mapBoth(_.error, _.artifacts)
@@ -320,7 +320,7 @@ object SymbolSearch:
      * skipped. The claim is released when the machine stops, even if `write` fails.
      */
     def run(candidate: Candidate): ZIO[SymbolIndex & SymbolSearchGuard, Failure, Boolean | Skipped] =
-      StateMachine[Candidate | Stale | Claimed, Boolean | Skipped]("indexing").run(candidate):
+      StateMachine[Candidate, Stale | Claimed, Boolean | Skipped]("indexing").run(candidate):
         case candidate: Candidate => compare(candidate)
         case stale: Stale         => claim(stale)
         case claimed: Claimed     => write(claimed)

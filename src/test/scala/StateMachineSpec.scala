@@ -1,6 +1,8 @@
 import zio.*
 import zio.test.*
 
+import scala.compiletime.testing.typeChecks
+
 /** The generic [[StateMachine]] driver: cycles, final start states, errors, resources and step logs. */
 object StateMachineSpec extends ZIOSpecDefault:
 
@@ -8,7 +10,13 @@ object StateMachineSpec extends ZIOSpecDefault:
   case class Stopped(at: Int)
   case class Boom(reason: String)
 
-  private val countdown = StateMachine[Counting, Stopped]("countdown")
+  private val countdown = StateMachine[Counting, Counting, Stopped]("countdown")
+
+  // An acyclic machine: A → B → C.
+  case class A()
+  case class B(fromA: Boolean)
+  case class C(fromB: Boolean)
+  private val dag = StateMachine[A, B, C]("dag")
   private def step(state: Counting): UIO[Counting | Stopped] =
     ZIO.succeed(if state.n == 0 then Stopped(0) else Counting(state.n - 1))
 
@@ -23,9 +31,19 @@ object StateMachineSpec extends ZIOSpecDefault:
       for result <- countdown.run(Counting(3))(step)
       yield assertTrue(result == Stopped(0))
     ,
-    test("a final start state runs no transition"):
-      for result <- countdown.run(Stopped(7))(_ => ZIO.dieMessage("no step expected"))
-      yield assertTrue(result == Stopped(7))
+    test("an acyclic machine runs from its start to its final state"):
+      val run = dag.run(A()):
+        case _: A => ZIO.succeed(B(fromA = true))
+        case b: B => ZIO.succeed(C(fromB = b.fromA))
+      for result <- run
+      yield assertTrue(result == C(fromB = true))
+    ,
+    test("a run can't begin at a later state, and no transition can lead back to the start"):
+      // Checked by the compiler, here at test compile time.
+      val laterStart = typeChecks("dag.run(B(true))(_ => ZIO.succeed(C(true)))")
+      val backToStart = typeChecks("dag.run(A())(_ => ZIO.succeed(A()))")
+      val valid = typeChecks("dag.run(A())(_ => ZIO.succeed(C(true)))")
+      assertTrue(!laterStart, !backToStart, valid)
     ,
     test("an unhandled error fails the machine with the state it failed in"):
       for result <- countdown.run(Counting(3))(state => if state.n == 1 then ZIO.fail(Boom("boom")) else step(state)).either
@@ -71,5 +89,6 @@ object StateMachineSpec extends ZIOSpecDefault:
   ) @@ TestAspect.withLiveClock
 
   given CanEqual[Stopped, Stopped] = CanEqual.derived
+  given CanEqual[C, C] = CanEqual.derived
   given CanEqual[Either[StateMachine.Failed[Counting, Boom], Stopped], Either[StateMachine.Failed[Counting, Boom], Stopped]] =
     CanEqual.derived

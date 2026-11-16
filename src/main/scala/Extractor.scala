@@ -243,7 +243,7 @@ object Extractor:
 
   private def readSymbols(groupArtifactVersion: GroupArtifactVersion, handle: JarCache.JarHandle): ZIO[Any, Nothing, Set[Content]] =
     import Detection.*
-    StateMachine[Detecting, Parsed]("javadoc-format").run(Detecting(groupArtifactVersion, handle, formats)):
+    StateMachine[Detecting, Detecting, Parsed]("javadoc-format").run(Detecting(groupArtifactVersion, handle, formats)):
       case detecting: Detecting => detect(detecting)
     .mapBoth(_.error, _.contents)
 
