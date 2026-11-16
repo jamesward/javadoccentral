@@ -133,6 +133,11 @@ object SymbolSearch:
    * qualified name: when nothing contains it, the artifact is most likely not indexed yet,
    * so it goes to AI search (which indexes it) rather than to spelling matches of its last
    * segment (`zio.cache.Cache` → every `Cache`).
+   *
+   * A failing index lookup fails the search; there is deliberately no error edge from
+   * `Query` / `SymbolTiers` to `NotIndexed`. AI search costs money per call, and an index
+   * outage would send every query to it. Revisit if a cheap model handles AI search.
+   * The name search (`byName`) runs the [[NameSearch]] machine inside its transition.
    */
   object Resolution:
     case class Query(symbol: String)
@@ -227,17 +232,38 @@ object SymbolSearch:
   def isVersionToken(part: String): Boolean = versionLike.matches(part)
 
   /**
-   * Indexed artifacts whose `groupId:artifactId` contains every part of the query.
-   * Agents routinely append a version to a name query ("jackson-databind 3.0.0"),
-   * which can never match a `groupId:artifactId`. If the full query finds
-   * nothing, retry without the version-like tokens.
+   * Artifact-name search (`searchGroupArtifacts`, the `search_artifacts` tool), as a
+   * [[StateMachine]]: indexed artifacts whose `groupId:artifactId` contains every part of
+   * the query.
+   * {{{
+   * ByName ──▶ Matched
+   *   └──▶ WithoutVersions ──▶ Matched
+   * }}}
+   * Agents routinely append a version to a name query ("jackson-databind 3.0.0"), which
+   * can never match a `groupId:artifactId`. If the full query finds nothing, it is retried
+   * without the version-like tokens.
    */
+  object NameSearch:
+    case class ByName(parts: List[String])
+    /** The full query matched nothing: the same query without its version-like tokens. */
+    case class WithoutVersions private[NameSearch] (parts: List[String])
+    case class Matched(artifacts: Set[MavenCentral.GroupArtifact])
+
+    def byName(query: ByName): ZIO[SymbolIndex, Throwable, Matched | WithoutVersions] =
+      SymbolIndex.groupArtifactsContainingAll(query.parts).map: found =>
+        val withoutVersions = query.parts.filterNot(isVersionToken)
+        if found.nonEmpty || withoutVersions.size == query.parts.size then Matched(found)
+        else WithoutVersions(withoutVersions)
+
+    def withoutVersions(query: WithoutVersions): ZIO[SymbolIndex, Throwable, Matched] =
+      SymbolIndex.groupArtifactsContainingAll(query.parts).map(Matched(_))
+
   def searchGroupArtifacts(query: String): ZIO[SymbolIndex, Throwable, Set[MavenCentral.GroupArtifact]] =
-    val parts = queryParts(query)
-    val withoutVersions = parts.filterNot(isVersionToken)
-    SymbolIndex.groupArtifactsContainingAll(parts).flatMap: found =>
-      if found.nonEmpty || withoutVersions.size == parts.size then ZIO.succeed(found)
-      else SymbolIndex.groupArtifactsContainingAll(withoutVersions)
+    import NameSearch.*
+    StateMachine[ByName | WithoutVersions, Matched]("artifact-search").run(ByName(queryParts(query))):
+      case query: ByName           => byName(query)
+      case query: WithoutVersions  => withoutVersions(query)
+    .mapBoth(_.error, _.artifacts)
 
   /**
    * Indexing one parsed artifact version, as explicit states. Each transition takes the

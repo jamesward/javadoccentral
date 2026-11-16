@@ -200,17 +200,52 @@ object Extractor:
             else moduleDirs.flatMap(mod => entriesUnderPkg(mod, pkg)).toSet
           .toSet
 
+  /** A doc jar's symbol-listing format. */
+  enum Format derives CanEqual:
+    case Scaladoc, Kotlindoc, Javadoc
+
+  /**
+   * Reading a doc jar's symbols (`javadocContents`), as a [[StateMachine]]: each format is
+   * tried in turn, and a jar in none of them falls back to listing its `.html` pages.
+   * {{{
+   * Detecting(Scaladoc, Kotlindoc, Javadoc) ──▶ Parsed
+   *   └──▶ Detecting(next formats) … Detecting() ──every .html──▶ Parsed
+   * }}}
+   * A format that doesn't match is an error edge to the next one, so the machine can't fail.
+   */
+  object Detection:
+    /** The formats not tried yet, in order. */
+    case class Detecting(gav: GroupArtifactVersion, handle: JarCache.JarHandle, formats: List[Format])
+    case class Parsed(contents: Set[Content])
+
+    // A List literal, not `Format.values.toList`: see the AllValuesAreNullable note on `filterContents`.
+    val formats: List[Format] = List(Format.Scaladoc, Format.Kotlindoc, Format.Javadoc)
+
+    def detect(detecting: Detecting): ZIO[Any, Nothing, Detecting | Parsed] =
+      detecting.formats match
+        case Nil => bruteForce(detecting.handle).map(Parsed(_))
+        case format :: rest =>
+          parse(format, detecting.gav, detecting.handle).map(Parsed(_))
+            .catchAll(_ => ZIO.succeed(detecting.copy(formats = rest)))
+
+    private def parse(format: Format, gav: GroupArtifactVersion, handle: JarCache.JarHandle): ZIO[Any, JavadocFormatFailure, Set[Content]] =
+      format match
+        case Format.Scaladoc  => javadocScalaFormat(gav, handle)
+        case Format.Kotlindoc => javadocKotlinFormat(gav, handle)
+        case Format.Javadoc   => javadocJavaFormat(gav, handle)
+
   def javadocContents(groupArtifactVersion: GroupArtifactVersion):
       ZIO[JavadocCache & Client & MavenCentralRepo, JarError, Set[Content]] =
     defer:
       val cache  = ZIO.service[JavadocCache].run
       val handle = cache.get(groupArtifactVersion).run
-      javadocScalaFormat(groupArtifactVersion, handle)
-        .orElse(javadocKotlinFormat(groupArtifactVersion, handle))
-        .orElse(javadocJavaFormat(groupArtifactVersion, handle))
-        .catchAll:
-          case _: JavadocFormatFailure => bruteForce(handle)
-        .run
+      readSymbols(groupArtifactVersion, handle).run
+
+  private def readSymbols(groupArtifactVersion: GroupArtifactVersion, handle: JarCache.JarHandle): ZIO[Any, Nothing, Set[Content]] =
+    import Detection.*
+    StateMachine[Detecting, Parsed]("javadoc-format").run(Detecting(groupArtifactVersion, handle, formats)):
+      case detecting: Detecting => detect(detecting)
+    .mapBoth(_.error, _.contents)
 
   /**
    * Narrows a symbol listing to entries whose fully-qualified name contains every

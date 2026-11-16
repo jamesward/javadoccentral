@@ -400,39 +400,28 @@ conversion makes `String.nonEmpty` always true (a non-null `Optional`); use
 
 ### State machines
 
-Use `StateMachine` (`StateMachine.scala`) for a flow whose steps branch or
-loop. Each state is a type; each transition is a plain function to the union
-of the states it may lead to (`Stale => ZIO[R, E, Claimed | Skipped]`), so the
-compiler checks every edge, including targets decided at run time (crem's typed
-topology, Idris ST's result-dependent states). Give a state a private
-constructor when only its transition may create it.
-`StateMachine[Active, Done]("name").run(start) { case s: A => stepA(s) … }`
-drives it: the `match` must cover every `Active` state (an exhaustivity
-warning fails the build under `-Werror`), and each step logs
-`"State machine step"` at debug (`machine`, `from`, `to`, `durationMs`; state
-type names only, never data). `Active` and `Done` must not overlap.
+A flow of two or more dependent effectful steps with branches or fallbacks is an
+explicit state machine on `StateMachine`. Its scaladoc (`StateMachine.scala`) is
+the full reference: the model, errors, resources, constraints, prior art and
+future improvements. It is meant to become a library, so keep it free of this
+app's types. In short:
 
-Errors and resources in a machine:
-
-- An expected outcome (nothing found, lock held elsewhere) is a state, not an
-  error.
-- A recoverable failure is an error edge: the transition catches it and returns
-  a state (`.catchAll(_ => ZIO.succeed(NotIndexed(…)))`), checked by the union
-  like any edge. Retry inside a transition (`.retry(schedule)`), not with an
-  edge back to the same state (no backoff, no limit).
-- Anything else fails `run` with `StateMachine.Failed(machine, state, error)`,
-  which keeps the state it failed in (`toString`: "indexing failed in Stale:
-  …"; `stateName` for logs). Defects and interruption pass through unchanged.
-  Callers with a public error type map it once (`search` → `SearchError`, same
-  agent-facing text as before).
-- Each run owns a `Scope`: a transition may `acquireRelease` something later
-  states need (the indexing claim), and it is released when the machine stops,
-  whether it finished, failed or was interrupted. Don't add a `ZIO.scoped` around
-  `run`.
-Don't use an IndexedStateT-style monad (`S1 => ZIO[R, E, (S2, A)]`, tried
-Nov 2026): it's linear, so after a branch every later step must accept and
-pass on the whole union. Mechanoid (ZIO FSM library) suits long-lived
-event-driven entities (persistence, timeouts), not these single-run flows.
+- States are types; a transition is a plain function to the union of the states
+  it may lead to, so the compiler checks every edge. Private constructors stop a
+  step being skipped. `StateMachine[Active, Done]("name").run(start) { case … }`
+  dispatches; a missing case fails the build (exhaustivity under `-Werror`).
+- Expected outcomes are states; recoverable failures are error edges (catch and
+  return a state); anything else fails `run` with `StateMachine.Failed`, which
+  keeps the failing state. Retry inside a transition with a `Schedule`.
+- Each run owns a `Scope`: don't wrap `run` in `ZIO.scoped`.
+- Draw the topology in the machine's scaladoc.
+- Machines: `SymbolSearch.Indexing`, `.Resolution`, `.NameSearch`,
+  `Extractor.Detection`, `Web.ArtifactPage`, `Web.VersionPage`. Single-step
+  handlers (one fetch plus error mapping) stay plain ZIO.
+- No error edge from index failures to AI search: each AI call costs money
+  (revisit with a cheap model).
+- Not an IndexedStateT-style monad (tried Nov 2026; linear, loses state on
+  failure) and not Mechanoid (for long-lived event-driven entities).
 
 ### Error Handling
 
@@ -523,12 +512,9 @@ event-driven entities (persistence, timeouts), not these single-run flows.
   returned 2 artifacts instead of 9). Queries under 3 characters (the trigram
   minimum) only match exactly. Each tier logs `"Symbol search"` with `match`
   and `durationMs`.
-- Multi-step flows with branches are explicit state machines on `StateMachine`
-  (see "State machines" under Coding Style): `SymbolSearch.Indexing` (`Candidate`
-  → `compare` → `Stale` | `Skipped.UpToDate` → `claim` → `Claimed` |
-  `Skipped.Busy` → `write`; the claim's `SymbolSearchGuard` entry is released by
-  `Scope`) and `SymbolSearch.Resolution` (`Query` → `SymbolTiers` (→ next tier)
-  → `NotIndexed` → AI search → `Found`).
+- Indexing (`SymbolSearch.Indexing`), symbol search (`SymbolSearch.Resolution`)
+  and artifact-name search (`SymbolSearch.NameSearch`) are `StateMachine`s (see
+  "State machines" under Coding Style).
 - `SymbolIndex.indexable` drops doc pages that aren't symbols (`index-all`,
   `.static-page`). LIKE wildcards in queries are escaped (`escapeLike`).
 - GIN trigram indexes bloat ~4× under per-artifact rewrites; compact with

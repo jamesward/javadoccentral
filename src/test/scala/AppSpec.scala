@@ -112,6 +112,46 @@ object AppSpec extends ZIOSpecDefault:
           body.contains("ArrayTreeNode.html"),
           filePage.status.isSuccess,
         )
+    , test("artifact page: versions, a groupId split across the path, an unknown artifact, an unknown group"):
+      val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.101")
+      def get(path: Path) = Web.appWithMiddleware.runZIO(Request.get(URL(path)).addHeader(forwardedForHeader))
+      defer:
+        val versions = get(Path.root / "com.jamesward" / "travis-central-test").run
+        val versionsBody = versions.body.asString.run
+        val splitGroup = get(Path.root / "com" / "jamesward").run
+        val unknownArtifact = get(Path.root / "com.jamesward" / "zzz-no-such-artifact").run
+        val unknownArtifactBody = unknownArtifact.body.asString.run
+        val unknownGroup = get(Path.root / "asdfqwerzzxcv" / "zzz-no-such-artifact").run
+        val unknownGroupBody = unknownGroup.body.asString.run
+        assertTrue(
+          versions.status == Status.Ok,
+          versionsBody.contains("0.0.15"),
+          splitGroup.status.isRedirection,
+          splitGroup.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward")),
+          unknownArtifact.status == Status.NotFound,
+          unknownArtifactBody.contains("ArtifactId &#x27;zzz-no-such-artifact&#x27; not found."),
+          unknownArtifactBody.contains("travis-central-test"),
+          unknownGroup.status == Status.NotFound,
+          unknownGroupBody.contains("GroupID is invalid"),
+        )
+    , test("version page: a missing version lists the versions, and an unknown artifact redirects to its artifact page"):
+      val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.102")
+      def get(path: Path) =
+        Web.appWithMiddleware.runZIO(Request.get(URL(path)).addHeader(forwardedForHeader).addHeader(Header.Accept(MediaType.text.html)))
+      defer:
+        val withIndex = get(Path.root / "org.webjars" / "webjars-locator-core" / "0.52").run
+        val missingVersion = get(Path.root / "com.jamesward" / "travis-central-test" / "99.99.99").run
+        val missingVersionBody = missingVersion.body.asString.run
+        val unknownArtifact = get(Path.root / "asdfqwerzzxcv" / "zzz-no-such-artifact" / "1.0").run
+        assertTrue(
+          withIndex.status.isRedirection,
+          withIndex.headers.get(Header.Location).exists(_.url.path == Path.decode("/org.webjars/webjars-locator-core/0.52/index.html")),
+          missingVersion.status == Status.NotFound,
+          missingVersionBody.contains("Version 99.99.99 of that artifact does not exist"),
+          missingVersionBody.contains("0.0.15"),
+          unknownArtifact.status.isRedirection,
+          unknownArtifact.headers.get(Header.Location).exists(_.url.path == Path.decode("/asdfqwerzzxcv/zzz-no-such-artifact")),
+        )
     , test("HEAD behaves like GET but returns no body"):
       val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
       val assetPath = Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "org" / "webjars" / "package-summary.html"
