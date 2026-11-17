@@ -1,4 +1,3 @@
-import com.jamesward.zio_http_guard.BadActorMiddleware
 import com.jamesward.zio_http_guard.guard.*
 import com.jamesward.zio_mavencentral.{GavCacheMiddleware, MavenCentral}
 import zio.*
@@ -17,7 +16,7 @@ import zio.http.*
  * 3.5 minutes, so a per-IP limit never fired); anyone else is one per IP.
  * Cached GAVs never count, so browsing is free. `probe-shape` answers
  * scanner paths (`.env`, `.php`, `wp-admin`, …; zio-http-guard's
- * `BadActorMiddleware.defaultSuspect`) with a cheap `404` before any route
+ * `Probe.suspectPath`) with a cheap `404` before any route
  * can read them as Maven coordinates; the client is then flagged, so its
  * later requests get the block response for `GUARD_FLAG_FOR`.
  * `client-hints` blocks requests whose Chrome client hints contradict their
@@ -48,12 +47,11 @@ object JavadocsGuard:
 
   // MCP clients' OAuth / OIDC discovery also tries `.well-known` under the
   // endpoint (`/mcp/.well-known/oauth-protected-resource`), but
-  // `defaultSuspect` allows it only as the first segment. A probe flags the
+  // `Probe.suspectPath` allows it only as the first segment. A probe flags the
   // whole client, so that locked Codex out of `/mcp`: judge the path without
   // its `.well-known` segments.
   private def isProbe(request: Request): Boolean =
-    val path = request.path.segments.filterNot(_ == ".well-known").foldLeft(Path.root)(_ / _)
-    BadActorMiddleware.defaultSuspect(request.copy(url = request.url.path(path)))
+    Probe.suspectPath(request.path.segments.filterNot(_ == ".well-known").foldLeft(Path.root)(_ / _))
 
   private val probeShape: Detector =
     val reason = Reason("probe-shape")
