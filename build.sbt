@@ -14,7 +14,7 @@ lazy val root = {
 
 val zioVersion = "2.1.27"
 
-val flywayVersion = "13.12.1"
+val flywayVersion = "13.12.2"
 
 // Hack Alert: This is the default when not in buildpacks (i.e. `default`)
 // In buildpacks it is javadoccentral which puts it alphabetically after dev.zio.zio-constraintless_3-0.3.1.jar
@@ -51,12 +51,12 @@ scalaVersion := "3.10.1"
 
 // SkillsJars
 skillsJarsOutputDir := Some(file(".kiro/skills"))
-libraryDependencies += "com.jamesward" % "skills" % "0.0.26" % Skills
+libraryDependencies += "com.jamesward" % "skills" % "0.0.27" % Skills
 
 libraryDependencies ++= Seq(
   "dev.zio" %% "zio"                   % zioVersion,
   "dev.zio" %% "zio-concurrent"        % zioVersion,
-  "dev.zio" %% "zio-cache"             % "0.3.0",
+  "dev.zio" %% "zio-cache"             % "0.4.0",
   "dev.zio" %% "zio-logging"                % "2.5.4",
   // The slf4j2 bridge is the sole slf4j provider (replaces slf4j-simple): Java
   // library logs (Netty, the Postgres driver, HikariCP, Flyway, jsoup, ...) route through ZIO's logger
@@ -64,7 +64,7 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-logging-slf4j2-bridge" % "2.5.4",
   "dev.zio" %% "zio-direct"            % "1.0.0-RC7",
   // Keep zio-schema / zio-json binary compatible with the pinned zio-http-mcp
-  // (0.13.2 is built against zio-schema 1.9.0).
+  // (0.13.4 is built against zio-schema 1.9.0).
   "dev.zio" %% "zio-schema-json"       % "1.9.1",
   "dev.zio" %% "zio-schema-derivation" % "1.9.1",
 
@@ -85,13 +85,13 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,
   "com.dimafeng" %% "testcontainers-scala-postgresql" % "0.44.1" % Test,
 
-  "io.modelcontextprotocol.sdk" % "mcp-core"           % "2.1.0" % Test,
-  "io.modelcontextprotocol.sdk" % "mcp-json-jackson2"  % "2.1.0" % Test,
+  "io.modelcontextprotocol.sdk" % "mcp-core"           % "2.2.0" % Test,
+  "io.modelcontextprotocol.sdk" % "mcp-json-jackson2"  % "2.2.0" % Test,
 )
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioHttpMcpDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-http-mcp" % "0.13.2")
+  else Seq("com.jamesward" %% "zio-http-mcp" % "0.13.4")
 }
 
 libraryDependencies ++= {
@@ -105,7 +105,7 @@ libraryDependencies += "nl.vroste" %% "rezilience" % "0.10.6"
 
 libraryDependencies ++= {
   if (useLocalSubprojects && zioHttpGuardDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-http-guard" % "0.2.0")
+  else Seq("com.jamesward" %% "zio-http-guard" % "0.3.0")
 }
 
 Compile / packageDoc / publishArtifact := false

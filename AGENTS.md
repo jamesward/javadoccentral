@@ -78,11 +78,23 @@ Skills are extracted (git-ignored) into `.kiro/skills/` with
 `./sbta extractSkillsJars`. Read the relevant `SKILL.md` files before working:
 
 - `zen-of-projects` — project conventions and the maintenance routine.
-- `zen-of-scala` — Scala 3 / ZIO idioms (matches the Coding Style below).
-- `zen-of-james` — general design principles (illegal states
-  unrepresentable, multiversal equality).
+- For Scala 3 and ZIO code (writing or reviewing it), follow `zen-of-scala`
+  (matches the Coding Style below).
+- For design, domain modeling, effects and testing strategy, follow
+  `zen-of-james` (illegal states unrepresentable, multiversal equality).
 
-`.factory/MAINTENANCE.md` is the zen-of-projects bootstrap.
+### Maintenance routine
+
+`.factory/MAINTENANCE.md` is the zen-of-projects bootstrap. A scheduled Claude
+Code routine runs it (the schedule is set outside the repo, in the routine);
+heroku-ops also fires it for production incidents.
+
+### Production logging
+
+`AppLogging.json` (zio-logging `consoleJsonLogger` + the slf4j2 bridge) logs
+one JSON object per line. Heroku `log-runtime-metrics` is on for `javadocs`
+(heroku-ops reads its memory samples). Not yet aligned: entries don't carry
+`request_id` from `X-Request-ID` (see the Skill's "Production Servers").
 
 ## MCP tool descriptions
 
@@ -517,7 +529,7 @@ push the dyno into swap. A rate-limit verdict doesn't flag the client, so a
 limited crawler still gets cached pages.
 The guard runs before browse routes can interpret arbitrary paths as Maven
 coordinates. Keep generic probe classification in `zio-http-guard`'s
-`defaultSuspect` (used by `probe-shape`), not as a growing list of
+`Probe.suspectPath` (used by `probe-shape`), not as a growing list of
 javadoccentral routes:
 
 - Match stable path shapes/segments (hidden files such as `.env*` anywhere in
