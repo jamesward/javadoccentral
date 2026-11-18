@@ -34,6 +34,8 @@ object AppSpec extends ZIOSpecDefault:
         val artifactIdResp = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root / "com.jamesward", queryParams = QueryParams("artifactId" -> "travis-central-test"))).addHeader(forwardedForHeader)).run
         val versionResp = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root / "com.jamesward" / "travis-central-test", queryParams = QueryParams("version" -> "0.0.15"))).addHeader(forwardedForHeader)).run
         val latest = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root / "org.webjars" / "jquery" / "latest")).addHeader(forwardedForHeader)).run
+        // jQuery keeps releasing; compare with Maven Central's latest, not a pinned version.
+        val jqueryLatest = Extractor.latest(MavenCentral.GroupArtifact(MavenCentral.GroupId("org.webjars"), MavenCentral.ArtifactId("jquery"))).run
 
         val groupIdRedir = Web.appWithMiddleware.runZIO(Request.get(URL((Path.root / "com.jamesward").addTrailingSlash)).addHeader(forwardedForHeader)).run
         val artifactIdRedir = Web.appWithMiddleware.runZIO(Request.get(URL((Path.root / "com.jamesward" / "travis-central-test").addTrailingSlash)).addHeader(forwardedForHeader)).run
@@ -53,7 +55,7 @@ object AppSpec extends ZIOSpecDefault:
           versionResp.status.isRedirection,
           versionResp.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward/travis-central-test/0.0.15")),
           latest.status.isRedirection,
-          latest.headers.get(Header.Location).exists(_.url.path == Path.decode("/org.webjars/jquery/4.0.0")),
+          latest.headers.get(Header.Location).exists(_.url.path == Path.decode(s"/org.webjars/jquery/$jqueryLatest")),
           groupIdRedir.status.isRedirection,
           groupIdRedir.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward")),
           artifactIdRedir.status.isRedirection,
@@ -246,10 +248,11 @@ object AppSpec extends ZIOSpecDefault:
             .addHeader(Header.Accept(MediaType.application.json))
         ).run
         val body = resp.body.asString.run
+        val jqueryLatest = Extractor.latest(MavenCentral.GroupArtifact(MavenCentral.GroupId("org.webjars"), MavenCentral.ArtifactId("jquery"))).run
         assertTrue(
           resp.status.isSuccess,
           resp.header(Header.ContentType).exists(_.mediaType.matches(MediaType.application.json)),
-          body == """{"version":"4.0.0"}""",
+          body == s"""{"version":"$jqueryLatest"}""",
         )
     , test("probe paths get a 404, then the client is blocked"):
       // Its own IP: the guard flags it, and the suite shares one guard.

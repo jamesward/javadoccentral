@@ -470,6 +470,12 @@ conversion makes `String.nonEmpty` always true (a non-null `Optional`); use
 - Ephemeral filesystem — extracted jars on disk contribute to page cache memory pressure
 - Single dyno (`web.1`) — all traffic hits one instance
 - 30-second request timeout (H12 error)
+- A jar cache miss waits at most `Extractor.missWait` (20 s) and then answers a
+  503 + `Retry-After`. The fetch runs on a daemon fiber, so it keeps going when
+  the request gives up and the retry is a cache hit. Before this, slow ~20 MB
+  `vaadin-platform-javadoc` misses showed up as H12s (incident javadocs-29916434).
+  Tests whose results depend on Maven Central's live "latest" compare against
+  `Extractor.latest`, not a pinned version (jQuery 4.1.0 broke `AppSpec`).
 - `-XX:+ExitOnOutOfMemoryError` — OOM kills the process immediately
 - When running the `heroku` command you must not specify an app name
 - Release phase: the Procfile's `release: bin/flyway-migrate` applies Flyway
