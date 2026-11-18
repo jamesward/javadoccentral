@@ -10,7 +10,7 @@ import zio.cache.Cache
 import zio.direct.*
 import zio.http.Client
 import zio.prelude.data.Optional.AllValuesAreNullable
-import zio.{IO, ZIO}
+import zio.{Duration, IO, ZIO, duration2DurationOps, durationInt}
 import zio.schema.{Schema, derived}
 import zio.schema.annotation.description
 
@@ -74,13 +74,20 @@ object Extractor:
    * (otherwise both would be `JarCache` and `ZIO.service[JarCache]`
    * would be ambiguous).
    */
-  final class JavadocCache(val cache: JarCache, val misses: Bulkhead):
+  final class JavadocCache(val cache: JarCache, val misses: Bulkhead, val missWait: Duration = Extractor.missWait):
     def get(gav: GroupArtifactVersion): ZIO[Client & MavenCentralRepo, JarError, JarCache.JarHandle] =
-      boundedGet(cache, misses, gav)
+      boundedGet(cache, misses, missWait, gav)
 
-  final class SourcesCache(val cache: JarCache, val misses: Bulkhead):
+  final class SourcesCache(val cache: JarCache, val misses: Bulkhead, val missWait: Duration = Extractor.missWait):
     def get(gav: GroupArtifactVersion): ZIO[Client & MavenCentralRepo, JarError, JarCache.JarHandle] =
-      boundedGet(cache, misses, gav)
+      boundedGet(cache, misses, missWait, gav)
+
+  /**
+   * How long a request waits for a cache-miss fetch before it answers a
+   * retryable 503. Well under Heroku's 30 s router timeout, leaving time to
+   * read the entry and render the page once the jar is there.
+   */
+  val missWait: Duration = 20.seconds
 
   /**
    * Cache hits go straight through. Misses (download + open) run in a
@@ -91,12 +98,31 @@ object Extractor:
    * [[JarCache.UpstreamUnavailableError]], which the routes already turn
    * into a 503 with `Retry-After`. The `contains` check races with
    * concurrent fetches, which is harmless: `JarCache.get` still dedupes.
+   *
+   * The fetch runs on a daemon fiber and the request waits at most
+   * `missWait` for it. Before, a miss that took longer than Heroku's 30 s
+   * router timeout (a ~20 MB `vaadin-platform-javadoc` jar behind a full
+   * bulkhead, incident javadocs-29916434) was an H12, and the fetch was tied
+   * to the request that started it, so a retry could start over. Now the
+   * request gets a fast 503 + `Retry-After` while the fetch finishes, and the
+   * retry is a cache hit.
    */
-  private def boundedGet(cache: JarCache, misses: Bulkhead, gav: GroupArtifactVersion): ZIO[Client & MavenCentralRepo, JarError, JarCache.JarHandle] =
+  private def boundedGet(cache: JarCache, misses: Bulkhead, missWait: Duration, gav: GroupArtifactVersion): ZIO[Client & MavenCentralRepo, JarError, JarCache.JarHandle] =
     cache.contains(gav).flatMap:
       case true  => cache.get(gav)
-      case false =>
-        misses(cache.get(gav)).mapError(_.fold(JarCache.UpstreamUnavailableError(gav, "too many jar fetches in progress"), identity))
+      case false => awaitMiss(cache, misses, missWait, gav)
+
+  private def awaitMiss(cache: JarCache, misses: Bulkhead, missWait: Duration, gav: GroupArtifactVersion): ZIO[Client & MavenCentralRepo, JarError, JarCache.JarHandle] =
+    defer:
+      val fetch =
+        misses(cache.get(gav))
+          .mapError(_.fold(JarCache.UpstreamUnavailableError(gav, "too many jar fetches in progress"), identity))
+          .forkDaemon
+          .run
+      // Interrupting `join` (timeout or a dropped request) leaves the daemon running.
+      fetch.join
+        .timeoutFail(JarCache.UpstreamUnavailableError(gav, s"jar fetch still in progress after ${missWait.render}"))(missWait)
+        .run
 
   /** Re-exported library helper. Kept as a method here so existing call
    *  sites (`Extractor.latest`) compile unchanged. */
