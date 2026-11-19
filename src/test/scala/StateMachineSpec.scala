@@ -92,6 +92,24 @@ object StateMachineSpec extends ZIOSpecDefault:
         afterInterr <- held.get
       yield assertTrue(failed.isLeft, afterFail == 0, afterInterr == 0)
     ,
+    test("concurrent runs have separate scopes: interrupting one releases only its own resource"):
+      for
+        heldA    <- Ref.make(0)
+        heldB    <- Ref.make(0)
+        startedA <- Promise.make[Nothing, Unit]
+        startedB <- Promise.make[Nothing, Unit]
+        finishB  <- Promise.make[Nothing, Unit]
+        fiberA   <- acquiringMachine(heldA, _ => startedA.succeed(()) *> ZIO.never).run(Counting(2)).fork
+        fiberB   <- acquiringMachine(heldB, _ => startedB.succeed(()) *> finishB.await.as(Stopped(1))).run(Counting(2)).fork
+        _        <- startedA.await *> startedB.await
+        _        <- fiberA.interrupt
+        afterA   <- heldA.get
+        stillB   <- heldB.get
+        _        <- finishB.succeed(())
+        resultB  <- fiberB.join
+        afterB   <- heldB.get
+      yield assertTrue(afterA == 0, stillB == 1, resultB == Stopped(1), afterB == 0)
+    ,
     test("logs each step with the machine and state type names, never state data"):
       for
         _    <- countdown.run(Counting(1))
