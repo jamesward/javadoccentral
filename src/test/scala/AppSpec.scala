@@ -33,7 +33,8 @@ object AppSpec extends ZIOSpecDefault:
         val groupIdResp = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root, queryParams = QueryParams("groupId" -> "com.jamesward"))).addHeader(forwardedForHeader)).run
         val artifactIdResp = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root / "com.jamesward", queryParams = QueryParams("artifactId" -> "travis-central-test"))).addHeader(forwardedForHeader)).run
         val versionResp = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root / "com.jamesward" / "travis-central-test", queryParams = QueryParams("version" -> "0.0.15"))).addHeader(forwardedForHeader)).run
-        val latest = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root / "org.webjars" / "jquery" / "latest")).addHeader(forwardedForHeader)).run
+        // An artifact with no new releases since 2018, so its latest version stays 0.0.15.
+        val latest = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root / "com.jamesward" / "travis-central-test" / "latest")).addHeader(forwardedForHeader)).run
 
         val groupIdRedir = Web.appWithMiddleware.runZIO(Request.get(URL((Path.root / "com.jamesward").addTrailingSlash)).addHeader(forwardedForHeader)).run
         val artifactIdRedir = Web.appWithMiddleware.runZIO(Request.get(URL((Path.root / "com.jamesward" / "travis-central-test").addTrailingSlash)).addHeader(forwardedForHeader)).run
@@ -53,7 +54,7 @@ object AppSpec extends ZIOSpecDefault:
           versionResp.status.isRedirection,
           versionResp.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward/travis-central-test/0.0.15")),
           latest.status.isRedirection,
-          latest.headers.get(Header.Location).exists(_.url.path == Path.decode("/org.webjars/jquery/4.0.0")),
+          latest.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward/travis-central-test/0.0.15")),
           groupIdRedir.status.isRedirection,
           groupIdRedir.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward")),
           artifactIdRedir.status.isRedirection,
@@ -281,7 +282,7 @@ object AppSpec extends ZIOSpecDefault:
       val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
       defer:
         val resp = Web.appWithMiddleware.runZIO(
-          Request.get(URL(Path.root / "org.webjars" / "jquery" / "latest"))
+          Request.get(URL(Path.root / "com.jamesward" / "travis-central-test" / "latest"))
             .addHeader(forwardedForHeader)
             .addHeader(Header.Accept(MediaType.application.json))
         ).run
@@ -289,7 +290,7 @@ object AppSpec extends ZIOSpecDefault:
         assertTrue(
           resp.status.isSuccess,
           resp.header(Header.ContentType).exists(_.mediaType.matches(MediaType.application.json)),
-          body == """{"version":"4.0.0"}""",
+          body == """{"version":"0.0.15"}""",
         )
     , test("probe paths get a 404, then the client is blocked"):
       // Its own IP: the guard flags it, and the suite shares one guard.
