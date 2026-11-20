@@ -232,8 +232,10 @@ object SymbolSearch:
         LogAnnotation("symbol", symbol),
         LogAnnotation("artifacts", validatedResults.size.toString),
       )(ZIO.logInfo("Scheduling index load")).run
-      // `indexJavadocContents` forks its own daemon and `Extractor.latest`
-      // doesn't require `Scope`, so this daemon has no `Scope` to inherit.
+      // This runs inside the search machine's run, whose `Scope` closes when the search
+      // returns, and `forkDaemon` inherits it. Nothing here needs a `Scope`
+      // (`indexJavadocContents` forks its own daemon, `Extractor.latest` doesn't), so
+      // keep it that way: a `Scope` used here would be closed under the daemon.
       ZIO.collectAllParDiscard(indexLoad).forkDaemon.run
       validatedResults
 
@@ -376,5 +378,8 @@ object SymbolSearch:
 
     getContentsAndUpdateIndex
       .catchAllCause: cause =>
-        ZIO.logAnnotate(LogAnnotation("gav", groupArtifactVersion.toString))(ZIO.logWarningCause("Index load failed", cause))
+        // An SQL timeout keeps its stack trace, and the log says where indexing failed.
+        val (logged, failedIn) = StateMachine.Failed.unwrap(cause)
+        val annotations = Set(LogAnnotation("gav", groupArtifactVersion.toString)) ++ failedIn.map(LogAnnotation("failedIn", _))
+        ZIO.logAnnotate(annotations)(ZIO.logWarningCause("Index load failed", logged))
       .forkDaemon.unit

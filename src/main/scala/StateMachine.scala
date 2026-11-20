@@ -334,9 +334,25 @@ object StateMachine:
    * first (`search > symbol-tiers`).
    */
   case class Failed[+E](state: String, error: E, machines: List[String] = Nil):
-    override def toString: String =
-      val machine = if machines.isEmpty then "state machine" else machines.mkString(" > ")
-      s"$machine failed in $state: $error"
+    private def machine: String = if machines.isEmpty then "state machine" else machines.mkString(" > ")
+
+    /** Where the run failed, e.g. `search > symbol-search in SymbolTiers`. */
+    def where: String = s"$machine in $state"
+
+    override def toString: String = s"$machine failed in $state: $error"
+
+  object Failed:
+    /**
+     * For logging a cause that may hold a [[Failed]]: the cause with each `Failed` replaced
+     * by its own error, so a `Throwable` keeps its stack trace in the log, and where the
+     * first one failed ([[Failed.where]]).
+     */
+    def unwrap(cause: Cause[Any]): (Cause[Any], Option[String]) =
+      val where = cause.failureOption.collect { case failed: Failed[?] => failed.where }
+      val unwrapped = cause.map:
+        case failed: Failed[?] => failed.error
+        case other             => other
+      (unwrapped, where)
 
   /** One transition: from an `A` to whatever `f` returns (usually a union of states). */
   def step[R, E, A, B](f: A => ZIO[R & Scope, E, B]): StateMachine[R, E, A, B] =

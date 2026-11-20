@@ -66,6 +66,18 @@ object StateMachineSpec extends ZIOSpecDefault:
         result.left.toOption.map(_.toString).contains("outer > inner failed in Counting: Boom(boom)"),
       )
     ,
+    test("Failed.unwrap logs a machine failure's own error, with its stack trace, and where it failed"):
+      val error = RuntimeException("connection timeout")
+      val (unwrapped, where) = StateMachine.Failed.unwrap(Cause.fail(StateMachine.Failed("Claimed", error, List("indexing"))))
+      val (plain, noWhere) = StateMachine.Failed.unwrap(Cause.fail(Boom("boom")))
+      assertTrue(
+        unwrapped.failureOption.contains(error),
+        unwrapped.prettyPrint.contains("StateMachineSpec"),
+        where.contains("indexing in Claimed"),
+        plain.failureOption.contains(Boom("boom")),
+        noWhere.isEmpty,
+      )
+    ,
     test("an error edge recovers to a state of the topology"):
       val recovering = step((state: Counting) => ZIO.fail(Boom("boom")).catchAll(_ => ZIO.succeed(Stopped(state.n))))
       for result <- recovering.run(Counting(1))
