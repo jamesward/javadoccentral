@@ -62,6 +62,7 @@ object McpSpec extends ZIOSpecDefault:
       yield
         val text = resultText(result)
         assertNotError(result) && assertTrue(text.contains("\"link\""), text.contains("\"fqn\""), text != "[]")
+    @@ MavenCentralRetry.aspect
 
   private def javadocSymbolTest(label: String, gid: String, aid: String, ver: String) =
     test(s"get_javadoc_symbol works for $label"):
@@ -75,6 +76,7 @@ object McpSpec extends ZIOSpecDefault:
       yield
         val text = resultText(result)
         assertNotError(result) && assertTrue(text.length > 10)
+    @@ MavenCentralRetry.aspect
 
   private def sourceFilesTest(label: String, gid: String, aid: String, ver: String, ext: String) =
     test(s"list and get source contents for $label"):
@@ -89,6 +91,7 @@ object McpSpec extends ZIOSpecDefault:
       yield
         val text = resultText(result)
         assertNotError(result) && assertTrue(text.length > 50)
+    @@ MavenCentralRetry.aspect
 
   override def spec =
     suite("MCP Integration")(
@@ -142,6 +145,7 @@ object McpSpec extends ZIOSpecDefault:
           // Output is now structured: `{"result":"<version>"}` (McpOutput wraps
           // a non-object value under `result`), so match a version anywhere.
           assertNotError(result) && assertTrue(text.matches(".*\\d+\\.\\d+.*"), result.structuredContent() != null)
+      @@ MavenCentralRetry.aspect
       ,
       test("get_latest_version errors for nonexistent artifact"):
         for
@@ -156,6 +160,7 @@ object McpSpec extends ZIOSpecDefault:
             text.contains("search_artifacts"),
             !text.contains("GroupIdOrArtifactIdNotFoundError"),
           )
+      @@ MavenCentralRetry.aspect
       ,
 
       // --- list_javadoc_symbols ---
@@ -168,6 +173,7 @@ object McpSpec extends ZIOSpecDefault:
           result <- withClient(port): client =>
             callTool(client, "list_javadoc_symbols", java.util.Map.of("groupId", javaGroupId, "artifactId", javaArtifactId, "version", "0.0.0-does-not-exist"))
         yield assertIsError(result)
+      @@ MavenCentralRetry.aspect
       ,
 
       // --- get_javadoc_symbol ---
@@ -186,6 +192,7 @@ object McpSpec extends ZIOSpecDefault:
             text.contains("list_javadoc_symbols"),
             !text.contains("JavadocFileNotFound"),
           )
+      @@ MavenCentralRetry.aspect
       ,
 
       // --- list_source_files / get_source_file ---
@@ -204,6 +211,7 @@ object McpSpec extends ZIOSpecDefault:
             text.contains("get_latest_version"),
             text.contains("list_javadoc_symbols"),
           )
+      @@ MavenCentralRetry.aspect
       ,
       test("get_source_file errors for nonexistent file"):
         for
@@ -213,6 +221,7 @@ object McpSpec extends ZIOSpecDefault:
         yield
           val text = resultText(result)
           assertIsError(result) && assertTrue(text.contains("sources jar"), text.contains("list_source_files"))
+      @@ MavenCentralRetry.aspect
       ,
       test("get_source_file grep and line range narrow a file and are optional inputs"):
         val file = java.util.Map.of[String, Object]("groupId", "com.jamesward", "artifactId", "zio-mavencentral_3", "version", "0.12.0",
@@ -247,6 +256,7 @@ object McpSpec extends ZIOSpecDefault:
             range.linesIterator.drop(1).toList == whole.linesIterator.take(3).toList.zipWithIndex.map((l, i) => s"${i + 1}: $l"),
             resultText(badRange).contains("startLine=100000"),
           ) && assertIsError(badRange)
+      @@ MavenCentralRetry.aspect
       ,
 
       // --- get_latest_version pre-releases ---
@@ -260,6 +270,7 @@ object McpSpec extends ZIOSpecDefault:
         yield
           // netty-codec publishes 4.x releases alongside 5.0.0 alphas
           assertTrue(stable.contains(".Final"), !stable.contains("Alpha"), any.contains("5."))
+      @@ MavenCentralRetry.aspect
       ,
 
       // --- list_javadoc_symbols filter ---
@@ -285,6 +296,7 @@ object McpSpec extends ZIOSpecDefault:
             filteredFqns.size < allFqns.size,
             filteredFqns.forall(_.toLowerCase.contains("zlayer")),
           )
+      @@ MavenCentralRetry.aspect
       ,
 
       // --- symbol_to_artifact ---
@@ -296,11 +308,12 @@ object McpSpec extends ZIOSpecDefault:
         yield
           val text = resultText(result)
           assertNotError(result) && assertTrue(text.contains("\"groupId\""), text.contains("\"artifactId\""), text.contains("zio-cache"), result.structuredContent() != null)
+      @@ MavenCentralRetry.aspect
       ,
 
     ).provide(
       Server.defaultWith(_.onAnyOpenPort),
-      Client.default,
+      LoggingClient.layer,
       MavenCentral.MavenCentralRepo.live,
       App.latestCacheLayer,
       App.javadocCacheLayer,

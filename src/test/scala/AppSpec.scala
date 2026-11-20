@@ -73,6 +73,7 @@ object AppSpec extends ZIOSpecDefault:
           // top-level and groupId pages don't get immutable caching
           groupIdResp.header(Header.CacheControl).forall(!_.renderedValue.contains("immutable")),
         )
+    @@ MavenCentralRetry.aspect
     , test("304 Not Modified for immutable assets with If-None-Match or If-Modified-Since"):
       val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
       // Use a GAV that doesn't exist on Maven Central — the whole point is to prove
@@ -113,6 +114,7 @@ object AppSpec extends ZIOSpecDefault:
           body.contains("ArrayTreeNode.html"),
           filePage.status.isSuccess,
         )
+    @@ MavenCentralRetry.aspect
     , test("artifact page: versions, a groupId split across the path, an unknown artifact, an unknown group"):
       val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.101")
       def get(path: Path) = Web.appWithMiddleware.runZIO(Request.get(URL(path)).addHeader(forwardedForHeader))
@@ -135,6 +137,7 @@ object AppSpec extends ZIOSpecDefault:
           unknownGroup.status == Status.NotFound,
           unknownGroupBody.contains("GroupID is invalid"),
         )
+    @@ MavenCentralRetry.aspect
     , test("version page: a missing version lists the versions, and an unknown artifact redirects to its artifact page"):
       val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.102")
       def get(path: Path) =
@@ -153,6 +156,7 @@ object AppSpec extends ZIOSpecDefault:
           unknownArtifact.status.isRedirection,
           unknownArtifact.headers.get(Header.Location).exists(_.url.path == Path.decode("/asdfqwerzzxcv/zzz-no-such-artifact")),
         )
+    @@ MavenCentralRetry.aspect
     , test("HEAD behaves like GET but returns no body"):
       val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
       val assetPath = Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "org" / "webjars" / "package-summary.html"
@@ -177,6 +181,7 @@ object AppSpec extends ZIOSpecDefault:
           headResp.header(Header.ETag).map(_.renderedValue) == getResp.header(Header.ETag).map(_.renderedValue),
           headResp.header(Header.CacheControl).map(_.renderedValue) == getResp.header(Header.CacheControl).map(_.renderedValue),
         )
+    @@ MavenCentralRetry.aspect
     , test("HEAD /mcp does not return 500"):
       val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
       defer:
@@ -245,6 +250,7 @@ object AppSpec extends ZIOSpecDefault:
           headResp.status == Status.NotFound,
           headBody.isEmpty,
         )
+    @@ MavenCentralRetry.aspect
     , test("badge redirects to shields.io with the latest version"):
       val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
       defer:
@@ -278,6 +284,7 @@ object AppSpec extends ZIOSpecDefault:
           locationNF.contains("&color=red"),
           notFound.header(Header.CacheControl).exists(_.renderedValue.contains("max-age=300")),
         )
+    @@ MavenCentralRetry.aspect
     , test("latest with Accept: application/json returns just the latest version"):
       val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
       defer:
@@ -292,6 +299,7 @@ object AppSpec extends ZIOSpecDefault:
           resp.header(Header.ContentType).exists(_.mediaType.matches(MediaType.application.json)),
           body == """{"version":"0.0.15"}""",
         )
+    @@ MavenCentralRetry.aspect
     , test("probe paths get a 404, then the client is blocked"):
       // Its own IP: the guard flags it, and the suite shares one guard.
       val prober = Header.Custom("X-Forwarded-For", "192.168.1.200")
@@ -330,6 +338,7 @@ object AppSpec extends ZIOSpecDefault:
           cachedBody.nonEmpty,
           browser.status != Status.TooManyRequests,
         )
+    @@ MavenCentralRetry.aspect
     , test("MCP OAuth discovery under /mcp/.well-known is not a probe"):
       // Codex tries these before connecting; flagging them locked it out of /mcp.
       val client = Header.Custom("X-Forwarded-For", "192.168.1.202")
@@ -395,6 +404,7 @@ object AppSpec extends ZIOSpecDefault:
           searchResp.status.isSuccess,
           searchBody.contains(s"$gid:$aid"),
         )
+    @@ MavenCentralRetry.aspect
 
     , test("agent-readiness endpoints: Content-Signal, MCP server card, homepage Link header"):
       val ff = Header.Custom("X-Forwarded-For", "192.168.1.100")
@@ -570,6 +580,7 @@ object AppSpec extends ZIOSpecDefault:
           symbolToArtifactResp.status.isSuccess,
           symbolToArtifactBody.contains("api-fixture"),
         )
+    @@ MavenCentralRetry.aspect
 
     , test("OpenAPI, SwaggerUI, and RFC 9264 API catalog describe the REST API"):
       val ff = Header.Custom("X-Forwarded-For", "192.168.1.100")
@@ -610,7 +621,7 @@ object AppSpec extends ZIOSpecDefault:
     App.javadocCacheLayer,
     App.sourcesCacheLayer,
     App.latestCacheLayer,
-    Client.default,
+    LoggingClient.layer,
     MavenCentral.MavenCentralRepo.live,
     PostgresContainer.freshDatabase,
     SymbolIndex.layer,

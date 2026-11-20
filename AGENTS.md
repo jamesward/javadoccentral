@@ -488,6 +488,15 @@ so keep it free of this app's types. In short:
   cap allows.
 - `JarCache.get` wraps the shared cache entry in a new `JarHandle` on every
   call, so compare handles by `meta` (one instance per entry), not with `eq`.
+- Tests that hit the live Maven Central get `@@ MavenCentralRetry.aspect` per
+  test (up to 5 retries, 2 s exponential backoff, each retry logged at WARN);
+  tests that don't touch the network don't, so they fail at once. Specs that
+  call Maven Central provide `LoggingClient.layer` instead of `Client.default`:
+  it logs every request at INFO with status, URL and the `server` / `cf-ray` /
+  `cf-cache-status` / `age` headers. A failure is cached nowhere (`JarCache`,
+  `LatestCache`), so a retry refetches. In `AppSpec`, retries go through the
+  shared guard, and every request for an uncached GAV costs `new-key` budget
+  (30 per IP per 10 minutes), so a long outage can turn retries into 429s.
 - `MockInference.layer` as fallback when Heroku inference is unavailable
 - `TestAspect.withLiveClock`, `TestAspect.withLiveRandom`, `TestAspect.withLiveSystem` as needed
 - `TestAspect.sequential` for tests with shared state

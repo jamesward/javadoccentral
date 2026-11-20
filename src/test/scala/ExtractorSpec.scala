@@ -75,6 +75,7 @@ object ExtractorSpec extends ZIOSpecDefault:
           assertTrue(sampleFqns.forall(fqns.contains)) &&
           assertTrue(!contents.exists(c => c.link.contains("class-use"))) &&
           assertTrue(!contents.exists(c => lastSegment(c.link).startsWith("package-")))
+    @@ MavenCentralRetry.aspect
 
   def spec = suite("Extractor")(
     test("parseScaladoc") {
@@ -108,23 +109,23 @@ object ExtractorSpec extends ZIOSpecDefault:
       assertZIO(Extractor.javadocContents(gav("com.jamesward", "zio-mavencentral_3", "0.0.0")).exit)(
         failsWithA[NotFoundError]
       )
-    },
+    } @@ MavenCentralRetry.aspect,
     test("javadoc jar does not exist") {
       assertZIO(Extractor.javadocJar(gav("com.jamesward", "zio-mavencentral_3", "0.0.0")).exit)(
         failsWithA[NotFoundError]
       )
-    },
+    } @@ MavenCentralRetry.aspect,
     test("sources do not exist") {
       assertZIO(Extractor.sourceContents(gav("com.jamesward", "zio-mavencentral_3", "0.0.0")).exit)(
         failsWithA[NotFoundError]
       )
-    },
+    } @@ MavenCentralRetry.aspect,
     test("javadoc file not found") {
       val groupArtifactVersion = gav("com.jamesward", "zio-mavencentral_3", "0.12.0")
       assertZIO(Extractor.javadocEntryBytes(groupArtifactVersion, "asdf").exit)(
         failsWithA[Extractor.JavadocFileNotFound]
       )
-    },
+    } @@ MavenCentralRetry.aspect,
     test("scaladoc - zio-mavencentral_3") {
       defer:
         val scaladoc = Extractor.javadocContents(gav("com.jamesward", "zio-mavencentral_3", "0.12.0")).run
@@ -137,21 +138,21 @@ object ExtractorSpec extends ZIOSpecDefault:
           },
           scaladoc.exists(_.`type` == "searchArtifacts(groupId: GroupId): ZIO[MavenCentralRepo, GroupIdNotFoundError | TemporaryServerError | Throwable, WithCacheInfo[Seq[ArtifactId]]]")
         )
-    },
+    } @@ MavenCentralRetry.aspect,
     test("scaladoc - zio_3") {
       defer:
         val scaladoc = Extractor.javadocContents(gav("dev.zio", "zio_3", "2.1.9")).run
         assertTrue(
           scaladoc.size == 3696
         )
-    },
+    } @@ MavenCentralRetry.aspect,
     test("scaladoc - zio_2.13") {
       defer:
         val scaladoc = Extractor.javadocContents(gav("dev.zio", "zio_2.13", "2.1.9")).run
         assertTrue(
           scaladoc.size == 544
         )
-    },
+    } @@ MavenCentralRetry.aspect,
     test("kotlin - ktor-io-jvm/3.2.3") {
       defer:
         val doccontents = Extractor.javadocContents(gav("io.ktor", "ktor-io-jvm", "3.2.3")).run
@@ -160,7 +161,7 @@ object ExtractorSpec extends ZIOSpecDefault:
           doccontents.exists(_.fqn == "io.ktor.utils.io.pool.SingleInstancePool"),
           doccontents.exists(_.`type` == "abstract class SingleInstancePool<T : Any> : ObjectPool<T>"),
         )
-    },
+    } @@ MavenCentralRetry.aspect,
     test("java - spring-ai-mcp/1.0.1") {
       defer:
         val doccontents = Extractor.javadocContents(gav("org.springframework.ai", "spring-ai-mcp", "1.0.1")).run
@@ -168,7 +169,7 @@ object ExtractorSpec extends ZIOSpecDefault:
           doccontents.size == 8,
           doccontents.exists(_.fqn == "org.springframework.ai.mcp.SyncMcpToolCallback")
         )
-    },
+    } @@ MavenCentralRetry.aspect,
     // --- Java FQN regression coverage (checked against actual jar contents) ---
     //
     // jackson-databind 2.22.1 ships OLD frames-based javadoc: it has a
@@ -185,7 +186,7 @@ object ExtractorSpec extends ZIOSpecDefault:
           handle.hasEntry("package-list").run,
           !handle.hasEntry("element-list").run,
         )
-    },
+    } @@ MavenCentralRetry.aspect,
     javaFqnsMatchJar(
       "jackson-databind/2.22.1 (old package-list)",
       gav("com.fasterxml.jackson.core", "jackson-databind", "2.22.1"),
@@ -209,7 +210,7 @@ object ExtractorSpec extends ZIOSpecDefault:
           // and for the Java format every fqn is exactly its jar path, dotted
           contents.forall(c => c.fqn == c.link.stripSuffix(".html").replace('/', '.')),
         )
-    },
+    } @@ MavenCentralRetry.aspect,
     javaFqnsMatchJar(
       "spring-ai-mcp/1.0.1 (modern element-list)",
       gav("org.springframework.ai", "spring-ai-mcp", "1.0.1"),
@@ -238,7 +239,7 @@ object ExtractorSpec extends ZIOSpecDefault:
           unresolved.isEmpty,
           contents.exists(_.fqn == "com.jamesward.zio_mavencentral.MavenCentral"),
         )
-    },
+    } @@ MavenCentralRetry.aspect,
     test("kotlin - ktor-io-jvm/3.2.3 fqns are qualified and type carries the declaration") {
       val g = gav("io.ktor", "ktor-io-jvm", "3.2.3")
       defer:
@@ -253,14 +254,14 @@ object ExtractorSpec extends ZIOSpecDefault:
               c.`type` == "abstract class SingleInstancePool<T : Any> : ObjectPool<T>"
           ),
         )
-    },
+    } @@ MavenCentralRetry.aspect,
     test("symbolContents - zio-mavencentral_3") {
       defer:
         val contents = Extractor.javadocSymbolContents(gav("com.jamesward", "zio-mavencentral_3", "0.12.0"), "com/jamesward/zio_mavencentral/MavenCentral$$GroupId$.html#unapply-fffffd22", Extractor.LinkBase.Jar).run
         assertTrue(
           contents.contains("com.jamesward.zio_mavencentral.MavenCentral.GroupId")
         )
-    },
+    } @@ MavenCentralRetry.aspect,
     test("symbolContents - smaller") {
       defer:
         val contents = Extractor.javadocSymbolContents(gav("com.vaadin", "vaadin-confirm-dialog-flow", "24.9.0"), "com/vaadin/flow/component/confirmdialog/ConfirmDialog.html", Extractor.LinkBase.Jar).run
@@ -269,7 +270,7 @@ object ExtractorSpec extends ZIOSpecDefault:
           contents.contains("This method is inherited from"),
           contents.lines().count() > 900,
         )
-    },
+    } @@ MavenCentralRetry.aspect,
     // --- Page cleanup for agents: link resolution, index shells, javadoc chrome ---
     test("resolveLink resolves page-relative links to jar paths and drops useless ones") {
       val page = "org/webjars/WebJarAssetLocator.html"
@@ -311,12 +312,12 @@ object ExtractorSpec extends ZIOSpecDefault:
           !multi.contains("Frame Alert"),
           multi.contains("com.fasterxml.jackson.databind.node"),
         )
-    },
+    } @@ MavenCentralRetry.aspect,
     test("index of single-module modern javadoc follows the Refresh redirect") {
       defer:
         val index = Extractor.index(gav("org.webjars", "webjars-locator-lite", "1.1.3")).run
         assertTrue(index.contains("org.webjars.locator_lite"), index.contains("Packages"))
-    },
+    } @@ MavenCentralRetry.aspect,
     test("javadoc symbol page drops navigation, external links and link titles") {
       defer:
         val page = Extractor.javadocSymbolContents(
@@ -336,21 +337,21 @@ object ExtractorSpec extends ZIOSpecDefault:
           !page.contains("../../"),
           page.length < 20_000,
         )
-    },
+    } @@ MavenCentralRetry.aspect,
     test("markdown served at the page URL keeps page-relative links") {
       defer:
         val page = Extractor.javadocSymbolContents(
           gav("org.webjars", "webjars-locator-core", "0.59"), "org/webjars/WebJarAssetLocator.html", Extractor.LinkBase.Page,
         ).run
         assertTrue(page.contains("(../../org/webjars/WebJarAssetLocator.WebJarInfo.html)"), !page.contains("docs.oracle.com"))
-    },
+    } @@ MavenCentralRetry.aspect,
     test("sourceContents - zio-mavencentral_3") {
       defer:
         val contents = Extractor.sourceFileContents(gav("com.jamesward", "zio-mavencentral_3", "0.12.0"), "com/jamesward/zio_mavencentral/MavenCentral.scala").run
         assertTrue(
           contents.contains("object MavenCentral:")
         )
-    },
+    } @@ MavenCentralRetry.aspect,
     test("listSourceContents - zio-mavencentral_3") {
       defer:
         val contents = Extractor.sourceContents(gav("com.jamesward", "zio-mavencentral_3", "0.12.0")).run
@@ -361,7 +362,7 @@ object ExtractorSpec extends ZIOSpecDefault:
           contents.exists(file => file.link == "com/jamesward/zio_mavencentral/MavenCentral.scala" && file.sizeBytes.exists(_ > 10000)),
           contents.forall(_.sizeBytes.isDefined),
         )
-    },
+    } @@ MavenCentralRetry.aspect,
     test("concurrent javadocJar calls for the same GAV deduplicate") {
       // The library's `JarCache` provides single-flight via a `Promise`-keyed
       // map, so concurrent `get`s share one cache entry (one download). Each
@@ -374,7 +375,7 @@ object ExtractorSpec extends ZIOSpecDefault:
           handles.size == 10,
           handles.forall(_.meta eq handles.head.meta),
         )
-    } @@ TestAspect.timeout(2.minutes) @@ TestAspect.withLiveClock,
+    } @@ MavenCentralRetry.aspect @@ TestAspect.timeout(2.minutes) @@ TestAspect.withLiveClock,
     test("parallel downloads: 20 artifacts concurrently") {
       val gavs = Seq(
         gav("com.jamesward", "zio-mavencentral_3", "0.12.0"),
@@ -401,9 +402,9 @@ object ExtractorSpec extends ZIOSpecDefault:
       defer:
         val handles = ZIO.foreachPar(gavs)(Extractor.javadocJar).run
         assertTrue(handles.size == 20, handles.forall(_.sizeBytes > 0L))
-    } @@ TestAspect.timeout(2.minutes) @@ TestAspect.withLiveClock
+    } @@ MavenCentralRetry.aspect @@ TestAspect.timeout(2.minutes) @@ TestAspect.withLiveClock
   ).provide(
-    Client.default,
+    LoggingClient.layer,
     MavenCentral.MavenCentralRepo.live,
     App.javadocCacheLayer,
     App.sourcesCacheLayer,
