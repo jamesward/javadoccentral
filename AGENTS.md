@@ -494,9 +494,10 @@ so keep it free of this app's types. In short:
   call Maven Central provide `LoggingClient.layer` instead of `Client.default`:
   it logs every request at INFO with status, URL and the `server` / `cf-ray` /
   `cf-cache-status` / `age` headers. A failure is cached nowhere (`JarCache`,
-  `LatestCache`), so a retry refetches. In `AppSpec`, retries go through the
-  shared guard, and every request for an uncached GAV costs `new-key` budget
-  (30 per IP per 10 minutes), so a long outage can turn retries into 429s.
+  `LatestCache`), so a retry refetches. Every request for an uncached GAV costs
+  `new-key` budget (30 per IP per 10 minutes), so `AppSpec`'s shared guard
+  (`suiteGuard`) allows 10,000; otherwise retries during an outage would turn
+  into 429s. The crawler-budget test builds its own default guard per attempt.
 - `MockInference.layer` as fallback when Heroku inference is unavailable
 - `TestAspect.withLiveClock`, `TestAspect.withLiveRandom`, `TestAspect.withLiveSystem` as needed
 - `TestAspect.sequential` for tests with shared state
