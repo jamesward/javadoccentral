@@ -119,64 +119,125 @@ object SymbolSearch:
     .map(_._2)
 
   /**
-   * Names containing the query (any case) first, then close spellings. An exact
-   * name match is always a containing match too, so stopping at exact matches would
-   * hide other artifacts ("jev" is one artifact's `Mode.Jev` and part of other
-   * artifacts' `JevJudge`). Queries too short for trigrams only match exactly.
-   * A dotted query is a qualified name: when nothing contains it, the artifact is
-   * most likely not indexed yet, so it goes to AI search (which indexes it) rather
-   * than to spelling matches of its last segment (`zio.cache.Cache` → every `Cache`).
+   * Resolving a query to artifacts (`search`), as a [[StateMachine]]:
+   * {{{
+   * Query ──name match──▶ Found
+   *   └──▶ SymbolTiers ──▶ Found
+   *         ├──▶ SymbolTiers (next tier)
+   *         └──▶ NotIndexed ──AI search──▶ Found
+   * }}}
+   * Symbol tiers: names containing the query (any case) first, then close spellings. An
+   * exact name match is always a containing match too, so stopping at exact matches would
+   * hide other artifacts ("jev" is one artifact's `Mode.Jev` and part of other artifacts'
+   * `JevJudge`). Queries too short for trigrams only match exactly. A dotted query is a
+   * qualified name: when nothing contains it, the artifact is most likely not indexed yet,
+   * so it goes to AI search (which indexes it) rather than to spelling matches of its last
+   * segment (`zio.cache.Cache` → every `Cache`).
+   *
+   * A failing index lookup fails the search; there is deliberately no error edge from
+   * `Query` / `SymbolTiers` to `NotIndexed`. AI search costs money per call, and an index
+   * outage would send every query to it. Revisit if a cheap model handles AI search.
+   * The name search (`byName`) runs the [[NameSearch]] machine inside its transition.
    */
+  object Resolution:
+    /** The query as typed: the machine's input. */
+    case class Query(symbol: String)
+    /** The symbol tiers not tried yet, in order: never empty (see [[tiersFor]]). */
+    private case class SymbolTiers(symbol: String, tiers: ::[Match])
+    /** Nothing in the index matches. */
+    private case class NotIndexed(symbol: String)
+    case class Found private[Resolution] (artifacts: Set[MavenCentral.GroupArtifact])
+
+    private def byName(query: Query): ZIO[SymbolIndex, Throwable, Found | SymbolTiers] =
+      searchGroupArtifacts(query.symbol).map: found =>
+        if found.nonEmpty then Found(found) else tiersFor(query.symbol)
+
+    /** The tiers for a symbol: the only way to make a `SymbolTiers`. */
+    private def tiersFor(symbol: String): SymbolTiers =
+      val trimmed = symbol.trim
+      val tiers =
+        if trimmed.length < minFuzzyLength then ::(Match.Exact, Nil)
+        else if trimmed.contains('.') then ::(Match.Containing, Nil)
+        else ::(Match.Containing, List(Match.Similar))
+      SymbolTiers(symbol, tiers)
+
+    private def bySymbol(tiers: SymbolTiers): ZIO[SymbolIndex, Throwable, Found | SymbolTiers | NotIndexed] =
+      lookup(tiers.tiers.head, tiers.symbol).map: found =>
+        if found.nonEmpty then Found(found)
+        else tiers.tiers.tail match
+          case next :: rest => SymbolTiers(tiers.symbol, ::(next, rest))
+          case Nil          => NotIndexed(tiers.symbol)
+
+    private def byAi(notIndexed: NotIndexed): ZIO[HerokuInference & Client & MavenCentralRepo & Extractor.JavadocCache & SymbolIndex & SymbolSearchGuard, SearchError, Found] =
+      aiSearchAndIndex(notIndexed.symbol).map(Found(_))
+
+    /** The inner machine both machines below share: each tier in turn, until one matches. */
+    private val tiers: StateMachine[SymbolIndex, Throwable, SymbolTiers, Found | NotIndexed] =
+      StateMachine.step(bySymbol).loop[SymbolTiers, Found | NotIndexed]
+
+    /** The symbol tiers alone, without AI search: nothing matching is an empty set. */
+    val symbols: StateMachine[SymbolIndex, Throwable, String, Set[MavenCentral.GroupArtifact]] =
+      tiers.contramap(tiersFor).map:
+        case Found(artifacts) => artifacts
+        case _: NotIndexed    => Set.empty
+      .named("symbol-search")
+
+    val machine: StateMachine[
+      SymbolIndex & HerokuInference & Client & MavenCentralRepo & Extractor.JavadocCache & SymbolSearchGuard,
+      Throwable | SearchError, Query, Found,
+    ] =
+      StateMachine.step(byName)
+        .on[SymbolTiers, Found](tiers)
+        .on[NotIndexed, Found](StateMachine.step(byAi))
+        .named("search")
+
   def symbolArtifacts(symbol: String): ZIO[SymbolIndex, Throwable, Set[MavenCentral.GroupArtifact]] =
-    val trimmed = symbol.trim
-    val tiers =
-      if trimmed.length < minFuzzyLength then List(Match.Exact)
-      else if trimmed.contains('.') then List(Match.Containing)
-      else List(Match.Containing, Match.Similar)
-    ZIO.foldLeft(tiers)(Set.empty[MavenCentral.GroupArtifact]): (found, tier) =>
-      if found.nonEmpty then ZIO.succeed(found) else lookup(tier, symbol)
+    Resolution.symbols.run(symbol).mapError(_.error)
 
   def search(symbol: String): ZIO[SymbolIndex & HerokuInference & Client & MavenCentralRepo & Extractor.JavadocCache & SymbolSearchGuard, SearchError, Set[MavenCentral.GroupArtifact]] =
+    Resolution.machine.run(Resolution.Query(symbol)).mapBoth(
+      failed =>
+        failed.error match
+          case e: SearchError => e
+          case e: Throwable   => SearchError(e.toString),
+      _.artifacts,
+    )
+
+  /** Asks AI search for the artifacts, keeps the real ones, and schedules indexing them. */
+  private def aiSearchAndIndex(symbol: String): ZIO[HerokuInference & Client & MavenCentralRepo & Extractor.JavadocCache & SymbolIndex & SymbolSearchGuard, SearchError, Set[MavenCentral.GroupArtifact]] =
     defer:
-      val gaResults = searchGroupArtifacts(symbol).mapError(e => SearchError(e.toString)).run
-
-      val cacheResults =
-        if gaResults.nonEmpty then gaResults
-        else symbolArtifacts(symbol).mapError(e => SearchError(e.toString)).run
-
-      if cacheResults.isEmpty then
-        // `aiSearch` needs a `Scope` for its HTTP response body; that
-        // scope is local to the AI call (the body is fully materialized
-        // here) so we don't propagate `Scope` out of `search`.
-        val aiResults = ZIO.scoped(aiSearch(symbol)).mapError(e => SearchError(e.message)).tapError: e =>
-          ZIO.logAnnotate(
-            LogAnnotation("symbol", symbol),
-            LogAnnotation("error", e.message),
-          )(ZIO.logError("aiSearch failed"))
-        .run
+      // `aiSearch` needs a `Scope` for its HTTP response body; that
+      // scope is local to the AI call (the body is fully materialized
+      // here) so we don't propagate `Scope` out of `search`.
+      val aiResults = ZIO.scoped(aiSearch(symbol)).mapError(e => SearchError(e.message)).tapError: e =>
         ZIO.logAnnotate(
           LogAnnotation("symbol", symbol),
-          LogAnnotation("results", aiResults.size.toString),
-        )(ZIO.logInfo("AI search")).run
-        val validatedResults = ZIO.filterPar(aiResults): ga =>
-          MavenCentral.isArtifact(ga.groupId, ga.artifactId).orElseSucceed(false)
-        .run
-        val indexLoad = validatedResults.map:
-          groupArtifact =>
-            Extractor.latest(groupArtifact).flatMap:
-              latest =>
-                indexJavadocContents(MavenCentral.GroupArtifactVersion(groupArtifact.groupId, groupArtifact.artifactId, latest))
-            .ignore
-        ZIO.logAnnotate(
-          LogAnnotation("symbol", symbol),
-          LogAnnotation("artifacts", validatedResults.size.toString),
-        )(ZIO.logInfo("Scheduling index load")).run
-        // `indexJavadocContents` forks its own daemon and `Extractor.latest`
-        // doesn't require `Scope`, so this daemon has no `Scope` to inherit.
-        ZIO.collectAllParDiscard(indexLoad).forkDaemon.run
-        validatedResults
-      else
-        cacheResults
+          LogAnnotation("error", e.message),
+        )(ZIO.logError("aiSearch failed"))
+      .run
+      ZIO.logAnnotate(
+        LogAnnotation("symbol", symbol),
+        LogAnnotation("results", aiResults.size.toString),
+      )(ZIO.logInfo("AI search")).run
+      val validatedResults = ZIO.filterPar(aiResults): ga =>
+        MavenCentral.isArtifact(ga.groupId, ga.artifactId).orElseSucceed(false)
+      .run
+      val indexLoad = validatedResults.map:
+        groupArtifact =>
+          Extractor.latest(groupArtifact).flatMap:
+            latest =>
+              indexJavadocContents(MavenCentral.GroupArtifactVersion(groupArtifact.groupId, groupArtifact.artifactId, latest))
+          .ignore
+      ZIO.logAnnotate(
+        LogAnnotation("symbol", symbol),
+        LogAnnotation("artifacts", validatedResults.size.toString),
+      )(ZIO.logInfo("Scheduling index load")).run
+      // This runs inside the search machine's run, whose `Scope` closes when the search
+      // returns, and `forkDaemon` inherits it. Nothing here needs a `Scope`
+      // (`indexJavadocContents` forks its own daemon, `Extractor.latest` doesn't), so
+      // keep it that way: a `Scope` used here would be closed under the daemon.
+      ZIO.collectAllParDiscard(indexLoad).forkDaemon.run
+      validatedResults
 
   def queryParts(query: String): List[String] =
     query.toLowerCase.split("\\s+").nn.map(_.nn.replaceAll("[^a-z0-9._:-]", "")).toList.filter(_.nonEmpty)
@@ -187,38 +248,116 @@ object SymbolSearch:
   def isVersionToken(part: String): Boolean = versionLike.matches(part)
 
   /**
-   * Indexed artifacts whose `groupId:artifactId` contains every part of the query.
-   * Agents routinely append a version to a name query ("jackson-databind 3.0.0"),
-   * which can never match a `groupId:artifactId`. If the full query finds
-   * nothing, retry without the version-like tokens.
+   * Artifact-name search (`searchGroupArtifacts`, the `search_artifacts` tool), as a
+   * [[StateMachine]]: indexed artifacts whose `groupId:artifactId` contains every part of
+   * the query.
+   * {{{
+   * ByName ──▶ Matched
+   *   └──▶ WithoutVersions ──▶ Matched
+   * }}}
+   * Agents routinely append a version to a name query ("jackson-databind 3.0.0"), which
+   * can never match a `groupId:artifactId`. If the full query finds nothing, it is retried
+   * without the version-like tokens.
    */
+  object NameSearch:
+    /** The query as typed: the machine's input. Any string is valid; [[queryParts]] normalizes it. */
+    case class ByName(query: String)
+    /** The full query matched nothing: its parts without the version-like tokens. */
+    private case class WithoutVersions(parts: List[String])
+    case class Matched private[NameSearch] (artifacts: Set[MavenCentral.GroupArtifact])
+
+    private def byName(byName: ByName): ZIO[SymbolIndex, Throwable, Matched | WithoutVersions] =
+      val parts = queryParts(byName.query)
+      SymbolIndex.groupArtifactsContainingAll(parts).map: found =>
+        val withoutVersions = parts.filterNot(isVersionToken)
+        if found.nonEmpty || withoutVersions.size == parts.size then Matched(found)
+        else WithoutVersions(withoutVersions)
+
+    private def withoutVersions(query: WithoutVersions): ZIO[SymbolIndex, Throwable, Matched] =
+      SymbolIndex.groupArtifactsContainingAll(query.parts).map(Matched(_))
+
+    val machine: StateMachine[SymbolIndex, Throwable, ByName, Matched] =
+      StateMachine.step(byName)
+        .on[WithoutVersions, Matched](StateMachine.step(withoutVersions))
+        .named("artifact-search")
+
   def searchGroupArtifacts(query: String): ZIO[SymbolIndex, Throwable, Set[MavenCentral.GroupArtifact]] =
-    val parts = queryParts(query)
-    val withoutVersions = parts.filterNot(isVersionToken)
-    SymbolIndex.groupArtifactsContainingAll(parts).flatMap: found =>
-      if found.nonEmpty || withoutVersions.size == parts.size then ZIO.succeed(found)
-      else SymbolIndex.groupArtifactsContainingAll(withoutVersions)
+    NameSearch.machine.run(NameSearch.ByName(query)).mapBoth(_.error, _.artifacts)
 
-  def update(groupArtifactVersion: MavenCentral.GroupArtifactVersion, symbols: Set[Extractor.Content]): ZIO[SymbolIndex & SymbolSearchGuard, Throwable, Unit] =
-    defer:
-      val guard = ZIO.service[SymbolSearchGuard].run.active
-      val groupArtifact = groupArtifactVersion.noVersion
-      val indexed = SymbolIndex.indexedVersion(groupArtifact).run
-      if !indexed.contains(groupArtifactVersion.version) && SymbolIndex.supersedes(groupArtifactVersion.version, indexed) then
-        // Another fiber already indexing this artifact: skip (`replace` would also serialize them).
-        val existing = guard.putIfAbsent(groupArtifact, ()).run
-        if existing.isEmpty then
-          replaceSymbols(groupArtifactVersion, symbols).ensuring(guard.remove(groupArtifact)).run
+  /**
+   * Indexing one parsed artifact version, as a [[StateMachine]]:
+   * {{{
+   * Candidate ──compare──▶ Stale ──claim──▶ Claimed ──write──▶ Written
+   *   └──▶ Skipped.UpToDate   └──▶ Skipped.Busy    └──▶ Skipped.Superseded
+   * }}}
+   * Outside this object the machine is `Candidate` in, `Written | Skipped` out: `Stale`,
+   * `Claimed` and the transitions are private, so no caller can start partway or run a step
+   * on its own. The claim's guard entry is released by the run's `Scope`.
+   */
+  object Indexing:
+    /** Parsed symbols for a version, not yet compared with the index. The machine's input. */
+    case class Candidate(gav: MavenCentral.GroupArtifactVersion, symbols: Set[Extractor.Content])
 
-  private def replaceSymbols(groupArtifactVersion: MavenCentral.GroupArtifactVersion, symbols: Set[Extractor.Content]): ZIO[SymbolIndex, Throwable, Unit] =
-    defer:
-      val (duration, written) = SymbolIndex.replace(groupArtifactVersion, symbols.map(_.fqn)).timed.run
-      ZIO.logAnnotate(
-        LogAnnotation("gav", groupArtifactVersion.toString),
-        LogAnnotation("symbols", symbols.size.toString),
-        LogAnnotation("written", written.toString),
-        LogAnnotation("durationMs", duration.toMillis.toString),
-      )(ZIO.logInfo("Updated symbol index")).run
+    /** Newer than the indexed version (or nothing is indexed). */
+    private case class Stale(candidate: Candidate)
+
+    /** This fiber holds the artifact's [[SymbolSearchGuard]] entry. */
+    private case class Claimed(candidate: Candidate)
+
+    /** The candidate's symbols are now the artifact's indexed symbols. */
+    case class Written private[Indexing] (gav: MavenCentral.GroupArtifactVersion)
+
+    /** Why a candidate wasn't written. A sealed trait, not an enum: enum cases can't have private constructors. */
+    sealed trait Skipped
+    object Skipped:
+      /** The same or a newer version is already indexed (so there is one: never "nothing"). */
+      case class UpToDate private[Indexing] (indexed: MavenCentral.Version) extends Skipped
+      /** Another fiber is indexing this artifact (`replace` would also serialize them). */
+      case object Busy extends Skipped
+      /** A newer version was indexed (another dyno, the backfill) between `compare` and `write`. */
+      case object Superseded extends Skipped
+
+    private def compare(candidate: Candidate): ZIO[SymbolIndex, Throwable, Stale | Skipped] =
+      SymbolIndex.indexedVersion(candidate.gav.noVersion).map: indexed =>
+        val version = candidate.gav.version
+        indexed match
+          case Some(current) if indexed.contains(version) || !SymbolIndex.supersedes(version, indexed) =>
+            Skipped.UpToDate(current)
+          case _ => Stale(candidate)
+
+    private def claim(stale: Stale): ZIO[SymbolSearchGuard & Scope, Nothing, Claimed | Skipped] =
+      val groupArtifact = stale.candidate.gav.noVersion
+      ZIO.serviceWithZIO[SymbolSearchGuard]: guard =>
+        ZIO.acquireRelease(guard.active.putIfAbsent(groupArtifact, ()).map(_.isEmpty)): acquired =>
+          ZIO.when(acquired)(guard.active.remove(groupArtifact))
+        .map(acquired => if acquired then Claimed(stale.candidate) else Skipped.Busy)
+
+    private def write(claimed: Claimed): ZIO[SymbolIndex, Throwable, Written | Skipped] =
+      val Candidate(gav, symbols) = claimed.candidate
+      defer:
+        val (duration, written) = SymbolIndex.replace(gav, symbols.map(_.fqn)).timed.run
+        ZIO.logAnnotate(
+          LogAnnotation("gav", gav.toString),
+          LogAnnotation("symbols", symbols.size.toString),
+          LogAnnotation("written", written.toString),
+          LogAnnotation("durationMs", duration.toMillis.toString),
+        )(ZIO.logInfo("Updated symbol index")).run
+        if written then Written(gav) else Skipped.Superseded
+
+    val machine: StateMachine[SymbolIndex & SymbolSearchGuard, Throwable, Candidate, Written | Skipped] =
+      StateMachine.step(compare)
+        .on[Stale, Skipped](StateMachine.step(claim))
+        .on[Claimed, Skipped](StateMachine.step(write))
+        .named("indexing")
+
+    type Failure = StateMachine.Failed[Throwable]
+
+    /** Runs the machine. The claim is released when it stops, even if `write` fails. */
+    def run(candidate: Candidate): ZIO[SymbolIndex & SymbolSearchGuard, Failure, Written | Skipped] =
+      machine.run(candidate)
+
+  def update(groupArtifactVersion: MavenCentral.GroupArtifactVersion, symbols: Set[Extractor.Content]): ZIO[SymbolIndex & SymbolSearchGuard, Indexing.Failure, Unit] =
+    Indexing.run(Indexing.Candidate(groupArtifactVersion, symbols)).unit
 
   // We only want to trigger symbol cache loading when the index page is loaded;
   // this is a lazy way to populate the cache. The returned effect forks a
@@ -239,5 +378,8 @@ object SymbolSearch:
 
     getContentsAndUpdateIndex
       .catchAllCause: cause =>
-        ZIO.logAnnotate(LogAnnotation("gav", groupArtifactVersion.toString))(ZIO.logWarningCause("Index load failed", cause))
+        // An SQL timeout keeps its stack trace, and the log says where indexing failed.
+        val (logged, failedIn) = StateMachine.Failed.unwrap(cause)
+        val annotations = Set(LogAnnotation("gav", groupArtifactVersion.toString)) ++ failedIn.map(LogAnnotation("failedIn", _))
+        ZIO.logAnnotate(annotations)(ZIO.logWarningCause("Index load failed", logged))
       .forkDaemon.unit

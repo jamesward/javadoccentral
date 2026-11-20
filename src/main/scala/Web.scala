@@ -66,47 +66,161 @@ object Web:
         Response.html(UI.page("javadocs.dev", UI.invalidGroupId(groupId)), Status.NotFound).toHandler
     }
 
+  /**
+   * The artifact page (`/{groupId}/{artifactId}`), as a [[StateMachine]]:
+   * {{{
+   * Lookup ──▶ Versions
+   *   ├──▶ NotAnArtifact ──▶ SplitGroup          (`/com/jamesward` → `/com.jamesward`)
+   *   │      └──▶ UnknownArtifact(NoSuchArtifact)
+   *   └──(error: invalid coordinates)──▶ UnknownArtifact(InvalidCoordinates)
+   * UnknownArtifact ──▶ GroupArtifacts | InvalidGroup
+   * }}}
+   * Every failure is an error edge, so the machine can't fail.
+   */
+  object ArtifactPage:
+    /** The requested coordinates: the machine's input. */
+    case class Lookup(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId)
+    /** No such artifact: the groupId may continue into the artifactId segment. */
+    private case class NotAnArtifact(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId)
+    /** List the group's artifacts instead, saying why. */
+    private case class UnknownArtifact(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, why: Unknown)
+
+    /**
+     * Why the requested artifact wasn't shown. A reason rather than the artifactId to report
+     * (`Option[ArtifactId]`), which could name an artifact that wasn't requested.
+     */
+    enum Unknown derives CanEqual:
+      /** The coordinates couldn't be looked up: the page names no missing artifact. */
+      case InvalidCoordinates
+      /** The group exists but this artifact doesn't: the page says so. */
+      case NoSuchArtifact
+
+    case class Versions private[ArtifactPage] (groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, versions: Seq[MavenCentral.Version])
+    case class SplitGroup private[ArtifactPage] (groupId: MavenCentral.GroupId)
+    case class GroupArtifacts private[ArtifactPage] (groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, artifactIds: Seq[MavenCentral.ArtifactId], why: Unknown):
+      /** The artifactId the page reports missing, if any. */
+      def notFound: Option[MavenCentral.ArtifactId] = Option.when(why == Unknown.NoSuchArtifact)(artifactId)
+    case class InvalidGroup private[ArtifactPage] (groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId)
+
+    type Page = Versions | SplitGroup | GroupArtifacts | InvalidGroup
+
+    private def lookup(lookup: Lookup): ZIO[MavenCentralRepo, Nothing, Versions | NotAnArtifact | UnknownArtifact] =
+      val Lookup(groupId, artifactId) = lookup
+      MavenCentral.isArtifact(groupId, artifactId).flatMap: isArtifact =>
+        if isArtifact then MavenCentral.searchVersions(groupId, artifactId).map(versions => Versions(groupId, artifactId, versions.value))
+        else ZIO.succeed(NotAnArtifact(groupId, artifactId))
+      .orElseSucceed(UnknownArtifact(groupId, artifactId, Unknown.InvalidCoordinates))
+
+    private def splitGroup(notAnArtifact: NotAnArtifact): ZIO[MavenCentralRepo, Nothing, SplitGroup | UnknownArtifact] =
+      val NotAnArtifact(groupId, artifactId) = notAnArtifact
+      val combinedGroupId = MavenCentral.GroupId(groupId.toString + "." + artifactId.toString)
+      MavenCentral.searchArtifacts(combinedGroupId).as(SplitGroup(combinedGroupId))
+        .orElseSucceed(UnknownArtifact(groupId, artifactId, Unknown.NoSuchArtifact))
+
+    private def groupArtifacts(unknown: UnknownArtifact): ZIO[MavenCentralRepo, Nothing, GroupArtifacts | InvalidGroup] =
+      MavenCentral.searchArtifacts(unknown.groupId).map(artifactIds => GroupArtifacts(unknown.groupId, unknown.artifactId, artifactIds.value, unknown.why))
+        .orElseSucceed(InvalidGroup(unknown.groupId, unknown.artifactId))
+
+    val machine: StateMachine[MavenCentralRepo, Nothing, Lookup, Page] =
+      StateMachine.step(lookup)
+        .on[NotAnArtifact, Versions | UnknownArtifact](StateMachine.step(splitGroup))
+        .on[UnknownArtifact, Versions | SplitGroup](StateMachine.step(groupArtifacts))
+        .named("artifact-page")
+
+    def run(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId): ZIO[MavenCentralRepo, Nothing, Page] =
+      machine.run(Lookup(groupId, artifactId)).mapError(_.error)
+
+    def render(request: Request)(page: Page): Response =
+      page match
+        case Versions(groupId, artifactId, versions) =>
+          if acceptsMarkdown(request) then
+            markdownResponse:
+              s"# $groupId:$artifactId\n\n## Versions\n\n" +
+                versions.map(v => s"- [$v](https://www.javadocs.dev/$groupId/$artifactId/$v)").mkString("\n")
+          else
+            Response.html(UI.page("javadocs.dev", UI.needVersion(groupId, artifactId, versions)))
+        case SplitGroup(groupId) =>
+          Response.redirect(URL(Path.root / groupId.toString))
+        case groupArtifacts: GroupArtifacts =>
+          val page = UI.needArtifactId(groupArtifacts.groupId, groupArtifacts.artifactIds, groupArtifacts.notFound)
+          Response.html(UI.page("javadocs.dev", page), Status.NotFound)
+        case InvalidGroup(groupId, artifactId) =>
+          Response.html(UI.page("javadocs.dev", UI.invalidGroupArtifact(groupId, artifactId, groupIdValid = false)), Status.NotFound)
+
   def withArtifactId(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, request: Request): Handler[MavenCentralRepo, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, Request), Response] =
-    appendQueryParamRedirect(request, "version").map(_.toHandler).getOrElse {
-    Handler.fromZIO:
-      defer:
-        val isArtifact = MavenCentral.isArtifact(groupId, artifactId).run
-        ZIO.when(isArtifact):
-          MavenCentral.searchVersions(groupId, artifactId)
-        .run
-    .flatMap: maybeVersions =>
-      maybeVersions.fold:
-        // if not an artifact, try appending to the groupId if the combined groupId exists
-        val combinedGroupId = MavenCentral.GroupId(groupId.toString + "." + artifactId.toString)
-        Handler.fromZIO:
-          MavenCentral.searchArtifacts(combinedGroupId)
-        .flatMap: _ =>
-          Response.redirect(URL(Path.root / combinedGroupId.toString)).toHandler
-        .orElse:
-          Handler.fromZIO:
-            MavenCentral.searchArtifacts(groupId)
-          .flatMap: artifactIds =>
-            Response.html(UI.page("javadocs.dev", UI.needArtifactId(groupId, artifactIds.value, Some(artifactId))), Status.NotFound).toHandler
-          .orElse:
-            Response.html(UI.page("javadocs.dev", UI.invalidGroupArtifact(groupId, artifactId, groupIdValid = false)), Status.NotFound).toHandler
-      .apply: versions =>
-        if acceptsMarkdown(request) then
-          val md = s"# $groupId:$artifactId\n\n## Versions\n\n" +
-            versions.value.map(v => s"- [$v](https://www.javadocs.dev/$groupId/$artifactId/$v)").mkString("\n")
-          markdownResponse(md).toHandler
-        else
-          Response.html(UI.page("javadocs.dev", UI.needVersion(groupId, artifactId, versions.value))).toHandler
-    .catchAll: e =>
-      // invalid groupId or artifactId
-      Handler.fromZIO:
-        MavenCentral.searchArtifacts(groupId)
-      .flatMap: artifactIds =>
-        Response.html(UI.page("javadocs.dev", UI.needArtifactId(groupId, artifactIds.value)), Status.NotFound).toHandler // todo: message
-      .orElse:
-        Response.html(UI.page("javadocs.dev", UI.invalidGroupArtifact(groupId, artifactId, groupIdValid = false)), Status.NotFound).toHandler
-    }
+    appendQueryParamRedirect(request, "version").map(_.toHandler).getOrElse:
+      Handler.fromZIO(ArtifactPage.run(groupId, artifactId).map(ArtifactPage.render(request)))
 
   given zio.json.JsonEncoder[Extractor.Content] = zio.json.DeriveJsonEncoder.gen[Extractor.Content]
+
+  /**
+   * The HTML page for a version (`/{groupId}/{artifactId}/{version}`), as a [[StateMachine]]:
+   * {{{
+   * Open ──▶ IndexPage                        (redirect to its index.html)
+   *   ├──▶ NoIndex ──▶ FileList               (its pages, with the artifact's versions)
+   *   ├──(error: upstream unavailable)──▶ Unavailable
+   *   └──(error: no such version or jar)──▶ NoJavadoc ──▶ MissingVersion | NoSuchArtifact
+   * }}}
+   * Every failure is an error edge, so the machine can't fail.
+   */
+  object VersionPage:
+    /** The requested version: the machine's input. */
+    case class Open(gav: MavenCentral.GroupArtifactVersion)
+    /** The jar has no `index.html`, so the page lists its HTML files. */
+    private case class NoIndex(gav: MavenCentral.GroupArtifactVersion, files: Seq[String])
+    /** The version or its javadoc jar doesn't exist. */
+    private case class NoJavadoc(gav: MavenCentral.GroupArtifactVersion)
+
+    case class IndexPage private[VersionPage] (gav: MavenCentral.GroupArtifactVersion)
+    case class FileList private[VersionPage] (gav: MavenCentral.GroupArtifactVersion, versions: Seq[MavenCentral.Version], files: Seq[String])
+    case class Unavailable private[VersionPage] (gav: MavenCentral.GroupArtifactVersion)
+    case class MissingVersion private[VersionPage] (gav: MavenCentral.GroupArtifactVersion, versions: Seq[MavenCentral.Version])
+    /** Not even the artifact's versions can be listed: its artifact page explains. */
+    case class NoSuchArtifact private[VersionPage] (gav: MavenCentral.GroupArtifactVersion)
+
+    type Page = IndexPage | FileList | Unavailable | MissingVersion | NoSuchArtifact
+
+    private def open(open: Open): ZIO[Client & MavenCentralRepo & Extractor.JavadocCache, Nothing, IndexPage | NoIndex | Unavailable | NoJavadoc] =
+      val gav = open.gav
+      Extractor.javadocJar(gav).flatMap: handle =>
+        handle.hasEntry("index.html").flatMap: hasIndex =>
+          if hasIndex then ZIO.succeed(IndexPage(gav))
+          else handle.filterEntryNames(_.endsWith(".html")).map(files => NoIndex(gav, files.toSeq.sorted))
+      .catchAll:
+        case _: JarCache.UpstreamUnavailableError                          => ZIO.succeed(Unavailable(gav))
+        case _: MavenCentral.NotFoundError | _: JarCache.UpstreamCorruptError => ZIO.succeed(NoJavadoc(gav))
+
+    private def listFiles(noIndex: NoIndex): ZIO[MavenCentralRepo, Nothing, FileList] =
+      val gav = noIndex.gav
+      MavenCentral.searchVersions(gav.groupId, gav.artifactId).map(_.value).orElseSucceed(Seq.empty)
+        .map(FileList(gav, _, noIndex.files))
+
+    private def noJavadoc(noJavadoc: NoJavadoc): ZIO[MavenCentralRepo, Nothing, MissingVersion | NoSuchArtifact] =
+      val gav = noJavadoc.gav
+      MavenCentral.searchVersions(gav.groupId, gav.artifactId).map(versions => MissingVersion(gav, versions.value))
+        .orElseSucceed(NoSuchArtifact(gav))
+
+    val machine: StateMachine[Client & MavenCentralRepo & Extractor.JavadocCache, Nothing, Open, Page] =
+      StateMachine.step(open)
+        .on[NoIndex, IndexPage | Unavailable | NoJavadoc](StateMachine.step(listFiles))
+        .on[NoJavadoc, FileList | IndexPage | Unavailable](StateMachine.step(noJavadoc))
+        .named("version-page")
+
+    def run(gav: MavenCentral.GroupArtifactVersion): ZIO[Client & MavenCentralRepo & Extractor.JavadocCache, Nothing, Page] =
+      machine.run(Open(gav)).mapError(_.error)
+
+    def render(page: Page): Response =
+      page match
+        case IndexPage(gav) =>
+          Response.redirect(URL(gav.toPath / "index.html"))
+        case FileList(gav, versions, files) =>
+          Response.html(UI.page("javadocs.dev", UI.javadocFileList(gav.groupId, gav.artifactId, gav.version, versions, files)))
+        case Unavailable(_) =>
+          upstreamUnavailable
+        case MissingVersion(gav, versions) =>
+          Response.html(UI.page("javadocs.dev", UI.noJavadoc(gav.groupId, gav.artifactId, versions, gav.version)), Status.NotFound) // todo: message
+        case NoSuchArtifact(gav) =>
+          Response.redirect(URL(gav.groupId / gav.artifactId)) // todo: message
 
   def withVersion(groupId: MavenCentral.GroupId, artifactId: MavenCentral.ArtifactId, version: MavenCentral.Version, request: Request):
       Handler[Extractor.LatestCache & Client & MavenCentralRepo & Extractor.JavadocCache & SymbolIndex, Nothing, (MavenCentral.GroupId, MavenCentral.ArtifactId, MavenCentral.Version, Path, Request), Response] =
@@ -159,25 +273,7 @@ object Web:
           .orElseSucceed(groupArtifactVersion.noVersion.toPath).map: path =>
             Response.redirect(URL(path))
         else
-          defer:
-            val handle      = Extractor.javadocJar(groupArtifactVersion).run
-            val hasIndex    = handle.hasEntry("index.html").run
-            if hasIndex then
-              Response.redirect(URL(groupArtifactVersion.toPath / "index.html"))
-            else
-              val files = handle.filterEntryNames(_.endsWith(".html")).map(_.toSeq.sorted).run
-              val versions = MavenCentral.searchVersions(groupId, artifactId).map(_.value).orElseSucceed(Seq.empty).run
-              Response.html(UI.page("javadocs.dev", UI.javadocFileList(groupId, artifactId, version, versions, files)))
-      .catchAll:
-        case _: JarCache.UpstreamUnavailableError =>
-          Handler.fromResponse(upstreamUnavailable)
-        case _: MavenCentral.NotFoundError | _: JarCache.UpstreamCorruptError =>
-          Handler.fromZIO:
-            MavenCentral.searchVersions(groupId, artifactId)
-          .flatMap: versions =>
-            Response.html(UI.page("javadocs.dev", UI.noJavadoc(groupId, artifactId, versions.value, version)), Status.NotFound).toHandler // todo: message
-          .orElse:
-            Response.redirect(URL(groupId / artifactId)).toHandler // todo: message
+          VersionPage.run(groupArtifactVersion).map(VersionPage.render)
 
   /** Best-effort `Content-Type` for the bytes of a jar entry, based on the
    *  entry's filename suffix. `text/html` is the dominant case; others

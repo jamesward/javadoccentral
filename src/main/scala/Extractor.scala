@@ -200,17 +200,64 @@ object Extractor:
             else moduleDirs.flatMap(mod => entriesUnderPkg(mod, pkg)).toSet
           .toSet
 
+  /** A doc jar's symbol-listing format. */
+  enum Format derives CanEqual:
+    case Scaladoc, Kotlindoc, Javadoc
+
+  /**
+   * Reading a doc jar's symbols (`javadocContents`), as a [[StateMachine]]: each format is
+   * tried in turn, and a jar in none of them falls back to listing its `.html` pages.
+   * {{{
+   * Jar ──▶ Detecting(Scaladoc, Kotlindoc, Javadoc) ──▶ Parsed
+   *   ├──▶ Detecting(remaining formats)
+   *   └──▶ Listing ──every .html page──▶ Parsed
+   * }}}
+   * A format that doesn't match is an error edge to the next one, so the machine can't fail.
+   */
+  object Detection:
+    /** A doc jar to read: the machine's input. */
+    case class Jar(gav: GroupArtifactVersion, handle: JarCache.JarHandle)
+    /** The formats not tried yet, in order: never empty (the last miss goes to [[Listing]]). */
+    private case class Detecting(gav: GroupArtifactVersion, handle: JarCache.JarHandle, formats: ::[Format])
+    /** No format matched: list the jar's pages instead. */
+    private case class Listing(handle: JarCache.JarHandle)
+    case class Parsed private[Detection] (contents: Set[Content])
+
+    /** Every format still to try: the only way to make a `Detecting`. */
+    private def start(jar: Jar): Detecting =
+      Detecting(jar.gav, jar.handle, ::(Format.Scaladoc, List(Format.Kotlindoc, Format.Javadoc)))
+
+    private def detect(detecting: Detecting): ZIO[Any, Nothing, Detecting | Listing | Parsed] =
+      parse(detecting.formats.head, detecting.gav, detecting.handle).map(Parsed(_)).catchAll: _ =>
+        ZIO.succeed:
+          detecting.formats.tail match
+            case next :: rest => detecting.copy(formats = ::(next, rest))
+            case Nil          => Listing(detecting.handle)
+
+    private def list(listing: Listing): ZIO[Any, Nothing, Parsed] =
+      bruteForce(listing.handle).map(Parsed(_))
+
+    private def parse(format: Format, gav: GroupArtifactVersion, handle: JarCache.JarHandle): ZIO[Any, JavadocFormatFailure, Set[Content]] =
+      format match
+        case Format.Scaladoc  => javadocScalaFormat(gav, handle)
+        case Format.Kotlindoc => javadocKotlinFormat(gav, handle)
+        case Format.Javadoc   => javadocJavaFormat(gav, handle)
+
+    val machine: StateMachine[Any, Nothing, Jar, Parsed] =
+      StateMachine.step(detect).loop[Detecting, Listing | Parsed]
+        .contramap(start)
+        .on[Listing, Parsed](StateMachine.step(list))
+        .named("javadoc-format")
+
   def javadocContents(groupArtifactVersion: GroupArtifactVersion):
       ZIO[JavadocCache & Client & MavenCentralRepo, JarError, Set[Content]] =
     defer:
       val cache  = ZIO.service[JavadocCache].run
       val handle = cache.get(groupArtifactVersion).run
-      javadocScalaFormat(groupArtifactVersion, handle)
-        .orElse(javadocKotlinFormat(groupArtifactVersion, handle))
-        .orElse(javadocJavaFormat(groupArtifactVersion, handle))
-        .catchAll:
-          case _: JavadocFormatFailure => bruteForce(handle)
-        .run
+      readSymbols(groupArtifactVersion, handle).run
+
+  private def readSymbols(groupArtifactVersion: GroupArtifactVersion, handle: JarCache.JarHandle): ZIO[Any, Nothing, Set[Content]] =
+    Detection.machine.run(Detection.Jar(groupArtifactVersion, handle)).mapBoth(_.error, _.contents)
 
   /**
    * Narrows a symbol listing to entries whose fully-qualified name contains every

@@ -317,7 +317,7 @@ private def scheduleCrawlerEviction(gav: GAV): ZIO[...] =
 - Use Scala 3 indentation-based syntax (no braces for control structures, class bodies, etc.)
 - Use `given`/`using` for implicits
 - Explicit `given CanEqual` instances are required due to `-language:strictEquality`
-- Use `enum` for ADTs
+- Use `enum` for ADTs (except state machine states: see "State machines")
 - Use `.nn` for Java interop null assertions
 
 ### ZIO Patterns
@@ -410,6 +410,64 @@ file, avoid `split(...).toList`/`List.from(array)`; use an `Iterator` (e.g.
 conversion makes `String.nonEmpty` always true (a non-null `Optional`); use
 `!s.isEmpty`.
 
+### State machines
+
+A flow of two or more dependent effectful steps with branches or fallbacks is an
+explicit state machine on `StateMachine`. **The primary design goal is to make
+invalid states unrepresentable**: a state the flow can't be in, or a move it
+can't make, must not compile. `StateMachine.scala`'s scaladoc is the full
+reference (the goal and how each part serves it, the model, errors, resources,
+constraints, prior art, future improvements). It is meant to become a library,
+so keep it free of this app's types. In short:
+
+- A machine is a value `StateMachine[R, E, In, Out]`: only its input and output
+  appear in its type. Build it from `step(f)` (one transition, returning the
+  union of the states it may lead to), `andThen` (output into input),
+  `on[A, Rest](m)` (run `m` on the `A` branch, pass `Rest` through; `Rest` is
+  spelled out, Scala can't subtract from a union), `loop[A, B]` (repeat while
+  the output is an `A`), `contramap`/`map`, and `named`. Declare the machine's
+  type: an unhandled state shows up in the output and fails to conform.
+- Each machine lives in its own object. Public: the input type, the output
+  types (with `private[Machine]` constructors) and `val machine`. Private:
+  intermediate states, transitions, smart constructors and inner machines
+  (`Resolution.tiers` is shared by `Resolution.machine` and `.symbols`). So
+  callers can't start partway, run a step alone, or forge a result. Group
+  states with a sealed trait, not an enum (enum cases can't have private
+  constructors). Add new machines to `MachineStatesSpec` (compile-time checks).
+- A state holds exactly its valid data: no `Option` or flag that only some paths
+  fill in, no `Boolean` result (make it two states), non-empty collections
+  (`::`) where empty is meaningless, and no "empty list means the next step"
+  (make that step a state).
+- Expected outcomes are states; recoverable failures are error edges (catch and
+  return a state); anything else fails `run` with `StateMachine.Failed`, which
+  keeps the failing state's type name and the named machines it ran in. Retry
+  inside a transition with a `Schedule`.
+- Each run owns a `Scope` shared by all its steps: don't wrap `run` in
+  `ZIO.scoped`.
+- No parallel combinators (decided Nov 2026; reasons in the scaladoc's
+  "Parallelism"): parallelism stays in ZIO at the call site, e.g.
+  `ZIO.foreachPar(items)(machine.run)`, which gives each item its own `Scope`.
+  Background work (`forkDaemon`) stays outside machines. Don't `race`
+  precedence-ordered fallbacks (it changes the answer, and AI search costs per
+  call). AI search's per-suggestion validation and index loads are not a
+  machine: one parallel filter, then a straight `latest → index` in a daemon.
+- Draw the topology in the machine's scaladoc.
+- Machines: `SymbolSearch.Indexing`, `.Resolution`, `.NameSearch`,
+  `Extractor.Detection`, `Web.ArtifactPage`, `Web.VersionPage`. Single-step
+  handlers (one fetch plus error mapping) stay plain ZIO.
+- Test a machine through its public `machine`/`run` only. Produce hard-to-reach
+  outcomes with real conditions (`IndexingSpec`: a held guard entry for `Busy`, a
+  held row lock for `Superseded`), not by calling private steps.
+- No error edge from index failures to AI search: each AI call costs money
+  (revisit with a cheap model).
+- Not an IndexedStateT-style monad (tried Nov 2026; linear, loses state on
+  failure), not a `Start/Next/Done` dispatch table (Nov 2026; leaked
+  intermediate state types into the machine's type), and not Mechanoid (for
+  long-lived event-driven entities).
+- `scala.compiletime.testing.typeChecks` for compile-time tests: zio-test's
+  `typeCheck` trips `-Werror` ("Catching Throwable"). Use `???` for arguments
+  (explicit nulls reject `null`, which makes a negative check pass vacuously).
+
 ### Error Handling
 
 - Domain errors are modeled as case classes (not exceptions)
@@ -442,6 +500,16 @@ conversion makes `String.nonEmpty` always true (a non-null `Optional`); use
   cap allows.
 - `JarCache.get` wraps the shared cache entry in a new `JarHandle` on every
   call, so compare handles by `meta` (one instance per entry), not with `eq`.
+- Tests that hit the live Maven Central get `@@ MavenCentralRetry.aspect` per
+  test (up to 5 retries, 2 s exponential backoff, each retry logged at WARN);
+  tests that don't touch the network don't, so they fail at once. Specs that
+  call Maven Central provide `LoggingClient.layer` instead of `Client.default`:
+  it logs every request at INFO with status, URL and the `server` / `cf-ray` /
+  `cf-cache-status` / `age` headers. A failure is cached nowhere (`JarCache`,
+  `LatestCache`), so a retry refetches. Every request for an uncached GAV costs
+  `new-key` budget (30 per IP per 10 minutes), so `AppSpec`'s shared guard
+  (`suiteGuard`) allows 10,000; otherwise retries during an outage would turn
+  into 429s. The crawler-budget test builds its own default guard per attempt.
 - `MockInference.layer` as fallback when Heroku inference is unavailable
 - `TestAspect.withLiveClock`, `TestAspect.withLiveRandom`, `TestAspect.withLiveSystem` as needed
 - `TestAspect.sequential` for tests with shared state
@@ -499,6 +567,9 @@ conversion makes `String.nonEmpty` always true (a non-null `Optional`); use
   returned 2 artifacts instead of 9). Queries under 3 characters (the trigram
   minimum) only match exactly. Each tier logs `"Symbol search"` with `match`
   and `durationMs`.
+- Indexing (`SymbolSearch.Indexing`), symbol search (`SymbolSearch.Resolution`)
+  and artifact-name search (`SymbolSearch.NameSearch`) are `StateMachine`s (see
+  "State machines" under Coding Style).
 - `SymbolIndex.indexable` drops doc pages that aren't symbols (`index-all`,
   `.static-page`). LIKE wildcards in queries are escaped (`escapeLike`).
 - GIN trigram indexes bloat ~4× under per-artifact rewrites; compact with

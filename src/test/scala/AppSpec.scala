@@ -1,5 +1,6 @@
 import com.jamesward.zio_mavencentral.MavenCentral
 import com.jamesward.zio_mavencentral.MavenCentral.given
+import com.jamesward.zio_http_guard.guard.Guard
 import zio.*
 import zio.concurrent.ConcurrentMap
 import zio.direct.*
@@ -25,6 +26,38 @@ object AppSpec extends ZIOSpecDefault:
   private def crawlerFetch(path: Path, ip: String) =
     Web.appWithMiddleware.runZIO(Request.get(URL(path)).addHeader(Header.Custom("X-Forwarded-For", ip)).addHeader(metaCrawler))
 
+  // GUARD_NEW_KEYS_PER_CLIENT defaults to 30; fake GAVs are uncached and 404
+  // upstream, but each still costs a fetch, so each counts.
+  private def crawlerBudget =
+    val budgetPaths = (1 to 30).toList.map(i => (Path.root / "com.example.nope" / "crawler-budget" / s"1.0.$i" / "index.html", s"10.9.${i / 250}.${i % 250}"))
+    defer:
+      val first = crawlerFetch(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "index.html", "10.8.0.1").run
+      ZIO.foreachDiscard(budgetPaths)((path, ip) => crawlerFetch(path, ip)).run
+      val overBudget = crawlerFetch(Path.root / "com.example.nope" / "crawler-budget" / "2.0.0" / "index.html", "10.8.0.2").run
+      val cached = crawlerFetch(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "index.html", "10.8.0.2").run
+      val cachedBody = cached.body.asString.run
+      val browser = Web.appWithMiddleware.runZIO(
+        Request.get(URL(Path.root / "com.example.nope" / "crawler-budget" / "3.0.0" / "index.html")).addHeader(Header.Custom("X-Forwarded-For", "10.8.0.3"))
+      ).run
+      assertTrue(
+        first.status == Status.Ok,
+        overBudget.status == Status.TooManyRequests,
+        cached.status == Status.Ok,
+        cachedBody.nonEmpty,
+        browser.status != Status.TooManyRequests,
+      )
+
+  /**
+   * The suite's guard. Its tests share it, and every request for an uncached GAV costs
+   * `new-key` budget (30 per IP per 10 minutes by default), so `MavenCentralRetry`'s retries
+   * during a Maven Central outage would run it out and get 429s even once Maven Central is
+   * back. Only the crawler-budget test checks the limit, on a guard of its own.
+   */
+  private val suiteGuard: ZLayer[Extractor.JavadocCache, Config.Error, Guard] =
+    ZLayer.scopedEnvironment:
+      ZIO.withConfigProvider(ConfigProvider.fromMap(Map("GUARD_NEW_KEYS_PER_CLIENT" -> "10000")).orElse(ConfigProvider.defaultProvider)):
+        JavadocsGuard.layer.build
+
   def spec = suite("App")(
     test("routing"):
       val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
@@ -33,7 +66,8 @@ object AppSpec extends ZIOSpecDefault:
         val groupIdResp = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root, queryParams = QueryParams("groupId" -> "com.jamesward"))).addHeader(forwardedForHeader)).run
         val artifactIdResp = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root / "com.jamesward", queryParams = QueryParams("artifactId" -> "travis-central-test"))).addHeader(forwardedForHeader)).run
         val versionResp = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root / "com.jamesward" / "travis-central-test", queryParams = QueryParams("version" -> "0.0.15"))).addHeader(forwardedForHeader)).run
-        val latest = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root / "org.webjars" / "jquery" / "latest")).addHeader(forwardedForHeader)).run
+        // An artifact with no new releases since 2018, so its latest version stays 0.0.15.
+        val latest = Web.appWithMiddleware.runZIO(Request.get(URL(Path.root / "com.jamesward" / "travis-central-test" / "latest")).addHeader(forwardedForHeader)).run
 
         val groupIdRedir = Web.appWithMiddleware.runZIO(Request.get(URL((Path.root / "com.jamesward").addTrailingSlash)).addHeader(forwardedForHeader)).run
         val artifactIdRedir = Web.appWithMiddleware.runZIO(Request.get(URL((Path.root / "com.jamesward" / "travis-central-test").addTrailingSlash)).addHeader(forwardedForHeader)).run
@@ -53,7 +87,7 @@ object AppSpec extends ZIOSpecDefault:
           versionResp.status.isRedirection,
           versionResp.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward/travis-central-test/0.0.15")),
           latest.status.isRedirection,
-          latest.headers.get(Header.Location).exists(_.url.path == Path.decode("/org.webjars/jquery/4.0.0")),
+          latest.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward/travis-central-test/0.0.15")),
           groupIdRedir.status.isRedirection,
           groupIdRedir.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward")),
           artifactIdRedir.status.isRedirection,
@@ -72,6 +106,7 @@ object AppSpec extends ZIOSpecDefault:
           // top-level and groupId pages don't get immutable caching
           groupIdResp.header(Header.CacheControl).forall(!_.renderedValue.contains("immutable")),
         )
+    @@ MavenCentralRetry.aspect
     , test("304 Not Modified for immutable assets with If-None-Match or If-Modified-Since"):
       val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
       // Use a GAV that doesn't exist on Maven Central — the whole point is to prove
@@ -112,6 +147,49 @@ object AppSpec extends ZIOSpecDefault:
           body.contains("ArrayTreeNode.html"),
           filePage.status.isSuccess,
         )
+    @@ MavenCentralRetry.aspect
+    , test("artifact page: versions, a groupId split across the path, an unknown artifact, an unknown group"):
+      val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.101")
+      def get(path: Path) = Web.appWithMiddleware.runZIO(Request.get(URL(path)).addHeader(forwardedForHeader))
+      defer:
+        val versions = get(Path.root / "com.jamesward" / "travis-central-test").run
+        val versionsBody = versions.body.asString.run
+        val splitGroup = get(Path.root / "com" / "jamesward").run
+        val unknownArtifact = get(Path.root / "com.jamesward" / "zzz-no-such-artifact").run
+        val unknownArtifactBody = unknownArtifact.body.asString.run
+        val unknownGroup = get(Path.root / "asdfqwerzzxcv" / "zzz-no-such-artifact").run
+        val unknownGroupBody = unknownGroup.body.asString.run
+        assertTrue(
+          versions.status == Status.Ok,
+          versionsBody.contains("0.0.15"),
+          splitGroup.status.isRedirection,
+          splitGroup.headers.get(Header.Location).exists(_.url.path == Path.decode("/com.jamesward")),
+          unknownArtifact.status == Status.NotFound,
+          unknownArtifactBody.contains("ArtifactId &#x27;zzz-no-such-artifact&#x27; not found."),
+          unknownArtifactBody.contains("travis-central-test"),
+          unknownGroup.status == Status.NotFound,
+          unknownGroupBody.contains("GroupID is invalid"),
+        )
+    @@ MavenCentralRetry.aspect
+    , test("version page: a missing version lists the versions, and an unknown artifact redirects to its artifact page"):
+      val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.102")
+      def get(path: Path) =
+        Web.appWithMiddleware.runZIO(Request.get(URL(path)).addHeader(forwardedForHeader).addHeader(Header.Accept(MediaType.text.html)))
+      defer:
+        val withIndex = get(Path.root / "org.webjars" / "webjars-locator-core" / "0.52").run
+        val missingVersion = get(Path.root / "com.jamesward" / "travis-central-test" / "99.99.99").run
+        val missingVersionBody = missingVersion.body.asString.run
+        val unknownArtifact = get(Path.root / "asdfqwerzzxcv" / "zzz-no-such-artifact" / "1.0").run
+        assertTrue(
+          withIndex.status.isRedirection,
+          withIndex.headers.get(Header.Location).exists(_.url.path == Path.decode("/org.webjars/webjars-locator-core/0.52/index.html")),
+          missingVersion.status == Status.NotFound,
+          missingVersionBody.contains("Version 99.99.99 of that artifact does not exist"),
+          missingVersionBody.contains("0.0.15"),
+          unknownArtifact.status.isRedirection,
+          unknownArtifact.headers.get(Header.Location).exists(_.url.path == Path.decode("/asdfqwerzzxcv/zzz-no-such-artifact")),
+        )
+    @@ MavenCentralRetry.aspect
     , test("HEAD behaves like GET but returns no body"):
       val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
       val assetPath = Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "org" / "webjars" / "package-summary.html"
@@ -136,6 +214,7 @@ object AppSpec extends ZIOSpecDefault:
           headResp.header(Header.ETag).map(_.renderedValue) == getResp.header(Header.ETag).map(_.renderedValue),
           headResp.header(Header.CacheControl).map(_.renderedValue) == getResp.header(Header.CacheControl).map(_.renderedValue),
         )
+    @@ MavenCentralRetry.aspect
     , test("HEAD /mcp does not return 500"):
       val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
       defer:
@@ -204,6 +283,7 @@ object AppSpec extends ZIOSpecDefault:
           headResp.status == Status.NotFound,
           headBody.isEmpty,
         )
+    @@ MavenCentralRetry.aspect
     , test("badge redirects to shields.io with the latest version"):
       val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
       defer:
@@ -237,11 +317,12 @@ object AppSpec extends ZIOSpecDefault:
           locationNF.contains("&color=red"),
           notFound.header(Header.CacheControl).exists(_.renderedValue.contains("max-age=300")),
         )
+    @@ MavenCentralRetry.aspect
     , test("latest with Accept: application/json returns just the latest version"):
       val forwardedForHeader = Header.Custom("X-Forwarded-For", "192.168.1.100")
       defer:
         val resp = Web.appWithMiddleware.runZIO(
-          Request.get(URL(Path.root / "org.webjars" / "jquery" / "latest"))
+          Request.get(URL(Path.root / "com.jamesward" / "travis-central-test" / "latest"))
             .addHeader(forwardedForHeader)
             .addHeader(Header.Accept(MediaType.application.json))
         ).run
@@ -249,8 +330,9 @@ object AppSpec extends ZIOSpecDefault:
         assertTrue(
           resp.status.isSuccess,
           resp.header(Header.ContentType).exists(_.mediaType.matches(MediaType.application.json)),
-          body == """{"version":"4.0.0"}""",
+          body == """{"version":"0.0.15"}""",
         )
+    @@ MavenCentralRetry.aspect
     , test("probe paths get a 404, then the client is blocked"):
       // Its own IP: the guard flags it, and the suite shares one guard.
       val prober = Header.Custom("X-Forwarded-For", "192.168.1.200")
@@ -270,25 +352,11 @@ object AppSpec extends ZIOSpecDefault:
           otherClientBody.nonEmpty,
         )
     , test("a crawler shares one budget of uncached GAVs across its IPs, and still gets cached pages"):
-      // GUARD_NEW_KEYS_PER_CLIENT defaults to 30; fake GAVs are uncached and 404
-      // upstream, but each still costs a fetch, so each counts.
-      val budgetPaths = (1 to 30).toList.map(i => (Path.root / "com.example.nope" / "crawler-budget" / s"1.0.$i" / "index.html", s"10.9.${i / 250}.${i % 250}"))
-      defer:
-        val first = crawlerFetch(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "index.html", "10.8.0.1").run
-        ZIO.foreachDiscard(budgetPaths)((path, ip) => crawlerFetch(path, ip)).run
-        val overBudget = crawlerFetch(Path.root / "com.example.nope" / "crawler-budget" / "2.0.0" / "index.html", "10.8.0.2").run
-        val cached = crawlerFetch(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "index.html", "10.8.0.2").run
-        val cachedBody = cached.body.asString.run
-        val browser = Web.appWithMiddleware.runZIO(
-          Request.get(URL(Path.root / "com.example.nope" / "crawler-budget" / "3.0.0" / "index.html")).addHeader(Header.Custom("X-Forwarded-For", "10.8.0.3"))
-        ).run
-        assertTrue(
-          first.status == Status.Ok,
-          overBudget.status == Status.TooManyRequests,
-          cached.status == Status.Ok,
-          cachedBody.nonEmpty,
-          browser.status != Status.TooManyRequests,
-        )
+      // Its own guard, with the default budget: the suite's guard has a roomy one, and
+      // each retry starts this test's budget from zero. The guard is released with the attempt.
+      ZIO.scoped:
+        JavadocsGuard.layer.build.orDie.flatMap(env => crawlerBudget.updateService[Guard](_ => env.get[Guard]))
+    @@ MavenCentralRetry.aspect
     , test("MCP OAuth discovery under /mcp/.well-known is not a probe"):
       // Codex tries these before connecting; flagging them locked it out of /mcp.
       val client = Header.Custom("X-Forwarded-For", "192.168.1.202")
@@ -354,6 +422,7 @@ object AppSpec extends ZIOSpecDefault:
           searchResp.status.isSuccess,
           searchBody.contains(s"$gid:$aid"),
         )
+    @@ MavenCentralRetry.aspect
 
     , test("agent-readiness endpoints: Content-Signal, MCP server card, homepage Link header"):
       val ff = Header.Custom("X-Forwarded-For", "192.168.1.100")
@@ -529,6 +598,7 @@ object AppSpec extends ZIOSpecDefault:
           symbolToArtifactResp.status.isSuccess,
           symbolToArtifactBody.contains("api-fixture"),
         )
+    @@ MavenCentralRetry.aspect
 
     , test("OpenAPI, SwaggerUI, and RFC 9264 API catalog describe the REST API"):
       val ff = Header.Custom("X-Forwarded-For", "192.168.1.100")
@@ -569,13 +639,13 @@ object AppSpec extends ZIOSpecDefault:
     App.javadocCacheLayer,
     App.sourcesCacheLayer,
     App.latestCacheLayer,
-    Client.default,
+    LoggingClient.layer,
     MavenCentral.MavenCentralRepo.live,
     PostgresContainer.freshDatabase,
     SymbolIndex.layer,
     SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
-    JavadocsGuard.layer,
-      App.symbolSearchGuardLayer,
+    suiteGuard,
+    App.symbolSearchGuardLayer,
     // Test-level Scope: `Handler#runZIO` returns `ZIO[Scope & R, ...]`,
     // so invoking the app from test bodies needs a `Scope`.
     Scope.default,
