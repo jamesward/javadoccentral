@@ -567,6 +567,10 @@ so keep it free of this app's types. In short:
   `MALLOC_ARENA_MAX=2` was set as a config var on Nov 13 (v249, issue #265);
   in the following week R14 happened once (Nov 19), so keep it.
   buildpack-scala defaults it too (jamesward/buildpack-scala#13).
+- Heroku exposes config vars to the build, and sbt reads `JAVA_OPTS`, so the
+  runtime `-Xmx400m` also capped the build's sbt heap: compiling zio-http-mcp and
+  zio-mavencentral from source then ran out of memory. `.sbtopts` sets
+  `-J-Xmx2g`, which takes precedence for sbt; the app's start script doesn't read it.
 - Override JVM flags with the `JAVA_OPTS` config var (heroku/jvm appends it
   after its defaults; the last flag wins). Not `JAVA_TOOL_OPTIONS`: the JVM
   reads it before the command line, so `-Xmx671m` beats an `-Xmx` there.
