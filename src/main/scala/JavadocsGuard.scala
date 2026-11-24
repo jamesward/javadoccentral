@@ -26,17 +26,28 @@ import zio.http.*
  */
 object JavadocsGuard:
 
-  // First path segments that are routes of their own, not a groupId.
+  // First path segments that are routes of their own, not a groupId
+  // (`llms` is handled separately: its version page fetches a jar).
   private val nonGavRoots = Set("api", "llms", "sitemap", ".well-known", "mcp")
 
   private given CanEqual[MavenCentral.Version, MavenCentral.Version] = CanEqual.derived
 
-  /** The GAV a browse request would fetch a jar for, if any. */
+  /**
+   * The GAV a request would fetch a jar for, if any: a browse path
+   * (`/{g}/{a}/{v}/...`) or the markdown symbol listing `/llms/{g}/{a}/{v}`,
+   * which downloads and parses the javadoc jar too. Leaving `/llms` out let
+   * Meta's crawler download ~7 uncached jars a minute without touching its
+   * budget (Nov 2026: half of all jar downloads).
+   */
   def browsedGav(request: Request): Option[MavenCentral.GroupArtifactVersion] =
-    if request.path.segments.headOption.exists(nonGavRoots.contains) then None
-    else
-      GavCacheMiddleware.gavFromPath(request.path)
-        .filterNot(gav => gav.version == MavenCentral.Version.latest || gav.version.toString == "badge.svg")
+    val segments = request.path.segments
+    val gavPath =
+      if segments.headOption.contains("llms") then
+        Option.when(segments.size == 4)(segments.drop(1).foldLeft(Path.root)(_ / _))
+      else if segments.headOption.exists(nonGavRoots.contains) then None
+      else Some(request.path)
+    gavPath.flatMap(GavCacheMiddleware.gavFromPath)
+      .filterNot(gav => gav.version == MavenCentral.Version.latest || gav.version.toString == "badge.svg")
 
   // Conditional requests get a 304 from `GavCacheMiddleware` before any jar is fetched.
   private def isConditional(request: Request): Boolean =

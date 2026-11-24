@@ -687,6 +687,9 @@ configured in `JavadocsGuard` (detectors: `probe-shape`, `new-key`,
 `client-hints`) and tuned with `GUARD_*` config vars. Don't add separate
 limiter middleware (the old `BadActorMiddleware` and per-User-Agent
 `CrawlerLimiter` were removed: the latter 429'd Googlebot on cached pages).
+`/llms/{g}/{a}/{v}` (the markdown symbol listing) fetches a jar too, so
+`JavadocsGuard.browsedGav` counts it like `/{g}/{a}/{v}`: before, Meta's crawler
+used it for half of all jar downloads without touching its budget.
 Each declared crawler gets one `new-key` budget (uncached GAVs per window)
 across all its IPs (`ClientKey.crawlerOrIp`); a per-IP budget let Meta's
 crawler, rotating through dozens of IPs, download a jar every ~10 seconds and

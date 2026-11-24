@@ -29,11 +29,17 @@ object AppSpec extends ZIOSpecDefault:
   // GUARD_NEW_KEYS_PER_CLIENT defaults to 30; fake GAVs are uncached and 404
   // upstream, but each still costs a fetch, so each counts.
   private def crawlerBudget =
-    val budgetPaths = (1 to 30).toList.map(i => (Path.root / "com.example.nope" / "crawler-budget" / s"1.0.$i" / "index.html", s"10.9.${i / 250}.${i % 250}"))
+    // Half browse pages, half `/llms` version listings: both fetch a jar, so both cost budget.
+    val budgetPaths = (1 to 30).toList.map: i =>
+      val path =
+        if i % 2 == 0 then Path.root / "com.example.nope" / "crawler-budget" / s"1.0.$i" / "index.html"
+        else Path.root / "llms" / "com.example.nope" / "crawler-budget" / s"1.0.$i"
+      (path, s"10.9.${i / 250}.${i % 250}")
     defer:
       val first = crawlerFetch(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "index.html", "10.8.0.1").run
       ZIO.foreachDiscard(budgetPaths)((path, ip) => crawlerFetch(path, ip)).run
       val overBudget = crawlerFetch(Path.root / "com.example.nope" / "crawler-budget" / "2.0.0" / "index.html", "10.8.0.2").run
+      val overBudgetLlms = crawlerFetch(Path.root / "llms" / "com.example.nope" / "crawler-budget" / "2.0.1", "10.8.0.4").run
       val cached = crawlerFetch(Path.root / "org.webjars" / "webjars-locator-core" / "0.52" / "index.html", "10.8.0.2").run
       val cachedBody = cached.body.asString.run
       val browser = Web.appWithMiddleware.runZIO(
@@ -42,6 +48,7 @@ object AppSpec extends ZIOSpecDefault:
       assertTrue(
         first.status == Status.Ok,
         overBudget.status == Status.TooManyRequests,
+        overBudgetLlms.status == Status.TooManyRequests,
         cached.status == Status.Ok,
         cachedBody.nonEmpty,
         browser.status != Status.TooManyRequests,
