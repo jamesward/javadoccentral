@@ -20,6 +20,7 @@ object AppTest extends ZIOAppDefault:
       App.sourcesCacheLayer,
       PostgresContainer.freshDatabase,
       SymbolIndex.layer,
+      MavenCache.layer,
       SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
       JavadocsGuard.layer,
       App.symbolSearchGuardLayer,

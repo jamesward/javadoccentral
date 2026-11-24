@@ -10,13 +10,15 @@ import zio.cache.Cache
 import zio.direct.*
 import zio.http.Client
 import zio.prelude.data.Optional.AllValuesAreNullable
-import zio.{Duration, IO, ZIO, duration2DurationOps, durationInt}
+import zio.{Chunk, Duration, IO, LogAnnotation, UIO, ZEnvironment, ZIO, duration2DurationOps, durationInt}
 import zio.schema.{Schema, derived}
 import zio.schema.annotation.description
+import zio.stream.ZStream
 
 import MavenCentral.MavenCentralRepo
 
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.atomic.LongAdder
 
 /**
  * Javadoc/sources reading on top of `zio-mavencentral`'s [[JarCache]].
@@ -29,7 +31,11 @@ import java.nio.charset.StandardCharsets
  */
 object Extractor:
 
-  type JarError = JarCache.GetError
+  /** Too many jar fetches are in progress, or this one is still running:
+   *  javadocs.dev is busy, not Maven Central (see [[boundedGet]]). Retryable. */
+  case class JarBusy(gav: GroupArtifactVersion, reason: String)
+
+  type JarError = JarCache.GetError | JarBusy
 
   case class JavadocFileNotFound(groupArtifactVersion: GroupArtifactVersion, path: String)
 
@@ -38,6 +44,11 @@ object Extractor:
   /** Re-exported here for backward compatibility; lives in the library. */
   type LatestNotFound = MavenCentral.LatestNotFound
   val LatestNotFound = MavenCentral.LatestNotFound
+  type LatestUnavailable = MavenCentral.LatestUnavailable
+  val LatestUnavailable = MavenCentral.LatestUnavailable
+
+  /** Why the latest version of an artifact couldn't be resolved. */
+  type LatestError = GroupIdOrArtifactIdNotFoundError | LatestNotFound | LatestUnavailable
 
   @description("One documented entry (class, object, method, package, or resource) from a library's Javadoc/Scaladoc jar.")
   case class Content(
@@ -66,7 +77,7 @@ object Extractor:
 
   /** Caches `GroupArtifact -> latest Version` lookups so a single resolution
    *  is shared by concurrent callers and reused across requests for an hour. */
-  case class LatestCache(cache: Cache[GroupArtifact, GroupIdOrArtifactIdNotFoundError | LatestNotFound, Version])
+  case class LatestCache(cache: Cache[GroupArtifact, LatestError, Version])
 
   /**
    * Wrapper around `JarCache` for javadoc jars. Exists so the ZIO
@@ -74,13 +85,20 @@ object Extractor:
    * (otherwise both would be `JarCache` and `ZIO.service[JarCache]`
    * would be ambiguous).
    */
-  final class JavadocCache(val cache: JarCache, val misses: Bulkhead, val missWait: Duration = Extractor.missWait):
-    def get(gav: GroupArtifactVersion): ZIO[Client & MavenCentralRepo, JarError, JarCache.JarHandle] =
-      boundedGet(cache, misses, missWait, gav)
+  /** Remembers, in Postgres, versions repo1 says have no jar of this classifier (see [[MavenCache.isMissingJar]]). */
+  final case class MissingJars(cache: MavenCache, classifier: String)
 
-  final class SourcesCache(val cache: JarCache, val misses: Bulkhead, val missWait: Duration = Extractor.missWait):
+  final class JavadocCache(val cache: JarCache, val misses: Bulkhead, val missWait: Duration = Extractor.missWait, val missing: Option[MissingJars] = None):
+    /** Requests answered [[JarBusy]], for the `cache stats` log line. */
+    val busy: LongAdder = LongAdder()
     def get(gav: GroupArtifactVersion): ZIO[Client & MavenCentralRepo, JarError, JarCache.JarHandle] =
-      boundedGet(cache, misses, missWait, gav)
+      boundedGet(cache, misses, missWait, busy, missing, gav)
+
+  final class SourcesCache(val cache: JarCache, val misses: Bulkhead, val missWait: Duration = Extractor.missWait, val missing: Option[MissingJars] = None):
+    /** Requests answered [[JarBusy]], for the `cache stats` log line. */
+    val busy: LongAdder = LongAdder()
+    def get(gav: GroupArtifactVersion): ZIO[Client & MavenCentralRepo, JarError, JarCache.JarHandle] =
+      boundedGet(cache, misses, missWait, busy, missing, gav)
 
   /**
    * How long a request waits for a cache-miss fetch before it answers a
@@ -94,9 +112,11 @@ object Extractor:
    * rezilience [[Bulkhead]]: a crawler walking every version of an artifact
    * otherwise starts hundreds of downloads at once, each leaving an open
    * `ZipFile` in heap, and the dyno runs out of memory. When the bulkhead
-   * and its queue are full the request fails with
-   * [[JarCache.UpstreamUnavailableError]], which the routes already turn
-   * into a 503 with `Retry-After`. The `contains` check races with
+   * and its queue are full the request fails with [[JarBusy]], which the
+   * routes turn into a 503 with `Retry-After` that says javadocs.dev is busy
+   * (not that Maven Central is down: incident #271 was a crawler burst that
+   * filled the bulkhead, and the old wording sent operators looking upstream).
+   * Each busy answer is logged and counted. The `contains` check races with
    * concurrent fetches, which is harmless: `JarCache.get` still dedupes.
    *
    * The fetch runs on a daemon fiber and the request waits at most
@@ -104,29 +124,52 @@ object Extractor:
    * router timeout (a ~20 MB `vaadin-platform-javadoc` jar behind a full
    * bulkhead, incident javadocs-29916434) was an H12, and the fetch was tied
    * to the request that started it, so a retry could start over. Now the
-   * request gets a fast 503 + `Retry-After` while the fetch finishes, and the
-   * retry is a cache hit.
+   * request gets a fast 503 + `Retry-After` ([[JarBusy]]) while the fetch
+   * finishes, and the retry is a cache hit.
    */
-  private def boundedGet(cache: JarCache, misses: Bulkhead, missWait: Duration, gav: GroupArtifactVersion): ZIO[Client & MavenCentralRepo, JarError, JarCache.JarHandle] =
+  private def boundedGet(cache: JarCache, misses: Bulkhead, missWait: Duration, busy: LongAdder, missing: Option[MissingJars], gav: GroupArtifactVersion): ZIO[Client & MavenCentralRepo, JarError, JarCache.JarHandle] =
     cache.contains(gav).flatMap:
       case true  => cache.get(gav)
-      case false => awaitMiss(cache, misses, missWait, gav)
+      case false =>
+        // A version repo1 recently said has no such jar is answered without asking again.
+        knownMissing(missing, gav).flatMap:
+          case true  => ZIO.fail(NotFoundError(gav.groupId, gav.artifactId, gav.version))
+          case false =>
+            awaitMiss(cache, misses, missWait, gav)
+              .tapError(logBusy(busy))
+              .tapError:
+                case _: NotFoundError => recordMissing(missing, gav)
+                case _                => ZIO.unit
+
+  private def knownMissing(missing: Option[MissingJars], gav: GroupArtifactVersion): UIO[Boolean] =
+    missing.fold(ZIO.succeed(false))(m => MavenCache.isMissingJar(m.classifier, gav).provideEnvironment(ZEnvironment(m.cache)))
+
+  private def recordMissing(missing: Option[MissingJars], gav: GroupArtifactVersion): UIO[Unit] =
+    ZIO.foreachDiscard(missing)(m => MavenCache.recordMissingJar(m.classifier, gav).provideEnvironment(ZEnvironment(m.cache)))
 
   private def awaitMiss(cache: JarCache, misses: Bulkhead, missWait: Duration, gav: GroupArtifactVersion): ZIO[Client & MavenCentralRepo, JarError, JarCache.JarHandle] =
     defer:
       val fetch =
         misses(cache.get(gav))
-          .mapError(_.fold(JarCache.UpstreamUnavailableError(gav, "too many jar fetches in progress"), identity))
+          .mapError(_.fold(JarBusy(gav, "too many jar fetches in progress"), identity))
           .forkDaemon
           .run
       // Interrupting `join` (timeout or a dropped request) leaves the daemon running.
       fetch.join
-        .timeoutFail(JarCache.UpstreamUnavailableError(gav, s"jar fetch still in progress after ${missWait.render}"))(missWait)
+        .timeoutFail(JarBusy(gav, s"jar fetch still in progress after ${missWait.render}"))(missWait)
         .run
+
+  /** One line per busy answer; the guard's annotations add `client_ip`. */
+  private def logBusy(busy: LongAdder)(error: JarError): ZIO[Any, Nothing, Unit] =
+    error match
+      case JarBusy(gav, reason) =>
+        ZIO.succeed(busy.increment()) *>
+          ZIO.logAnnotate(LogAnnotation("gav", gav.toString), LogAnnotation("reason", reason))(ZIO.logInfo("Jar fetch busy"))
+      case _ => ZIO.unit
 
   /** Re-exported library helper. Kept as a method here so existing call
    *  sites (`Extractor.latest`) compile unchanged. */
-  def latest(groupArtifact: GroupArtifact, includePreReleases: Boolean = false): ZIO[MavenCentralRepo, GroupIdOrArtifactIdNotFoundError | LatestNotFound, Version] =
+  def latest(groupArtifact: GroupArtifact, includePreReleases: Boolean = false): ZIO[MavenCentralRepo, LatestError, Version] =
     MavenCentral.latestOrFail(groupArtifact, includePreReleases)
 
   /** Strip an `#anchor` fragment so it doesn't disturb jar-entry lookup. */
@@ -443,16 +486,39 @@ object Extractor:
 
       ZIO.fromOption(maybeResult).mapError(_ => JavadocContentError(groupArtifactVersion, path)).run
 
-  /** Raw bytes for a single jar entry, used by the HTTP file-serving path
-   *  in `Web.scala` (response body comes from these bytes). */
-  def javadocEntryBytes(groupArtifactVersion: GroupArtifactVersion, path: String):
-      ZIO[JavadocCache & Client & MavenCentralRepo, JarError | JavadocFileNotFound, Array[Byte]] =
+  /** Entries up to this size are read whole; bigger ones are streamed (see [[javadocEntry]]). */
+  val streamAbove: Long = 1024 * 1024
+
+  private val streamChunk = 64 * 1024
+
+  /** A jar entry's bytes, ready to serve. */
+  enum Entry:
+    /** A small entry, read whole. */
+    case InMemory(bytes: Chunk[Byte])
+    /** A big entry, read 64 KB at a time as netty sends it. */
+    case Streamed(size: Long, bytes: ZStream[Any, Nothing, Byte])
+
+  /** A single jar entry for the HTTP file-serving path in `Web.scala`. A
+   *  missing entry fails here, before any response is sent.
+   *
+   *  A page load fetches dozens of small files, and reading those whole is
+   *  faster than streaming (`FileServingSpec` measures both). A big entry
+   *  (a 20 MB `member-search-index.js`) is streamed instead, so a slow or
+   *  paused download holds ~64 KB, not the whole file. The stream holds the
+   *  jar's reference only while it runs. */
+  def javadocEntry(groupArtifactVersion: GroupArtifactVersion, path: String):
+      ZIO[JavadocCache & Client & MavenCentralRepo, JarError | JavadocFileNotFound, Entry] =
     defer:
       val cache  = ZIO.service[JavadocCache].run
       val handle = cache.get(groupArtifactVersion).run
-      handle.readEntry(normalizePath(path))
-        .mapError(_ => JavadocFileNotFound(groupArtifactVersion, path))
-        .run
+      val entry  = normalizePath(path)
+      val notFound = (_: JarCache.JarEntryNotFound) => JavadocFileNotFound(groupArtifactVersion, path)
+      handle.entrySize(entry).mapError(notFound).run match
+        case Some(size) if size > streamAbove =>
+          // The entry exists, so a failure while streaming is a defect.
+          Entry.Streamed(size, handle.streamEntry(entry, streamChunk).orDieWith(e => IllegalStateException(s"$e after entrySize found it")))
+        case _ =>
+          handle.readEntry(entry).mapError(notFound).map(bytes => Entry.InMemory(Chunk.fromArray(bytes))).run
 
   /** Direct access to a javadoc jar's handle. Used when callers need
    *  multiple entries / metadata. */

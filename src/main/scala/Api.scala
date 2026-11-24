@@ -114,7 +114,7 @@ object Api:
   private val latestRoute =
     latestEndpoint.implement: (input: (GroupId, ArtifactId, Option[Boolean])) =>
       val (g, a, includePreReleases) = input
-      Extractor.latest(GroupArtifact(g, a), includePreReleases.getOrElse(false)).mapError(apiError(ErrorMessages.latest))
+      MavenCache.latest(GroupArtifact(g, a), includePreReleases.getOrElse(false)).mapError(apiError(ErrorMessages.latest))
 
   private val indexRoute =
     indexEndpoint.implement: (input: (GroupId, ArtifactId, Version)) =>

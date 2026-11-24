@@ -33,6 +33,8 @@ object MachineStatesSpec extends ZIOSpecDefault:
         !typeChecks("""Extractor.Detection.Parsed(Set.empty)"""),
         !typeChecks("""Web.ArtifactPage.SplitGroup(???)"""),
         !typeChecks("""Web.VersionPage.IndexPage(???)"""),
+        !typeChecks("""Web.VersionPage.Busy(???)"""),
+        !typeChecks("""Web.ArtifactPage.Unavailable(???, ???)"""),
       )
     ,
     test("intermediate states, transitions and inner machines are private"):

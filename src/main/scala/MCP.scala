@@ -102,7 +102,7 @@ object MCP:
     private def coordinates(gav: GroupArtifactVersion): String =
       s"${gav.groupId}:${gav.artifactId}:${gav.version}"
 
-    def latest(e: GroupIdOrArtifactIdNotFoundError | Extractor.LatestNotFound): String = e match
+    def latest(e: Extractor.LatestError): String = e match
       case e: GroupIdOrArtifactIdNotFoundError =>
         s"Maven Central has no artifact ${e.groupId}:${e.artifactId}. Check the spelling, or use " +
           "search_artifacts to find the exact groupId:artifactId (Scala artifactIds usually carry a " +
@@ -111,6 +111,10 @@ object MCP:
         s"${e.groupArtifact.groupId}:${e.groupArtifact.artifactId} exists on Maven Central, but no " +
           "version could be resolved from its metadata. Use search_artifacts to check whether it moved " +
           "to another groupId."
+      case e: Extractor.LatestUnavailable =>
+        s"Maven Central could not be reached to resolve the latest version of " +
+          s"${e.groupArtifact.groupId}:${e.groupArtifact.artifactId} (${e.reason}). This is a temporary " +
+          "upstream problem, not a problem with the request: retry the same call shortly."
 
     def jar(kind: Jar)(e: Extractor.JarError): String = e match
       case e: NotFoundError =>
@@ -124,6 +128,10 @@ object MCP:
         s"Maven Central could not be reached to fetch the ${kind.name} jar for ${coordinates(e.gav)} " +
           s"(${e.reason}). This is a temporary upstream problem, not a problem with the request: retry " +
           "the same call shortly."
+      case e: Extractor.JarBusy =>
+        s"javadocs.dev is busy fetching other jars and couldn't get the ${kind.name} jar for " +
+          s"${coordinates(e.gav)} yet (${e.reason}). This is temporary and not a problem with the " +
+          "request: retry the same call in about 30 seconds."
 
     def entry(kind: Jar)(e: Extractor.JarError | Extractor.JavadocFileNotFound | Extractor.JavadocContentError): String =
       e match
@@ -133,7 +141,7 @@ object MCP:
         case e: Extractor.JavadocContentError =>
           s"The page '${e.path}' in the ${kind.name} jar for ${coordinates(e.groupArtifactVersion)} " +
             "could not be converted to text."
-        case e: (NotFoundError | JarCache.UpstreamCorruptError | JarCache.UpstreamUnavailableError) => jar(kind)(e)
+        case e: (NotFoundError | JarCache.UpstreamCorruptError | JarCache.UpstreamUnavailableError | Extractor.JarBusy) => jar(kind)(e)
 
     def lines(gav: GroupArtifactVersion)(e: Extractor.LineRangeError): String =
       val requested = List(e.startLine.map(n => s"startLine=$n"), e.endLine.map(n => s"endLine=$n")).flatten.mkString(" ")
@@ -157,10 +165,8 @@ object MCP:
         LogAnnotation("params", params),
         LogAnnotation("error", e.toString),
       )(ZIO.logWarning("MCP tool error")))
-      .tapDefect(c => ZIO.logAnnotate(
-        LogAnnotation("tool", toolName),
-        LogAnnotation("params", params),
-      )(ZIO.logErrorCause("MCP tool defect", c)))
+      // A defect is logged once, by zio-http-mcp ("MCP tool defect", with the
+      // tool name); its "MCP tools/call" line on the same fiber has the arguments.
 
   // Tool/operation descriptions — the single source of truth shared by both the
   // MCP tools below and the REST Endpoints in Api.scala.
@@ -286,7 +292,7 @@ object MCP:
     .annotations(title = Some("Get latest version"), readOnly = True, destructive = False, idempotent = True, openWorld = True)
     .handle: (input: LatestVersionQuery) =>
       logMcp("get_latest_version", input.toString):
-        Extractor.latest(input.groupArtifact, input.includePreReleases.getOrElse(false))
+        MavenCache.latest(input.groupArtifact, input.includePreReleases.getOrElse(false))
       .mapError(ErrorMessages.latest)
 
   val getIndexTool = McpTool("get_javadoc_index")

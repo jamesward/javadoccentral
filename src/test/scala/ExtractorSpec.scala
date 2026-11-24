@@ -122,7 +122,7 @@ object ExtractorSpec extends ZIOSpecDefault:
     } @@ MavenCentralRetry.aspect,
     test("javadoc file not found") {
       val groupArtifactVersion = gav("com.jamesward", "zio-mavencentral_3", "0.12.0")
-      assertZIO(Extractor.javadocEntryBytes(groupArtifactVersion, "asdf").exit)(
+      assertZIO(Extractor.javadocEntry(groupArtifactVersion, "asdf").exit)(
         failsWithA[Extractor.JavadocFileNotFound]
       )
     } @@ MavenCentralRetry.aspect,
@@ -408,4 +408,6 @@ object ExtractorSpec extends ZIOSpecDefault:
     MavenCentral.MavenCentralRepo.live,
     App.javadocCacheLayer,
     App.sourcesCacheLayer,
+    PostgresContainer.freshDatabase,
+    MavenCache.layer,
   )
