@@ -28,7 +28,7 @@ object App extends ZIOAppDefault:
   // covered by the `Downloaded javadoc/sources ... duration=...ms` log in
   // `Extractor.scala`; subtracting the two tells you body+extract wall time.
   val clientLayer: ZLayer[Any, Throwable, Client] =
-    Client.default.update(_ @@ ZClientAspect.requestLogging(
+    Client.default.update(_ @@ UpstreamStats.aspect @@ ZClientAspect.requestLogging(
       level = _ => LogLevel.Debug,
       loggedRequestHeaders = Set(Header.UserAgent),
       loggedResponseHeaders = Set(Header.ContentLength, Header.ContentType)
@@ -135,6 +135,7 @@ object App extends ZIOAppDefault:
       val javadocWarm   = ZIO.serviceWithZIO[Extractor.JavadocCache](_.cache.warmCount).run
       val javadocFetch  = ZIO.serviceWithZIO[Extractor.JavadocCache](_.misses.metrics).run
       val sourcesFetch  = ZIO.serviceWithZIO[Extractor.SourcesCache](_.misses.metrics).run
+      val upstream      = UpstreamStats.snapshotAndReset.run
       val statsAnnotations = List(
         LogAnnotation("javadocEntries", javadocCacheSize.toString),
         LogAnnotation("javadocWarm", javadocWarm.toString),
@@ -144,6 +145,8 @@ object App extends ZIOAppDefault:
         LogAnnotation("javadocFetchQueued", javadocFetch.inQueue.toString),
         LogAnnotation("sourcesFetchInFlight", sourcesFetch.inFlight.toString),
         LogAnnotation("sourcesFetchQueued", sourcesFetch.inQueue.toString),
+        // Outgoing requests per host and outcome since the last line (see UpstreamStats).
+        LogAnnotation("upstream", upstream),
       ) ++ jvmMemAnnotations
       ZIO.logAnnotate(statsAnnotations.head, statsAnnotations.tail*)(ZIO.logInfo("cache stats")).run
 

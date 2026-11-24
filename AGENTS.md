@@ -96,6 +96,11 @@ one JSON object per line. Heroku `log-runtime-metrics` is on for `javadocs`
 (heroku-ops reads its memory samples). Not yet aligned: entries don't carry
 `request_id` from `X-Request-ID` (see the Skill's "Production Servers").
 
+`cache stats` carries `upstream`: outgoing requests per host and outcome
+(`2xx`, `304`, `404`, `4xx`, `5xx`, `err`) and `kb` of successful bodies since
+the previous line (`UpstreamStats`, a `ZClientAspect` on `App.clientLayer`).
+Use it to see how much traffic repo1 and the GCS mirror get.
+
 ## MCP tool descriptions
 
 The descriptions on the `McpTool` definitions in `MCP.scala` are not just
