@@ -5,17 +5,19 @@ val zioHttpMcpDir = file("../zio-http-mcp")
 val zioMavenCentralDir = file("../zio-mavencentral")
 val zioHttpGuardDir = file("../zio-http-guard")
 
-// Publishing to Maven Central is blocked right now, so zio-mavencentral and
-// zio-http-mcp are built from their git repos at pinned commits (sbt clones
-// them into its staging directory) instead of resolved as published artifacts.
-// Move back to `libraryDependencies` pins once releases publish again.
-val zioMavenCentralGit = uri("https://github.com/jamesward/zio-mavencentral.git#317012680d5a47f3505069b3af6f7e5f6929280f")
-val zioHttpMcpGit      = uri("https://github.com/jamesward/zio-http-mcp.git#e606517a4f0af755ba432c6cc8410a698a74a1a7")
+// zio-mavencentral and zio-http-mcp come from Maven Central. If publishing is
+// ever blocked again, build them from their git repos at pinned commits instead:
+// uncomment the two URIs and the `dependsOn` lines below, and remove their
+// `libraryDependencies` entries.
+//val zioMavenCentralGit = uri("https://github.com/jamesward/zio-mavencentral.git#317012680d5a47f3505069b3af6f7e5f6929280f")
+//val zioHttpMcpGit      = uri("https://github.com/jamesward/zio-http-mcp.git#e606517a4f0af755ba432c6cc8410a698a74a1a7")
 
 lazy val root = {
   val base = (project in file(".")).enablePlugins(JavaAppPackaging)
-  val withMcp = base.dependsOn(RootProject(if (useLocalSubprojects && zioHttpMcpDir.exists()) zioHttpMcpDir.toURI else zioHttpMcpGit))
-  val withMaven = withMcp.dependsOn(RootProject(if (useLocalSubprojects && zioMavenCentralDir.exists()) zioMavenCentralDir.toURI else zioMavenCentralGit))
+  val withMcp = if (useLocalSubprojects && zioHttpMcpDir.exists()) base.dependsOn(RootProject(zioHttpMcpDir)) else base
+  //val withMcp = base.dependsOn(RootProject(if (useLocalSubprojects && zioHttpMcpDir.exists()) zioHttpMcpDir.toURI else zioHttpMcpGit))
+  val withMaven = if (useLocalSubprojects && zioMavenCentralDir.exists()) withMcp.dependsOn(RootProject(zioMavenCentralDir)) else withMcp
+  //val withMaven = withMcp.dependsOn(RootProject(if (useLocalSubprojects && zioMavenCentralDir.exists()) zioMavenCentralDir.toURI else zioMavenCentralGit))
   if (useLocalSubprojects && zioHttpGuardDir.exists()) withMaven.dependsOn(RootProject(zioHttpGuardDir)) else withMaven
 }
 
@@ -101,6 +103,16 @@ libraryDependencies ++= Seq(
   "io.modelcontextprotocol.sdk" % "mcp-core"           % "2.2.0" % Test,
   "io.modelcontextprotocol.sdk" % "mcp-json-jackson2"  % "2.2.0" % Test,
 )
+
+libraryDependencies ++= {
+  if (useLocalSubprojects && zioHttpMcpDir.exists()) Seq.empty
+  else Seq("com.jamesward" %% "zio-http-mcp" % "0.16.0")
+}
+
+libraryDependencies ++= {
+  if (useLocalSubprojects && zioMavenCentralDir.exists()) Seq.empty
+  else Seq("com.jamesward" %% "zio-mavencentral" % "0.18.0")
+}
 
 // Used directly for bulkheads. Keep on the version zio-mavencentral is built
 // against (0.10.6): rezilience minor releases aren't binary compatible.

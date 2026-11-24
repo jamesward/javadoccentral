@@ -26,12 +26,12 @@ This is a **server** project (Heroku). Build plugins: sbt-native-packager
   until a stable release exists.
 - **Compatibility constraint:** keep the zio-schema / zio-json versions binary
   compatible with the pinned `zio-http-mcp` (see the comment in `build.sbt`).
-- **Git source dependencies (temporary):** publishing to Maven Central is
-  blocked, so `zio-mavencentral` and `zio-http-mcp` are `RootProject`s on their
-  GitHub repos at pinned commits (`zioMavenCentralGit` / `zioHttpMcpGit` in
-  `build.sbt`). sbt clones them on first load, so builds (including Heroku's)
-  need network access to GitHub. To ship a library change, push it and bump the
-  commit. Move back to `libraryDependencies` pins once releases publish again.
+- **Git source dependencies (fallback):** if publishing to Maven Central is
+  blocked, `zio-mavencentral` and `zio-http-mcp` can be built from their GitHub
+  repos at pinned commits: the commented-out `zioMavenCentralGit` /
+  `zioHttpMcpGit` lines in `build.sbt` say how. sbt clones them on first load,
+  so builds then need network access to GitHub and a bigger sbt heap
+  (`.sbtopts` has `-J-Xmx2g`).
 - **Container image tracks production:** the Postgres image in
   `src/test/scala/PostgresContainer.scala` (`postgres:18.4`) mirrors the
   Heroku Postgres add-on on the `javadocs` app. Don't bump it in the maintenance
@@ -154,8 +154,7 @@ derived from the return type's `zio-schema` `Schema` by `zio-http-mcp`'s
 
 This logic lives in `zio-http-mcp` (`McpOutput`, `JsonSchemaGen`), so shipping it
 to production requires **publishing a new `zio-http-mcp` and bumping the version
-pin in `build.sbt`** (while publishing is blocked: pushing it and bumping the
-`zioHttpMcpGit` commit) — production builds resolve the published artifact, not the
+pin in `build.sbt`** — production builds resolve the published artifact, not the
 local `../zio-http-mcp` subproject (which is only used under `-Dlocal`).
 
 ## Lessons from agent evals
