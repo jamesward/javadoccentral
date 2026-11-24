@@ -54,6 +54,12 @@ scalacOptions ++= {
   }
 }
 
+// Test sources aren't optimized: `-opt-inline:**` inlines JDK code into them
+// (e.g. `HttpRequest.newBuilder`, `String(bytes, UTF_8)`), and the inlined code
+// references JDK-internal classes the module system doesn't export, so the
+// specs fail with IllegalAccessError in CI. Main sources keep the optimizer.
+Test / scalacOptions ~= (_.filterNot(_.startsWith("-opt")))
+
 scalaVersion := "3.10.1"
 
 // SkillsJars
