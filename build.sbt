@@ -5,16 +5,23 @@ val zioHttpMcpDir = file("../zio-http-mcp")
 val zioMavenCentralDir = file("../zio-mavencentral")
 val zioHttpGuardDir = file("../zio-http-guard")
 
+// Publishing to Maven Central is blocked right now, so zio-mavencentral and
+// zio-http-mcp are built from their git repos at pinned commits (sbt clones
+// them into its staging directory) instead of resolved as published artifacts.
+// Move back to `libraryDependencies` pins once releases publish again.
+val zioMavenCentralGit = uri("https://github.com/jamesward/zio-mavencentral.git#317012680d5a47f3505069b3af6f7e5f6929280f")
+val zioHttpMcpGit      = uri("https://github.com/jamesward/zio-http-mcp.git#e606517a4f0af755ba432c6cc8410a698a74a1a7")
+
 lazy val root = {
   val base = (project in file(".")).enablePlugins(JavaAppPackaging)
-  val withMcp = if (useLocalSubprojects && zioHttpMcpDir.exists()) base.dependsOn(RootProject(zioHttpMcpDir)) else base
-  val withMaven = if (useLocalSubprojects && zioMavenCentralDir.exists()) withMcp.dependsOn(RootProject(zioMavenCentralDir)) else withMcp
+  val withMcp = base.dependsOn(RootProject(if (useLocalSubprojects && zioHttpMcpDir.exists()) zioHttpMcpDir.toURI else zioHttpMcpGit))
+  val withMaven = withMcp.dependsOn(RootProject(if (useLocalSubprojects && zioMavenCentralDir.exists()) zioMavenCentralDir.toURI else zioMavenCentralGit))
   if (useLocalSubprojects && zioHttpGuardDir.exists()) withMaven.dependsOn(RootProject(zioHttpGuardDir)) else withMaven
 }
 
 val zioVersion = "2.1.27"
 
-val flywayVersion = "13.12.2"
+val flywayVersion = "13.13.0"
 
 // Hack Alert: This is the default when not in buildpacks (i.e. `default`)
 // In buildpacks it is javadoccentral which puts it alphabetically after dev.zio.zio-constraintless_3-0.3.1.jar
@@ -47,6 +54,12 @@ scalacOptions ++= {
   }
 }
 
+// Test sources aren't optimized: `-opt-inline:**` inlines JDK code into them
+// (e.g. `HttpRequest.newBuilder`, `String(bytes, UTF_8)`), and the inlined code
+// references JDK-internal classes the module system doesn't export, so the
+// specs fail with IllegalAccessError in CI. Main sources keep the optimizer.
+Test / scalacOptions ~= (_.filterNot(_.startsWith("-opt")))
+
 scalaVersion := "3.10.1"
 
 // SkillsJars
@@ -56,17 +69,17 @@ libraryDependencies += "com.jamesward" % "skills" % "0.0.27" % Skills
 libraryDependencies ++= Seq(
   "dev.zio" %% "zio"                   % zioVersion,
   "dev.zio" %% "zio-concurrent"        % zioVersion,
-  "dev.zio" %% "zio-cache"             % "0.4.0",
-  "dev.zio" %% "zio-logging"                % "2.5.4",
+  "dev.zio" %% "zio-cache"             % "0.4.1",
+  "dev.zio" %% "zio-logging"                % "2.5.5",
   // The slf4j2 bridge is the sole slf4j provider (replaces slf4j-simple): Java
   // library logs (Netty, the Postgres driver, HikariCP, Flyway, jsoup, ...) route through ZIO's logger
   // and pick up the JSON (prod) / text (dev) format from `AppLogging`.
-  "dev.zio" %% "zio-logging-slf4j2-bridge" % "2.5.4",
+  "dev.zio" %% "zio-logging-slf4j2-bridge" % "2.5.5",
   "dev.zio" %% "zio-direct"            % "1.0.0-RC7",
-  // Keep zio-schema / zio-json binary compatible with the pinned zio-http-mcp
-  // (0.13.4 is built against zio-schema 1.9.0).
-  "dev.zio" %% "zio-schema-json"       % "1.9.1",
-  "dev.zio" %% "zio-schema-derivation" % "1.9.1",
+  // Keep zio-schema / zio-json binary compatible with zio-http-mcp and
+  // zio-mavencentral (both built against zio-schema 1.9.2).
+  "dev.zio" %% "zio-schema-json"       % "1.9.2",
+  "dev.zio" %% "zio-schema-derivation" % "1.9.2",
 
   // Symbol index: Postgres (pg_trgm) via magnum, schema managed by Flyway
   // (`bin/flyway-migrate` runs in Heroku's release phase, see Procfile).
@@ -75,7 +88,7 @@ libraryDependencies ++= Seq(
   "com.zaxxer"       % "HikariCP"                   % "7.1.0",
   "org.flywaydb"     % "flyway-core"                % flywayVersion,
   "org.flywaydb"     % "flyway-database-postgresql" % flywayVersion,
-  "org.postgresql"   % "postgresql"                 % "42.7.14",
+  "org.postgresql"   % "postgresql"                 % "42.7.15",
 
   "org.jsoup" % "jsoup" % "1.24.1",
 
@@ -89,18 +102,8 @@ libraryDependencies ++= Seq(
   "io.modelcontextprotocol.sdk" % "mcp-json-jackson2"  % "2.2.0" % Test,
 )
 
-libraryDependencies ++= {
-  if (useLocalSubprojects && zioHttpMcpDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-http-mcp" % "0.13.4")
-}
-
-libraryDependencies ++= {
-  if (useLocalSubprojects && zioMavenCentralDir.exists()) Seq.empty
-  else Seq("com.jamesward" %% "zio-mavencentral" % "0.17.0")
-}
-
 // Used directly for bulkheads. Keep on the version zio-mavencentral is built
-// against (0.16.0: 0.10.6): rezilience minor releases aren't binary compatible.
+// against (0.10.6): rezilience minor releases aren't binary compatible.
 libraryDependencies += "nl.vroste" %% "rezilience" % "0.10.6"
 
 libraryDependencies ++= {

@@ -34,10 +34,11 @@ object App extends ZIOAppDefault:
       loggedResponseHeaders = Set(Header.ContentLength, Header.ContentType)
     ))
 
-  val latestCacheLayer: ZLayer[MavenCentral.MavenCentralRepo, Nothing, Extractor.LatestCache] = ZLayer.fromZIO:
+  val latestCacheLayer: ZLayer[MavenCentral.MavenCentralRepo & MavenCache, Nothing, Extractor.LatestCache] = ZLayer.fromZIO:
     // The web UI's `/latest` and badges resolve to the latest *release* (no pre-releases).
-    Cache.makeWith(1_000, Lookup((ga: MavenCentral.GroupArtifact) => Extractor.latest(ga))):
-      case Exit.Success(_) => 1.hour
+    // A short in-memory tier over MavenCache (Postgres), which owns freshness.
+    Cache.makeWith(1_000, Lookup((ga: MavenCentral.GroupArtifact) => MavenCache.latest(ga))):
+      case Exit.Success(_) => 1.minute
       case Exit.Failure(_) => Duration.Zero
     .map(Extractor.LatestCache(_))
 
@@ -62,35 +63,37 @@ object App extends ZIOAppDefault:
   // multiple suites construct cache layers concurrently in one JVM: a shared
   // directory would let independent JarCache instances write/delete the same
   // GAV filename without sharing a single-flight map.
-  val javadocCacheLayer: ZLayer[Client, Nothing, Extractor.JavadocCache] =
+  val javadocCacheLayer: ZLayer[Client & MavenCache, Nothing, Extractor.JavadocCache] =
     ZLayer.scoped:
       defer:
         val cacheDir = ZIO.attemptBlockingIO(Files.createTempDirectory("jar-cache-javadoc").nn.toFile).orDie.run
         val cache = JarCache.make(
           cacheDir,
-          JarCache.httpDownloader(gav => MavenCentral.javadocUri(gav.groupId, gav.artifactId, gav.version)),
+          JarCache.mavenCentralDownloader("javadoc"),
           label = "javadoc",
           warmIdleTtl = jarWarmIdleTtl,
           coldIdleTtl = Some(jarColdIdleTtl),
           sweepInterval = jarSweepInterval,
         ).run
         val misses = Bulkhead.make(maxInFlightCalls = maxConcurrentJarFetches, maxQueueing = maxQueuedJarFetches).run
-        new Extractor.JavadocCache(cache, misses)
+        val mavenCache = ZIO.service[MavenCache].run
+        new Extractor.JavadocCache(cache, misses, missing = Some(Extractor.MissingJars(mavenCache, "javadoc")))
 
-  val sourcesCacheLayer: ZLayer[Client, Nothing, Extractor.SourcesCache] =
+  val sourcesCacheLayer: ZLayer[Client & MavenCache, Nothing, Extractor.SourcesCache] =
     ZLayer.scoped:
       defer:
         val cacheDir = ZIO.attemptBlockingIO(Files.createTempDirectory("jar-cache-sources").nn.toFile).orDie.run
         val cache = JarCache.make(
           cacheDir,
-          JarCache.httpDownloader(gav => MavenCentral.sourcesUri(gav.groupId, gav.artifactId, gav.version)),
+          JarCache.mavenCentralDownloader("sources"),
           label = "sources",
           warmIdleTtl = jarWarmIdleTtl,
           coldIdleTtl = Some(jarColdIdleTtl),
           sweepInterval = jarSweepInterval,
         ).run
         val misses = Bulkhead.make(maxInFlightCalls = maxConcurrentJarFetches, maxQueueing = maxQueuedJarFetches).run
-        new Extractor.SourcesCache(cache, misses)
+        val mavenCache = ZIO.service[MavenCache].run
+        new Extractor.SourcesCache(cache, misses, missing = Some(Extractor.MissingJars(mavenCache, "sources")))
 
   val symbolSearchGuardLayer: ZLayer[Any, Nothing, SymbolSearch.SymbolSearchGuard] =
     ZLayer.fromZIO:
@@ -135,6 +138,8 @@ object App extends ZIOAppDefault:
       val javadocWarm   = ZIO.serviceWithZIO[Extractor.JavadocCache](_.cache.warmCount).run
       val javadocFetch  = ZIO.serviceWithZIO[Extractor.JavadocCache](_.misses.metrics).run
       val sourcesFetch  = ZIO.serviceWithZIO[Extractor.SourcesCache](_.misses.metrics).run
+      val javadocBusy   = ZIO.serviceWith[Extractor.JavadocCache](_.busy.sumThenReset()).run
+      val sourcesBusy   = ZIO.serviceWith[Extractor.SourcesCache](_.busy.sumThenReset()).run
       val upstream      = UpstreamStats.snapshotAndReset.run
       val statsAnnotations = List(
         LogAnnotation("javadocEntries", javadocCacheSize.toString),
@@ -145,6 +150,9 @@ object App extends ZIOAppDefault:
         LogAnnotation("javadocFetchQueued", javadocFetch.inQueue.toString),
         LogAnnotation("sourcesFetchInFlight", sourcesFetch.inFlight.toString),
         LogAnnotation("sourcesFetchQueued", sourcesFetch.inQueue.toString),
+        // Busy answers (bulkhead full, or still fetching) since the last line.
+        LogAnnotation("javadocFetchBusy", javadocBusy.toString),
+        LogAnnotation("sourcesFetchBusy", sourcesBusy.toString),
         // Outgoing requests per host and outcome since the last line (see UpstreamStats).
         LogAnnotation("upstream", upstream),
       ) ++ jvmMemAnnotations
@@ -167,7 +175,8 @@ object App extends ZIOAppDefault:
     // `JarCache` is append-only for the dyno's lifetime; ZipFile handles
     // are released when the cache layer's scope closes at app shutdown.
     val background =
-      logCacheStats.repeat(Schedule.spaced(statsInterval)).forkDaemon
+      logCacheStats.repeat(Schedule.spaced(statsInterval)).forkDaemon *>
+        MavenCache.prune.repeat(Schedule.spaced(1.day)).forkDaemon
     (background *> Server.serve(Web.appWithMiddleware)).provide(
       server,
       clientLayer,
@@ -177,6 +186,7 @@ object App extends ZIOAppDefault:
       sourcesCacheLayer,
       Db.fromEnv,
       SymbolIndex.layer,
+      MavenCache.layer,
       SymbolSearch.herokuInferenceLayer,
       JavadocsGuard.layer,
       symbolSearchGuardLayer,

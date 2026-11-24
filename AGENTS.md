@@ -26,6 +26,12 @@ This is a **server** project (Heroku). Build plugins: sbt-native-packager
   until a stable release exists.
 - **Compatibility constraint:** keep the zio-schema / zio-json versions binary
   compatible with the pinned `zio-http-mcp` (see the comment in `build.sbt`).
+- **Git source dependencies (temporary):** publishing to Maven Central is
+  blocked, so `zio-mavencentral` and `zio-http-mcp` are `RootProject`s on their
+  GitHub repos at pinned commits (`zioMavenCentralGit` / `zioHttpMcpGit` in
+  `build.sbt`). sbt clones them on first load, so builds (including Heroku's)
+  need network access to GitHub. To ship a library change, push it and bump the
+  commit. Move back to `libraryDependencies` pins once releases publish again.
 - **Container image tracks production:** the Postgres image in
   `src/test/scala/PostgresContainer.scala` (`postgres:18.4`) mirrors the
   Heroku Postgres add-on on the `javadocs` app. Don't bump it in the maintenance
@@ -148,7 +154,8 @@ derived from the return type's `zio-schema` `Schema` by `zio-http-mcp`'s
 
 This logic lives in `zio-http-mcp` (`McpOutput`, `JsonSchemaGen`), so shipping it
 to production requires **publishing a new `zio-http-mcp` and bumping the version
-pin in `build.sbt`** — production builds resolve the published artifact, not the
+pin in `build.sbt`** (while publishing is blocked: pushing it and bumping the
+`zioHttpMcpGit` commit) — production builds resolve the published artifact, not the
 local `../zio-http-mcp` subproject (which is only used under `-Dlocal`).
 
 ## Lessons from agent evals
@@ -196,6 +203,25 @@ Evals of agents using this server (Spring AI agents on gpt-oss-120b, see the
   `ErrorMessages` as "temporary, retry"; browse routes answer 503 +
   `Retry-After`), and zio-http-mcp answers real defects with a generic message
   while logging the cause.
+- **Malformed coordinates were defects** (#270): Maven Central answers 400 (not
+  404) for a NUL or invalid UTF-8 in a segment, or a segment over ~1,100
+  characters, and zio-mavencentral turned that into an untyped error, so the
+  API, MCP tools and browse routes answered 500 with an ERROR log. Since
+  zio-mavencentral 0.18.0 a 400 / 414 is "not found", and `latestOrFail` types
+  an unreachable upstream as `LatestUnavailable` (worded "retry" by
+  `ErrorMessages.latest`; `/latest` and its JSON answer 503, the badge an
+  uncached grey "unavailable"). `MalformedCoordinatesSpec` and
+  `LatestUnavailableSpec` check that no surface answers 5xx or logs an ERROR.
+  An MCP defect is logged once, by zio-http-mcp (`MCP.logMcp` only logs typed
+  errors).
+- **Overload looked like a Maven Central outage** (#271): when the jar-fetch
+  bulkhead (8 in flight, 16 queued per cache) was full, a crawler burst got
+  "Maven Central could not be reached", with nothing in the app log. That is
+  now `Extractor.JarBusy`: a 503 + `Retry-After` saying javadocs.dev is busy
+  (`Web.busy`), a busy `ErrorMessages.jar` text, one INFO `Jar fetch busy`
+  line per answer (with `gav`, `reason` and the guard's `client_ip`), and
+  `javadocFetchBusy` / `sourcesFetchBusy` counts in `cache stats`
+  (`JarBusySpec`). `UpstreamUnavailableError` means a real network/5xx failure.
 
 ## MCP client IP logging
 
@@ -527,15 +553,27 @@ so keep it free of this app's types. In short:
   off-heap RSS + page cache from disk files + swap). In Nov 2026 it sat at
   ~1,000MB: ~800MB RSS (only ~310MB of it heap + non-heap) and ~200MB page
   cache. The JVM caps in `build.sbt` (`MaxMetaspaceSize=96m`,
-  `MaxDirectMemorySize=96m`) date from the old 512MB dyno.
+  `MaxDirectMemorySize=96m`) date from the old 512MB dyno, and only apply to
+  a forked `sbt run`: the start script Heroku runs doesn't get `javaOptions`.
+  Production (checked on a one-off dyno, Nov 23) runs with metaspace uncapped,
+  `ReservedCodeCacheSize` 240MB, `MaxDirectMemorySize` = `-Xmx`, G1 with 8
+  `ParallelGCThreads` (the dyno shows 8 CPUs) and no `G1PeriodicGCInterval`.
 - RSS grows after every restart (Nov 13: 450MB at boot to ~900MB after 11 h,
   ~40MB/h) while the JVM's own heap + non-heap committed stays ~370MB, so the
   growth is native memory. Swap and R14 start once RSS passes ~870MB. Before the
   Nov 12 crawler fixes this took about 2 h and R14 ran most of the day.
 - The buildpack sets `JAVA_OPTS=-XX:MaxRAM=1073741824 -Xmx671m` (the start
   script honors it) and `JAVA_TOOL_OPTIONS=-XX:+ExitOnOutOfMemoryError`.
-  `MALLOC_ARENA_MAX=2` was set as a config var on Nov 13 (v249, issue #265)
-  to test whether glibc arena fragmentation causes the native growth.
+  `MALLOC_ARENA_MAX=2` was set as a config var on Nov 13 (v249, issue #265);
+  in the following week R14 happened once (Nov 19), so keep it.
+  buildpack-scala defaults it too (jamesward/buildpack-scala#13).
+- Override JVM flags with the `JAVA_OPTS` config var (heroku/jvm appends it
+  after its defaults; the last flag wins). Not `JAVA_TOOL_OPTIONS`: the JVM
+  reads it before the command line, so `-Xmx671m` beats an `-Xmx` there.
+- Since Nov 23 (v254, issue #265) `JAVA_OPTS=-Xmx400m -XX:G1PeriodicGCInterval=60000`:
+  the heap used peaks at ~160MB, and a smaller heap also lowers the default
+  direct-memory cap. Success is RSS under ~750MB with no swap over several days;
+  if heap is too small, `-XX:+ExitOnOutOfMemoryError` restarts the dyno.
 - Memory history (7 days, 10-minute or hourly buckets; `heroku logs` only covers
   minutes) comes from the Heroku Metrics API with `heroku auth:token`:
   `https://api.metrics.heroku.com/metrics/<app-id>/dyno/memory?start_time=…Z&end_time=…Z&step=10m&process_type=web`
@@ -543,6 +581,17 @@ so keep it free of this app's types. In short:
 - Ephemeral filesystem — extracted jars on disk contribute to page cache memory pressure
 - Single dyno (`web.1`) — all traffic hits one instance
 - 30-second request timeout (H12 error)
+- H27 ("Client Request Interrupted") on a big file is a client hanging up
+  mid-download; the request log still says `Http request served` 200.
+- `Web.withFile` reads jar entries up to 1 MB whole and streams bigger ones in
+  64 KB chunks (`Extractor.javadocEntry`, `Content-Length` from
+  `JarHandle.entrySize`). Streaming every file made a first page load of
+  `dev.zio:zio_3:2.1.27` (32 files) ~40% slower; a paused 20 MB download read
+  whole held 20 MB of direct memory, streamed ~220 KB. `FileServingSpec`
+  measures both, checks caching headers / 304 / HEAD for every file a real
+  page loads, and checks that aborted downloads release the jar entry, file
+  descriptors and direct memory. A zero-length `Body.fromStream` never
+  completes, so don't stream empty entries.
 - A jar cache miss waits at most `Extractor.missWait` (20 s) and then answers a
   503 + `Retry-After`. The fetch runs on a daemon fiber, so it keeps going when
   the request gives up and the retry is a cache hit. Before this, slow ~20 MB
@@ -596,6 +645,36 @@ so keep it free of this app's types. In short:
   is unavailable, and the sitemaps query by group (`allGroupIds`,
   `groupArtifactsIn`), never the whole `artifact` table per request.
 
+
+### Maven Central access
+
+Balances latency, freshness, and load on repo1 (Nov 2026 design):
+
+- **Mirrors** (zio-mavencentral `MavenCentralRepo`, 0.18.0): repo1 is
+  authoritative; Google's GCS copy (`maven-central.storage-download…`) is the
+  fallback. It lags new artifacts by up to a day (seen: 17 h) and has no HTML
+  listings. Metadata asks repo1 first; jars and POMs ask GCS first (one GET,
+  `JarCache.mavenCentralDownloader`), and repo1 when GCS doesn't have them.
+  **Only repo1's 404 is "not found"**: a GCS 404 while repo1 can't be asked is
+  the temporary `NotFoundOnFallback`. repo1 has a 20/s (burst 50) budget; over
+  it, GCS answers what it can. Breakers trip on failure rate (50% over 30 s, ≥10
+  calls), probe after 30 s, back off to 10 min; 5 s per-attempt timeout.
+  `repo.maven.apache.org` is the same Cloudflare endpoint as repo1 (not used).
+  A jar body that stalls for 30 s fails the download (upstream-unavailable),
+  so a stuck transfer can't hold a fetch slot forever (#268's follow-up).
+- **Postgres cache** (`MavenCache`, `V2__maven_cache.sql`): versions (1 h, or
+  10 min when GCS served it; served stale and revalidated in the background with
+  a 304), group listings (24 h), repo1's "not found" (1 h; 1 day for malformed
+  coordinates), missing javadoc/sources jars (7 days for a published version).
+  A version or artifact missing from a cached row refreshes it at once (at most
+  every 5 / 10 min). Stale rows are served when Maven Central is down. Rows not
+  read in 30 days are pruned daily. NUL can't be stored in `text`, so such keys
+  skip the cache. `LatestCache` is a 1-minute memory tier over it.
+- **What still needs repo1 alone**: group listings (GCS's bucket API is the slow
+  fallback, 10 s cap; `dev.zio` takes ~25 s) and anything published in the last
+  day.
+- Tests: `MirrorSpec` (library, fake mirrors), `MavenCacheSpec` (fake mirrors +
+  Postgres).
 
 ### Security probe filtering
 

@@ -17,4 +17,14 @@ object ErrorMessagesSpec extends ZIOSpecDefault:
         MCP.ErrorMessages.entry(MCP.ErrorMessages.Jar.Sources)(e).contains("sources jar"),
       )
     },
+    test("a busy server says javadocs.dev is busy (not Maven Central) and to retry") {
+      val e   = Extractor.JarBusy(gav("org.webjars", "webjars-locator-core", "0.59"), "too many jar fetches in progress")
+      val msg = MCP.ErrorMessages.jar(MCP.ErrorMessages.Jar.Javadoc)(e)
+      assertTrue(
+        msg.contains("org.webjars:webjars-locator-core:0.59"),
+        msg.contains("javadocs.dev is busy"),
+        msg.contains("retry"),
+        !msg.contains("Maven Central could not be reached"),
+      )
+    },
   )

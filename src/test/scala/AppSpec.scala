@@ -643,6 +643,7 @@ object AppSpec extends ZIOSpecDefault:
     MavenCentral.MavenCentralRepo.live,
     PostgresContainer.freshDatabase,
     SymbolIndex.layer,
+    MavenCache.layer,
     SymbolSearch.herokuInferenceLayer.orElse(MockInference.layer),
     suiteGuard,
     App.symbolSearchGuardLayer,

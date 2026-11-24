@@ -41,7 +41,7 @@ object JarMissSpec extends ZIOSpecDefault:
       Extractor.JavadocCache(cache, misses, missWait)
 
   def spec = suite("JarMiss")(
-    test("a slow miss fails fast as UpstreamUnavailableError and the fetch completes for the retry") {
+    test("a slow miss fails fast as JarBusy and the fetch completes for the retry") {
       defer:
         val downloads = Ref.make(0).run
         val cache     = slowCache(2.seconds, downloads, 200.millis).run
@@ -53,7 +53,7 @@ object JarMissSpec extends ZIOSpecDefault:
         val count = downloads.get.run
         assertTrue(
           firstResult.left.exists:
-            case _: JarCache.UpstreamUnavailableError => true
+            case _: Extractor.JarBusy                 => true
             case _                                    => false
           ,
           firstTook < 1.second,
