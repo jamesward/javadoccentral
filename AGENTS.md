@@ -575,8 +575,9 @@ so keep it free of this app's types. In short:
   reads it before the command line, so `-Xmx671m` beats an `-Xmx` there.
 - Since Nov 23 (v254, issue #265) `JAVA_OPTS=-Xmx400m -XX:G1PeriodicGCInterval=60000`:
   the heap used peaks at ~160MB, and a smaller heap also lowers the default
-  direct-memory cap. Success is RSS under ~750MB with no swap over several days;
-  if heap is too small, `-XX:+ExitOnOutOfMemoryError` restarts the dyno.
+  direct-memory cap. It worked: over Nov 24–27 RSS stayed flat at 350–530MB
+  with no swap and no R14, so #265 was closed. If heap is ever too small,
+  `-XX:+ExitOnOutOfMemoryError` restarts the dyno.
 - Memory history (7 days, 10-minute or hourly buckets; `heroku logs` only covers
   minutes) comes from the Heroku Metrics API with `heroku auth:token`:
   `https://api.metrics.heroku.com/metrics/<app-id>/dyno/memory?start_time=…Z&end_time=…Z&step=10m&process_type=web`
